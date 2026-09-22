@@ -1,0 +1,285 @@
+{
+  "style": "ink-tactical-map",
+  "sprite": "buildings.svg",
+  "viewBox": "0 0 64 64",
+  "categories": [
+    {
+      "id": "settlement",
+      "name": "聚落",
+      "purpose": "扩张领土、提供驻军与升级主线",
+      "dir": "buildings/settlement",
+      "count": 10
+    },
+    {
+      "id": "command",
+      "name": "指挥通信",
+      "purpose": "通信连接、视野与指挥体系",
+      "dir": "buildings/command",
+      "count": 7
+    },
+    {
+      "id": "military",
+      "name": "兵力",
+      "purpose": "生产兵力、防空与导弹武器",
+      "dir": "buildings/military",
+      "count": 10
+    },
+    {
+      "id": "transport",
+      "name": "交通",
+      "purpose": "车站与陆上联络线",
+      "dir": "buildings/transport",
+      "count": 4
+    },
+    {
+      "id": "maritime",
+      "name": "海上",
+      "purpose": "海上平台与海上补给",
+      "dir": "buildings/maritime",
+      "count": 2
+    },
+    {
+      "id": "energy",
+      "name": "能源",
+      "purpose": "采矿、炼制与本地补给",
+      "dir": "buildings/energy",
+      "count": 6
+    }
+  ],
+  "buildings": [
+    {
+      "id": "outpost",
+      "name": "哨站",
+      "category": "settlement",
+      "path": "buildings/settlement/outpost.svg"
+    },
+    {
+      "id": "pillbox",
+      "name": "碉堡",
+      "category": "settlement",
+      "path": "buildings/settlement/pillbox.svg"
+    },
+    {
+      "id": "camp",
+      "name": "营地",
+      "category": "settlement",
+      "path": "buildings/settlement/camp.svg"
+    },
+    {
+      "id": "stronghold",
+      "name": "据点",
+      "category": "settlement",
+      "path": "buildings/settlement/stronghold.svg"
+    },
+    {
+      "id": "commander",
+      "name": "指挥所",
+      "category": "settlement",
+      "path": "buildings/settlement/commander.svg"
+    },
+    {
+      "id": "base",
+      "name": "基地",
+      "category": "settlement",
+      "path": "buildings/settlement/base.svg"
+    },
+    {
+      "id": "town",
+      "name": "市镇",
+      "category": "settlement",
+      "path": "buildings/settlement/town.svg"
+    },
+    {
+      "id": "city",
+      "name": "都市",
+      "category": "settlement",
+      "path": "buildings/settlement/city.svg"
+    },
+    {
+      "id": "metropolis",
+      "name": "首府",
+      "category": "settlement",
+      "path": "buildings/settlement/metropolis.svg"
+    },
+    {
+      "id": "capital",
+      "name": "首都",
+      "category": "settlement",
+      "path": "buildings/settlement/capital.svg"
+    },
+    {
+      "id": "boardcast",
+      "name": "电台",
+      "category": "command",
+      "path": "buildings/command/boardcast.svg"
+    },
+    {
+      "id": "radar",
+      "name": "雷达",
+      "category": "command",
+      "path": "buildings/command/radar.svg"
+    },
+    {
+      "id": "advanced_commander",
+      "name": "高级指挥所",
+      "category": "command",
+      "path": "buildings/command/advanced_commander.svg"
+    },
+    {
+      "id": "boardcast_station",
+      "name": "广播站",
+      "category": "command",
+      "path": "buildings/command/boardcast_station.svg"
+    },
+    {
+      "id": "regional_commander",
+      "name": "区域司令部",
+      "category": "command",
+      "path": "buildings/command/regional_commander.svg"
+    },
+    {
+      "id": "warzone_commander",
+      "name": "战区司令部",
+      "category": "command",
+      "path": "buildings/command/warzone_commander.svg"
+    },
+    {
+      "id": "central_commander",
+      "name": "总司令部",
+      "category": "command",
+      "path": "buildings/command/central_commander.svg"
+    },
+    {
+      "id": "port",
+      "name": "港口",
+      "category": "military",
+      "path": "buildings/military/port.svg"
+    },
+    {
+      "id": "gun",
+      "name": "高射炮",
+      "category": "military",
+      "path": "buildings/military/gun.svg"
+    },
+    {
+      "id": "anti-air_gun",
+      "name": "防空导弹",
+      "category": "military",
+      "path": "buildings/military/anti-air_gun.svg"
+    },
+    {
+      "id": "missile",
+      "name": "导弹",
+      "category": "military",
+      "path": "buildings/military/missile.svg"
+    },
+    {
+      "id": "advenced-missile",
+      "name": "洲际导弹",
+      "category": "military",
+      "path": "buildings/military/advenced-missile.svg"
+    },
+    {
+      "id": "nuke-missile",
+      "name": "核导弹",
+      "category": "military",
+      "path": "buildings/military/nuke-missile.svg"
+    },
+    {
+      "id": "barracks",
+      "name": "兵营",
+      "category": "military",
+      "path": "buildings/military/barracks.svg"
+    },
+    {
+      "id": "armor-barracks",
+      "name": "装甲营",
+      "category": "military",
+      "path": "buildings/military/armor-barracks.svg"
+    },
+    {
+      "id": "training-ground",
+      "name": "训练场",
+      "category": "military",
+      "path": "buildings/military/training-ground.svg"
+    },
+    {
+      "id": "airport",
+      "name": "机场",
+      "category": "military",
+      "path": "buildings/military/airport.svg"
+    },
+    {
+      "id": "railway_station",
+      "name": "车站",
+      "category": "transport",
+      "path": "buildings/transport/railway_station.svg"
+    },
+    {
+      "id": "fiber",
+      "name": "光缆",
+      "category": "transport",
+      "path": "buildings/transport/fiber.svg"
+    },
+    {
+      "id": "road",
+      "name": "公路",
+      "category": "transport",
+      "path": "buildings/transport/road.svg"
+    },
+    {
+      "id": "railway",
+      "name": "铁路",
+      "category": "transport",
+      "path": "buildings/transport/railway.svg"
+    },
+    {
+      "id": "artificial-island",
+      "name": "人工岛",
+      "category": "maritime",
+      "path": "buildings/maritime/artificial-island.svg"
+    },
+    {
+      "id": "offshore-supply",
+      "name": "海上补给站",
+      "category": "maritime",
+      "path": "buildings/maritime/offshore-supply.svg"
+    },
+    {
+      "id": "supply_station",
+      "name": "补给站",
+      "category": "energy",
+      "path": "buildings/energy/supply_station.svg"
+    },
+    {
+      "id": "lumber-mill",
+      "name": "伐木场",
+      "category": "energy",
+      "path": "buildings/energy/lumber-mill.svg"
+    },
+    {
+      "id": "oil-well",
+      "name": "油井",
+      "category": "energy",
+      "path": "buildings/energy/oil-well.svg"
+    },
+    {
+      "id": "refinery",
+      "name": "炼制厂",
+      "category": "energy",
+      "path": "buildings/energy/refinery.svg"
+    },
+    {
+      "id": "uranium-miner",
+      "name": "铀矿机",
+      "category": "energy",
+      "path": "buildings/energy/uranium-miner.svg"
+    },
+    {
+      "id": "uranium-factory",
+      "name": "铀工厂",
+      "category": "energy",
+      "path": "buildings/energy/uranium-factory.svg"
+    }
+  ]
+}

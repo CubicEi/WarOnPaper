@@ -1,0 +1,14 @@
+# Dependencies & build
+node_modules/
+dist/
+*.log
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.cursor/

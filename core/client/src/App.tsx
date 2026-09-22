@@ -1,0 +1,584 @@
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  capitalSiteRejectMessage,
+  capitalSiteRejectReason,
+  capitalExclusionRejectReason,
+  DEFAULT_MAP_SIZE_ID,
+  MAP_SIZE_OPTIONS,
+  type GameStateSnapshot,
+  type GroundContext,
+  type GridNode,
+  type LiaisonKind,
+  type MapSizeId,
+  type TerrainMap,
+} from "@wop/shared";
+import { GameCanvas } from "./canvas/GameCanvas";
+import { DebugOverlay, type DebugErrorEntry } from "./components/DebugOverlay";
+import { ErrorToast } from "./components/ErrorToast";
+import { HudOverlay } from "./components/HudOverlay";
+import { useGameSocket } from "./net/useGameSocket";
+import { log } from "./net/log";
+import { logLocalReject } from "./debug/playerActionLog";
+import { applyTerrainSeed, requestGameInit, syncTerrainResources } from "./game/initGame";
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  if (target.isContentEditable) return true;
+  return Boolean(target.closest("input, textarea, select, [contenteditable='true']"));
+}
+
+export function App() {
+  const [viewport, setViewport] = useState({ w: window.innerWidth, h: window.innerHeight });
+  const [state, setState] = useState<GameStateSnapshot | null>(null);
+  const [terrain, setTerrain] = useState<TerrainMap | null>(null);
+  const onState = useCallback((next: GameStateSnapshot) => {
+    setState((prev) => {
+      const buildingDelta =
+        (next.buildings?.length ?? 0) !== (prev?.buildings?.length ?? 0) ||
+        (next.liaisons?.length ?? 0) !== (prev?.liaisons?.length ?? 0) ||
+        (next.units?.length ?? 0) !== (prev?.units?.length ?? 0) ||
+        next.you.energy !== prev?.you.energy ||
+        next.you.organization !== prev?.you.organization ||
+        next.phase !== prev?.phase ||
+        next.terrainSeed !== prev?.terrainSeed;
+      if (buildingDelta) {
+        log.info("app", "state apply", {
+          tick: next.tick,
+          phase: next.phase,
+          E: next.you.energy,
+          O: next.you.organization,
+          buildings: next.buildings?.length ?? 0,
+          liaisons: next.liaisons?.length ?? 0,
+          terrainSeed: next.terrainSeed,
+          sample: next.buildings?.[0],
+        });
+      }
+      return next;
+    });
+  }, []);
+  const { status, send, lastError, clearError, playerId, chatMessages } = useGameSocket(onState);
+
+  const [debugOpen, setDebugOpen] = useState(false);
+  const [mapSize, setMapSize] = useState<MapSizeId>(DEFAULT_MAP_SIZE_ID);
+  const [terrainSeedInput, setTerrainSeedInput] = useState("");
+  const [showEnemyVision, setShowEnemyVision] = useState(false);
+  const [showCommStatus, setShowCommStatus] = useState(false);
+  const [errorLog, setErrorLog] = useState<DebugErrorEntry[]>([]);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastKey, setToastKey] = useState(0);
+  const errorIdRef = useRef(0);
+
+  const pushError = useCallback((friendly: string, raw: string) => {
+    errorIdRef.current += 1;
+    const id = errorIdRef.current;
+    setErrorLog((prev) => [...prev.slice(-49), { id, text: raw }]);
+    setToastMessage(friendly);
+    setToastKey(id);
+  }, []);
+
+  useEffect(() => {
+    if (!lastError) return;
+    pushError(lastError.message, lastError.raw);
+  }, [lastError, pushError]);
+
+  useEffect(() => {
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key !== "F2" || ev.repeat) return;
+      if (isEditableTarget(ev.target) || isEditableTarget(document.activeElement)) return;
+      ev.preventDefault();
+      setDebugOpen((v) => !v);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    const onResize = () => setViewport({ w: window.innerWidth, h: window.innerHeight });
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  // Sync terrain from authoritative seed, then apply depletion patches
+  useEffect(() => {
+    if (!state?.map || state.terrainSeed == null) {
+      if (state?.phase === "need_init") setTerrain(null);
+      return;
+    }
+    setTerrain((prev) => {
+      const base = applyTerrainSeed(state.map, state.terrainSeed!, prev);
+      return syncTerrainResources(base, state.resourceTerrain);
+    });
+  }, [state?.map, state?.terrainSeed, state?.phase, state?.resourceTerrain]);
+
+  const windowHudSize = Math.max(viewport.w, viewport.h) / 16;
+
+  const onInit = useCallback(() => {
+    const seed = terrainSeedInput.trim();
+    requestGameInit(send, mapSize, seed || undefined);
+  }, [send, mapSize, terrainSeedInput]);
+
+  const onBuild = useCallback(
+    (args: { buildingId: string; gx: number; gy: number; ground: GroundContext }) => {
+      log.info("app", "onBuild", args);
+      const ok = send({
+        type: "build",
+        buildingId: args.buildingId,
+        gx: args.gx,
+        gy: args.gy,
+        ground: args.ground,
+      });
+      if (!ok) log.error("app", "build send returned false", args);
+    },
+    [send],
+  );
+
+  const onBuildLiaison = useCallback(
+    (args: { kind: LiaisonKind; nodes: GridNode[] }) => {
+      log.info("app", "onBuildLiaison", args.kind, args.nodes.length);
+      const ok = send({
+        type: "build_liaison",
+        kind: args.kind,
+        nodes: args.nodes,
+      });
+      if (!ok) log.error("app", "build_liaison send returned false", args);
+    },
+    [send],
+  );
+
+  const onDemolishLiaison = useCallback(
+    (id: string) => {
+      log.info("app", "demolish_liaison", id);
+      const ok = send({ type: "demolish_liaison", id });
+      if (!ok) log.error("app", "demolish_liaison send returned false", id);
+    },
+    [send],
+  );
+
+  const onDemolish = useCallback(
+    (id: string) => {
+      log.info("app", "demolish", id);
+      const ok = send({ type: "demolish", id });
+      if (!ok) log.error("app", "demolish send returned false", id);
+    },
+    [send],
+  );
+
+  const onRepair = useCallback(
+    (id: string) => {
+      log.info("app", "repair", id);
+      const ok = send({ type: "repair", id });
+      if (!ok) log.error("app", "repair send returned false", id);
+    },
+    [send],
+  );
+
+  const onLevelUpgrade = useCallback(
+    (id: string) => {
+      log.info("app", "level_upgrade", id);
+      const ok = send({ type: "level_upgrade", id });
+      if (!ok) log.error("app", "level_upgrade send returned false", id);
+    },
+    [send],
+  );
+
+  const onReload = useCallback(
+    (id: string, count: number) => {
+      log.info("app", "reload", id, count);
+      const ok = send({ type: "reload", id, count });
+      if (!ok) log.error("app", "reload send returned false", id, count);
+    },
+    [send],
+  );
+
+  const onBuildCarrier = useCallback(
+    (id: string) => {
+      log.info("app", "build_carrier", id);
+      const ok = send({ type: "build_carrier", id });
+      if (!ok) log.error("app", "build_carrier send returned false", id);
+    },
+    [send],
+  );
+
+  const onEmbarkAir = useCallback(
+    (carrierId: string, airUnitId: string, u?: number) => {
+      log.info("app", "embark_air", carrierId, airUnitId, u);
+      const ok = send({ type: "embark_air", carrierId, airUnitId, u });
+      if (!ok) log.error("app", "embark_air send returned false");
+    },
+    [send],
+  );
+
+  const onDisembarkAir = useCallback(
+    (carrierId: string, u?: number) => {
+      log.info("app", "disembark_air", carrierId, u);
+      const ok = send({ type: "disembark_air", carrierId, u });
+      if (!ok) log.error("app", "disembark_air send returned false");
+    },
+    [send],
+  );
+
+  const onDeploy = useCallback(
+    (id: string, count: number) => {
+      log.info("app", "deploy", id, count);
+      const ok = send({ type: "deploy", id, count });
+      if (!ok) log.error("app", "deploy send returned false", id, count);
+    },
+    [send],
+  );
+
+  const onTrain = useCallback(
+    (args: {
+      id: string;
+      kind: "infantry" | "armor" | "navy" | "air";
+      u: number;
+      targetIds: string[];
+    }) => {
+      log.info("app", "train", args);
+      const ok = send({ type: "train", ...args });
+      if (!ok) log.error("app", "train send returned false", args);
+    },
+    [send],
+  );
+
+  const onFire = useCallback(
+    (id: string, targetId: string) => {
+      log.info("app", "fire", id, targetId);
+      const ok = send({ type: "fire", id, targetId });
+      if (!ok) log.error("app", "fire send returned false", id, targetId);
+    },
+    [send],
+  );
+
+  const onMoveUnits = useCallback(
+    (args: {
+      gx: number;
+      gy: number;
+      sources?: Array<{ buildingId: string; u: number }>;
+      unitIds?: string[];
+    }) => {
+      log.info("app", "move_units", args);
+      send({ type: "move_units", ...args });
+    },
+    [send],
+  );
+
+  const onAssignHome = useCallback(
+    (args: { buildingId: string; unitIds: string[] }) => {
+      log.info("app", "assign_home", args);
+      send({ type: "assign_home", ...args });
+    },
+    [send],
+  );
+
+  const onStopUnits = useCallback(
+    (unitIds: string[], retreat?: boolean) => {
+      log.info("app", "stop_units", unitIds, retreat ? "retreat" : "stop");
+      send({ type: "stop_units", unitIds, retreat: retreat || undefined });
+    },
+    [send],
+  );
+
+  const onBlockadeUnits = useCallback(
+    (args: {
+      gx: number;
+      gy: number;
+      sources?: Array<{ buildingId: string; u: number }>;
+      unitIds?: string[];
+    }) => {
+      log.info("app", "blockade_units", args);
+      send({ type: "blockade_units", ...args });
+    },
+    [send],
+  );
+
+  const onEndBlockade = useCallback(
+    (unitIds: string[]) => {
+      log.info("app", "end_blockade", unitIds);
+      send({ type: "end_blockade", unitIds });
+    },
+    [send],
+  );
+
+  const onAttackUnits = useCallback(
+    (args: {
+      sources?: Array<{ buildingId: string; u: number }>;
+      unitIds?: string[];
+      targetUnitId?: string;
+      targetBuildingId?: string;
+      targetLiaisonId?: string;
+      liaisonAx?: number;
+      liaisonAy?: number;
+      liaisonBx?: number;
+      liaisonBy?: number;
+    }) => {
+      log.info("app", "attack_units", args);
+      send({ type: "attack_units", ...args });
+    },
+    [send],
+  );
+
+  const onHoldUnits = useCallback(
+    (args: {
+      holdBuildingId: string;
+      sources?: Array<{ buildingId: string; u: number }>;
+      unitIds?: string[];
+    }) => {
+      log.info("app", "hold_units", args);
+      send({ type: "hold_units", ...args });
+    },
+    [send],
+  );
+
+  const onEndHold = useCallback(
+    (unitIds: string[]) => {
+      log.info("app", "end_hold", unitIds);
+      send({ type: "end_hold", unitIds });
+    },
+    [send],
+  );
+
+  const onMutualDefense = useCallback(
+    (buildingId: string, partnerBuildingId: string) => {
+      log.info("app", "mutual_defense", buildingId, partnerBuildingId);
+      send({ type: "mutual_defense", buildingId, partnerBuildingId });
+    },
+    [send],
+  );
+
+  const onSupplyUnits = useCallback(
+    (args: {
+      supplyBuildingId: string;
+      gx: number;
+      gy: number;
+      sources?: Array<{ buildingId: string; u: number }>;
+      unitIds?: string[];
+    }) => {
+      log.info("app", "supply_units", args);
+      send({ type: "supply_units", ...args });
+    },
+    [send],
+  );
+
+  const onPlaceCapital = useCallback(
+    (gx: number, gy: number) => {
+      if (!terrain) {
+        log.warn("app", "place capital without terrain");
+        const msg = "请先初始化";
+        pushError(msg, msg);
+        logLocalReject({
+          action: "place_capital",
+          summary: `定都 (${gx}, ${gy})`,
+          reason: msg,
+          playerId,
+        });
+        return;
+      }
+      const reason = capitalSiteRejectReason(terrain, gx, gy);
+      if (reason) {
+        const msg = capitalSiteRejectMessage(reason);
+        log.warn("app", "invalid capital site", reason, msg);
+        pushError(msg, msg);
+        logLocalReject({
+          action: "place_capital",
+          summary: `定都 (${gx}, ${gy})`,
+          reason: msg,
+          playerId,
+        });
+        return;
+      }
+      const tooClose = capitalExclusionRejectReason(
+        gx,
+        gy,
+        state?.buildings ?? [],
+        playerId,
+      );
+      if (tooClose) {
+        const msg = capitalSiteRejectMessage(tooClose);
+        log.warn("app", "capital too close", msg);
+        pushError(msg, msg);
+        logLocalReject({
+          action: "place_capital",
+          summary: `定都 (${gx}, ${gy})`,
+          reason: msg,
+          playerId,
+        });
+        return;
+      }
+      log.info("app", "place_capital", { gx, gy });
+      send({ type: "place_capital", gx, gy });
+    },
+    [send, terrain, state?.buildings, playerId, pushError],
+  );
+
+  const buildingCount = state?.buildings?.length ?? 0;
+  const liaisonCount = state?.liaisons?.length ?? 0;
+  const phase = state?.phase ?? "need_init";
+
+  const foreignCapital =
+    phase === "pick_capital" &&
+    (state?.buildings ?? []).some(
+      (b) => b.buildingId === "capital" && b.ownerId !== playerId,
+    );
+  const phaseHint =
+    phase === "need_init"
+      ? "请点击初始化"
+      : phase === "pick_capital"
+        ? foreignCapital
+          ? "请选择首都位置（红圈内不能设都）"
+          : "请选择首都位置"
+        : null;
+
+  const statusLine =
+    (status === "connected" ? `tick ${state?.tick ?? 0}` : status) +
+    ` · ${phase}` +
+    ` · 建筑 ${buildingCount}` +
+    ` · 线 ${liaisonCount}` +
+    ` · 通 ${state?.connectedBuildingIds?.length ?? 0}` +
+    (terrain ? ` · seed ${terrain.seed}` : "");
+
+  const dismissToast = useCallback(() => {
+    setToastMessage(null);
+    clearError();
+  }, [clearError]);
+
+  const onSendChat = useCallback(
+    (text: string) => {
+      const ok = send({ type: "chat", text });
+      if (!ok) log.error("app", "chat send returned false");
+    },
+    [send],
+  );
+
+  return (
+    <div className="app">
+      <GameCanvas
+        map={state?.map ?? null}
+        terrain={terrain}
+        buildings={state?.buildings ?? []}
+        liaisons={state?.liaisons ?? []}
+        resourceSight={state?.resourceSight ?? []}
+        connectedBuildingIds={state?.connectedBuildingIds ?? []}
+        pollutionZones={state?.pollutionZones ?? []}
+        units={state?.units ?? []}
+        width={viewport.w}
+        height={viewport.h}
+        phase={phase}
+        myPlayerId={playerId}
+        onBuild={onBuild}
+        onBuildLiaison={onBuildLiaison}
+        onDemolishLiaison={onDemolishLiaison}
+        onDemolish={onDemolish}
+        onRepair={onRepair}
+        onLevelUpgrade={onLevelUpgrade}
+        onReload={onReload}
+        onBuildCarrier={onBuildCarrier}
+        onEmbarkAir={onEmbarkAir}
+        onDisembarkAir={onDisembarkAir}
+        onDeploy={onDeploy}
+        onTrain={onTrain}
+        onFire={onFire}
+        onPlaceCapital={onPlaceCapital}
+        onMoveUnits={onMoveUnits}
+        onAssignHome={onAssignHome}
+        onStopUnits={onStopUnits}
+        onBlockadeUnits={onBlockadeUnits}
+        onEndBlockade={onEndBlockade}
+        onSupplyUnits={onSupplyUnits}
+        onAttackUnits={onAttackUnits}
+        onHoldUnits={onHoldUnits}
+        onEndHold={onEndHold}
+        onMutualDefense={onMutualDefense}
+        energy={state?.you.energy ?? 0}
+        organization={state?.you.organization ?? 0}
+        showEnemyVision={showEnemyVision}
+        showCommStatus={showCommStatus}
+        chatMessages={chatMessages}
+        onSendChat={onSendChat}
+      />
+      {state && (
+        <HudOverlay
+          hud={state.you}
+          windowHudSize={windowHudSize}
+        />
+      )}
+      <ErrorToast message={toastMessage} toastKey={toastKey} onDismiss={dismissToast} />
+      <DebugOverlay
+        open={debugOpen}
+        status={status}
+        statusLine={statusLine}
+        phaseHint={phaseHint}
+        errors={errorLog}
+      />
+      <div className="corner-tools">
+        <div className="corner-tools-col">
+          <button
+            type="button"
+            className={`comm-status-btn${showCommStatus ? " is-on" : ""}`}
+            title="显示我方通信状态"
+            aria-label="显示我方通信状态"
+            aria-pressed={showCommStatus}
+            onClick={() => setShowCommStatus((v) => !v)}
+          >
+            <img src="/ui/advanced_view/comm.png" alt="" draggable={false} />
+          </button>
+          <button
+            type="button"
+            className={`enemy-vision-btn${showEnemyVision ? " is-on" : ""}`}
+            title="显示已知对手视野范围"
+            aria-label="显示已知对手视野范围"
+            aria-pressed={showEnemyVision}
+            onClick={() => setShowEnemyVision((v) => !v)}
+          >
+            <img src="/ui/advanced_view/view.png" alt="" draggable={false} />
+          </button>
+        </div>
+        <div className="corner-tools-col">
+          {debugOpen && (
+            <div className="terrain-gen-row">
+              <button type="button" className="terrain-gen-btn" onClick={onInit}>
+                初始化
+              </button>
+              <select
+                className="map-size-select"
+                value={mapSize}
+                title="地图大小"
+                aria-label="地图大小"
+                onChange={(ev) => setMapSize(ev.target.value as MapSizeId)}
+              >
+                {MAP_SIZE_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                className="terrain-seed-input"
+                type="text"
+                value={terrainSeedInput}
+                placeholder="种子"
+                title="地形种子（空则随机）"
+                aria-label="地形种子"
+                spellCheck={false}
+                autoComplete="off"
+                onChange={(ev) => setTerrainSeedInput(ev.target.value)}
+                onKeyDown={(ev) => {
+                  if (ev.key === "Enter") {
+                    ev.preventDefault();
+                    onInit();
+                  }
+                }}
+              />
+            </div>
+          )}
+          {phaseHint && (
+            <div className="status-chip" data-status="connecting">
+              {phaseHint}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
