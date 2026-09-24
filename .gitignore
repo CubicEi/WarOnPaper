@@ -6,6 +6,9 @@ dist/
 __pycache__/
 *.pyc
 
+# Manager runtime identity store
+manager/data/
+
 # Env / secrets
 .env
 .env.*

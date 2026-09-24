@@ -72,6 +72,8 @@ interface Props {
     building: PlacedBuilding,
     detail?: BuildingInspectActionDetail,
   ) => void;
+  /** Spectator / ended: show info, hide action buttons. */
+  readOnly?: boolean;
 }
 
 /**
@@ -90,8 +92,9 @@ export function BuildingInspectHud({
   organization = 0,
   nukeReloadBlockReason = null,
   onAction,
+  readOnly = false,
 }: Props) {
-  const mine = myPlayerId != null && building.ownerId === myPlayerId;
+  const mine = !readOnly && myPlayerId != null && building.ownerId === myPlayerId;
   const polluted = !!building.polluted;
   const vision = building.visionLevel ?? (mine ? "direct" : "satellite");
   const enemySatellite = !mine && vision === "satellite";

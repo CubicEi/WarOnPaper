@@ -6,39 +6,91 @@ import { applyServerActionResult, logOutgoingAction } from "../debug/playerActio
 
 export type SocketStatus = "connecting" | "connected" | "disconnected";
 
+const LS_PLAYER_ID = "wop:playerId";
+const LS_PLAYER_NAME = "wop:playerName";
+const LS_LAST_ROOM = "wop:lastRoomId";
+
+/** Prefer same-host `/ws` (manager). VITE_WS_URL overrides. Dev without proxy can still hit /ws via Vite. */
 function wsUrl(): string {
   if (import.meta.env.VITE_WS_URL) return import.meta.env.VITE_WS_URL as string;
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  // Dev: game server is on 8787 of the machine that served the page.
-  // Use that host so a LAN client reaches this PC, not its own localhost.
-  if (import.meta.env.DEV) {
-    const name = location.hostname;
-    const host = name.includes(":") ? `[${name}]` : name;
-    return `${proto}//${host}:8787`;
-  }
   return `${proto}//${location.host}/ws`;
+}
+
+function readCachedIdentity(): { playerId?: string; name: string } {
+  try {
+    const playerId = localStorage.getItem(LS_PLAYER_ID) ?? undefined;
+    const name = localStorage.getItem(LS_PLAYER_NAME) ?? "commander";
+    return { playerId: playerId || undefined, name };
+  } catch {
+    return { name: "commander" };
+  }
+}
+
+function cacheIdentity(playerId: string, name: string): void {
+  try {
+    localStorage.setItem(LS_PLAYER_ID, playerId);
+    localStorage.setItem(LS_PLAYER_NAME, name);
+  } catch {
+    /* ignore quota */
+  }
+}
+
+export function cacheLastRoomId(roomId: string | null | undefined): void {
+  try {
+    if (!roomId) localStorage.removeItem(LS_LAST_ROOM);
+    else localStorage.setItem(LS_LAST_ROOM, roomId);
+  } catch {
+    /* ignore */
+  }
+}
+
+export function readLastRoomId(): string | null {
+  try {
+    return localStorage.getItem(LS_LAST_ROOM);
+  } catch {
+    return null;
+  }
 }
 
 /** Friendly message for UI; `raw` keeps `code: message` for debug overlay. */
 export type GameError = { message: string; raw: string };
 
-export function useGameSocket(onState: (state: GameStateSnapshot) => void): {
+export type RoomLifecycleEvent =
+  | { type: "game_over"; roomId: string; winnerId: string; winnerName: string }
+  | { type: "room_closed"; roomId: string; reason: "idle" | "game_over" | "destroyed" };
+
+export function useGameSocket(
+  onState: (state: GameStateSnapshot) => void,
+  options?: {
+    /** Fired on game_over / room_closed — wire return-to-menu in host UI. */
+    onRoomLifecycle?: (ev: RoomLifecycleEvent) => void;
+    /** When false, skip auto-connect (manager title screen owns the socket). Default true. */
+    autoConnect?: boolean;
+  },
+): {
   status: SocketStatus;
   send: (msg: ClientToServer) => boolean;
   lastError: GameError | null;
   clearError: () => void;
   playerId: string | null;
+  playerName: string | null;
   chatMessages: ChatMessage[];
+  /** Send leave_room and clear last-room cache (host should navigate to title). */
+  leaveRoom: () => boolean;
 } {
   const [status, setStatus] = useState<SocketStatus>("connecting");
   const [lastError, setLastError] = useState<GameError | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
+  const [playerName, setPlayerName] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const onStateRef = useRef(onState);
+  const onLifeRef = useRef(options?.onRoomLifecycle);
   const playerIdRef = useRef<string | null>(null);
   const chatIdRef = useRef(0);
   const wsRef = useRef<WebSocket | null>(null);
   onStateRef.current = onState;
+  onLifeRef.current = options?.onRoomLifecycle;
   playerIdRef.current = playerId;
 
   const clearError = useCallback(() => setLastError(null), []);
@@ -61,7 +113,19 @@ export function useGameSocket(onState: (state: GameStateSnapshot) => void): {
     return true;
   }, []);
 
+  const leaveRoom = useCallback((): boolean => {
+    cacheLastRoomId(null);
+    return send({ type: "leave_room" });
+  }, [send]);
+
+  const autoConnect = options?.autoConnect !== false;
+
   useEffect(() => {
+    if (!autoConnect) {
+      setStatus("disconnected");
+      return;
+    }
+
     let ws: WebSocket | null = null;
     let closed = false;
     let retryTimer = 0;
@@ -79,7 +143,12 @@ export function useGameSocket(onState: (state: GameStateSnapshot) => void): {
         log.info("net", "open", url);
         setStatus("connected");
         setLastError(null);
-        const hello: ClientToServer = { type: "hello", name: "commander" };
+        const id = readCachedIdentity();
+        const hello: ClientToServer = {
+          type: "hello",
+          playerId: id.playerId,
+          name: id.name,
+        };
         ws?.send(JSON.stringify(hello));
         pingTimer = window.setInterval(() => {
           const ping: ClientToServer = { type: "ping", t: Date.now() };
@@ -95,24 +164,39 @@ export function useGameSocket(onState: (state: GameStateSnapshot) => void): {
           log.error("net", "bad json", err, ev.data);
           return;
         }
-        if (msg.type === "welcome" || msg.type === "state") {
-          if (msg.type === "welcome") {
-            setPlayerId(msg.playerId);
-            log.info("net", "← welcome", {
-              playerId: msg.playerId,
-              E: msg.state.you.energy,
-              O: msg.state.you.organization,
-              buildings: msg.state.buildings?.length ?? "(missing)",
-            });
+        if (msg.type === "welcome") {
+          setPlayerId(msg.playerId);
+          setPlayerName(msg.name);
+          cacheIdentity(msg.playerId, msg.name);
+          if (msg.activeRoomId) cacheLastRoomId(msg.activeRoomId);
+          log.info("net", "← welcome", {
+            playerId: msg.playerId,
+            name: msg.name,
+            activeRoomId: msg.activeRoomId,
+            hasState: !!msg.state,
+          });
+          if (msg.state) {
+            onStateRef.current(msg.state);
           } else {
-            // Avoid flooding: only log when buildings/HUD change meaningfully via debug
-            log.debug("net", "← state", {
-              tick: msg.state.tick,
-              E: msg.state.you.energy,
-              O: msg.state.you.organization,
-              buildings: msg.state.buildings?.length ?? 0,
-            });
+            // Fallback: /play/?roomId=… or cached room when manager did not rebind
+            const urlRoom = new URLSearchParams(location.search).get("roomId");
+            const roomId =
+              msg.activeRoomId || urlRoom || readLastRoomId();
+            if (roomId && location.pathname.includes("play")) {
+              log.info("net", "→ join_room (play fallback)", roomId);
+              ws?.send(JSON.stringify({ type: "join_room", roomId }));
+            }
           }
+        } else if (msg.type === "state") {
+          if (msg.state.roomId) cacheLastRoomId(msg.state.roomId);
+          log.debug("net", "← state", {
+            tick: msg.state.tick,
+            phase: msg.state.phase,
+            role: msg.state.role,
+            E: msg.state.you.energy,
+            O: msg.state.you.organization,
+            buildings: msg.state.buildings?.length ?? 0,
+          });
           onStateRef.current(msg.state);
         } else if (msg.type === "chat") {
           chatIdRef.current += 1;
@@ -132,6 +216,22 @@ export function useGameSocket(onState: (state: GameStateSnapshot) => void): {
           );
         } else if (msg.type === "action_result") {
           applyServerActionResult(msg);
+        } else if (msg.type === "game_over") {
+          log.info("net", "← game_over", msg);
+          onLifeRef.current?.({
+            type: "game_over",
+            roomId: msg.roomId,
+            winnerId: msg.winnerId,
+            winnerName: msg.winnerName,
+          });
+        } else if (msg.type === "room_closed") {
+          log.info("net", "← room_closed", msg);
+          cacheLastRoomId(null);
+          onLifeRef.current?.({
+            type: "room_closed",
+            roomId: msg.roomId,
+            reason: msg.reason,
+          });
         } else if (msg.type === "error") {
           log.warn("net", "← error", msg.code, msg.message);
           setLastError({
@@ -171,7 +271,16 @@ export function useGameSocket(onState: (state: GameStateSnapshot) => void): {
       ws?.close();
       if (wsRef.current === ws) wsRef.current = null;
     };
-  }, []);
+  }, [autoConnect]);
 
-  return { status, send, lastError, clearError, playerId, chatMessages };
+  return {
+    status,
+    send,
+    lastError,
+    clearError,
+    playerId,
+    playerName,
+    chatMessages,
+    leaveRoom,
+  };
 }

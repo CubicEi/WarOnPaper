@@ -58,7 +58,34 @@ export function App() {
       return next;
     });
   }, []);
-  const { status, send, lastError, clearError, playerId, chatMessages } = useGameSocket(onState);
+
+  const pushErrorRef = useRef<(friendly: string, raw: string) => void>(() => {});
+
+  const { status, send, lastError, clearError, playerId, chatMessages, leaveRoom } =
+    useGameSocket(onState, {
+      onRoomLifecycle: (ev) => {
+        log.info("app", "room lifecycle", ev);
+        if (ev.type === "game_over") {
+          pushErrorRef.current(
+            `胜负已分：${ev.winnerName} 获胜`,
+            `game_over:${ev.winnerId}`,
+          );
+        } else if (ev.type === "room_closed") {
+          pushErrorRef.current(
+            ev.reason === "idle" ? "房间因空闲已关闭" : "房间已关闭",
+            `room_closed:${ev.reason}`,
+          );
+          setState(null);
+        }
+      },
+    });
+
+  const onReturnToMenu = useCallback(() => {
+    leaveRoom();
+    setState(null);
+    // Manager hosts title at `/`; /play/ is a separate SPA so navigate away.
+    window.location.assign("/");
+  }, [leaveRoom]);
 
   const [debugOpen, setDebugOpen] = useState(false);
   const [mapSize, setMapSize] = useState<MapSizeId>(DEFAULT_MAP_SIZE_ID);
@@ -77,7 +104,7 @@ export function App() {
     setToastMessage(friendly);
     setToastKey(id);
   }, []);
-
+  pushErrorRef.current = pushError;
   useEffect(() => {
     if (!lastError) return;
     pushError(lastError.message, lastError.raw);
@@ -415,6 +442,8 @@ export function App() {
   const buildingCount = state?.buildings?.length ?? 0;
   const liaisonCount = state?.liaisons?.length ?? 0;
   const phase = state?.phase ?? "need_init";
+  const role = state?.role ?? "player";
+  const interactive = phase === "playing";
 
   const foreignCapital =
     phase === "pick_capital" &&
@@ -423,12 +452,18 @@ export function App() {
     );
   const phaseHint =
     phase === "need_init"
-      ? "请点击初始化"
+      ? "等待房间地图…"
       : phase === "pick_capital"
         ? foreignCapital
           ? "请选择首都位置（红圈内不能设都）"
           : "请选择首都位置"
-        : null;
+        : phase === "spectating"
+          ? "观战中（不可操作）"
+          : phase === "ended"
+            ? state?.winnerName
+              ? `对局结束 · ${state.winnerName} 获胜`
+              : "对局结束"
+            : null;
 
   const statusLine =
     (status === "connected" ? `tick ${state?.tick ?? 0}` : status) +
@@ -511,6 +546,15 @@ export function App() {
         phaseHint={phaseHint}
         errors={errorLog}
       />
+      <button
+        type="button"
+        className="return-menu-btn return-menu-btn--top"
+        title="返回主页"
+        aria-label="返回主页"
+        onClick={onReturnToMenu}
+      >
+        返回
+      </button>
       <div className="corner-tools">
         <div className="corner-tools-col">
           <button
@@ -537,8 +581,14 @@ export function App() {
         <div className="corner-tools-col">
           {debugOpen && (
             <div className="terrain-gen-row">
-              <button type="button" className="terrain-gen-btn" onClick={onInit}>
-                初始化
+              <button
+                type="button"
+                className="terrain-gen-btn"
+                onClick={onInit}
+                title="调试：房间制下服务端会拒绝 init"
+                disabled={!interactive && phase !== "need_init"}
+              >
+                初始化(调试)
               </button>
               <select
                 className="map-size-select"
@@ -575,6 +625,7 @@ export function App() {
           {phaseHint && (
             <div className="status-chip" data-status="connecting">
               {phaseHint}
+              {role === "spectator" ? " · spectator" : ""}
             </div>
           )}
         </div>

@@ -38,7 +38,15 @@ export const PLAYER_ACTION_STATUS_LABEL: Record<PlayerActionStatus, string> = {
   fail: "失败",
 };
 
-const SKIP_CLIENT_ACTIONS = new Set(["ping", "hello"]);
+const SKIP_CLIENT_ACTIONS = new Set([
+  "ping",
+  "hello",
+  "create_room",
+  "join_room",
+  "queue_match",
+  "cancel_queue",
+  "leave_room",
+]);
 
 export function shouldLogClientAction(type: string): boolean {
   return !SKIP_CLIENT_ACTIONS.has(type);

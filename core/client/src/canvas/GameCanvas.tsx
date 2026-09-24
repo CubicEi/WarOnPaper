@@ -1069,7 +1069,7 @@ export function GameCanvas({
         zoomRef.current,
       );
       if (hit) {
-        if (phaseRef.current === "playing") {
+        if (phaseRef.current === "playing" || phaseRef.current === "spectating" || phaseRef.current === "ended") {
           const nearUnit = findUnitNear(unitsRef.current, hit.gx, hit.gy, 0.35);
           if (nearUnit && !fireAimRef.current && !mutualAimRef.current) {
             log.info("select", "unit", nearUnit.kind, nearUnit.gx, nearUnit.gy);
@@ -1078,6 +1078,17 @@ export function GameCanvas({
               unitId: nearUnit.id,
               focusCenterLeft: true,
             });
+            return;
+          }
+          if (phaseRef.current !== "playing") {
+            const near = findBuildingNear(buildingsRef.current, hit.gx, hit.gy, 0.2);
+            if (near) {
+              setSelectionAt(near.gx, near.gy, {
+                kind: "building",
+                buildingId: near.id,
+                focusCenterLeft: true,
+              });
+            }
             return;
           }
           const near = findBuildingNear(buildingsRef.current, hit.gx, hit.gy, 0.2);
@@ -1577,12 +1588,16 @@ export function GameCanvas({
     selectionUi?.kind === "unit" && selectionUi.unitId
       ? units.find((u) => u.id === selectionUi.unitId) ?? null
       : null;
-  const inspectOpen = !!inspectedBuilding && !buildMode && phase === "playing";
+  const inspectOpen =
+    !!inspectedBuilding &&
+    !buildMode &&
+    (phase === "playing" || phase === "spectating" || phase === "ended");
+  const canAct = phase === "playing";
   const fireAimBuilding = fireAim
     ? buildings.find((b) => b.id === fireAim) ?? null
     : null;
   workRangeRef.current =
-    fireAimBuilding && !buildMode && phase === "playing"
+    fireAimBuilding && !buildMode && canAct
       ? workRangeCircles(fireAimBuilding, buildings, connectedBuildingIds)
       : inspectOpen
         ? workRangeCircles(inspectedBuilding, buildings, connectedBuildingIds)
@@ -1902,7 +1917,9 @@ export function GameCanvas({
       {selectionUi &&
         selectionUi.kind === "point" &&
         !buildMode &&
-        phase !== "need_init" && (
+        phase !== "need_init" &&
+        phase !== "spectating" &&
+        phase !== "ended" && (
           <PointActionMenu
             screenX={selectionUi.screenX}
             screenY={selectionUi.screenY}
@@ -1916,7 +1933,7 @@ export function GameCanvas({
         inspectedBuilding &&
         !buildMode &&
         !fireAim &&
-        phase === "playing" && (
+        (phase === "playing" || phase === "spectating" || phase === "ended") && (
           <BuildingInspectHud
             building={inspectedBuilding}
             screenX={selectionUi.screenX}
@@ -1925,6 +1942,7 @@ export function GameCanvas({
             commsLinked={isBuildingCommsLinked(inspectedBuilding.id, connectedBuildingIds)}
             energy={energy}
             organization={organization}
+            readOnly={phase !== "playing"}
             nukeReloadBlockReason={
               inspectedBuilding.buildingId === "nuke_missile" && myPlayerId
                 ? nukeReloadRejectReason(
@@ -2101,12 +2119,12 @@ export function GameCanvas({
         selectionUi.kind === "unit" &&
         inspectedUnit &&
         !buildMode &&
-        phase === "playing" && (
+        (phase === "playing" || phase === "spectating" || phase === "ended") && (
           <UnitInspectHud
             unit={inspectedUnit}
             screenX={selectionUi.screenX}
             screenY={selectionUi.screenY}
-            myPlayerId={myPlayerId}
+            myPlayerId={phase === "playing" ? myPlayerId : null}
             energy={energy}
             organization={organization}
             terrain={terrain}
@@ -2114,6 +2132,7 @@ export function GameCanvas({
             units={units}
             buildings={buildings}
             onAction={(action: UnitInspectAction, u, detail) => {
+              if (phase !== "playing") return;
               log.info("unit-action", action, u.kind, u.id.slice(0, 8));
               if (action === "retreat" || action === "stop") {
                 onStopUnits?.([u.id], action === "retreat");

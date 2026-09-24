@@ -17,10 +17,11 @@ export default defineConfig({
       ignored: ["**/assets/**/*.jpg", "**/assets/**/*.JPG", "**/__pycache__/**"],
     },
     proxy: {
+      // Prefer manager (:4358). Fallback: core debug server still works if manager not up
+      // and you point VITE_WS_URL at ws://localhost:8787.
       "/ws": {
-        target: "ws://localhost:8787",
+        target: "ws://localhost:4358",
         ws: true,
-        rewrite: () => "/",
       },
     },
   },

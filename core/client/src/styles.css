@@ -191,6 +191,34 @@ body,
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 
+.return-menu-btn {
+  pointer-events: auto;
+  cursor: pointer;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  height: 36px;
+  padding: 0 10px;
+  font-size: 13px;
+  color: #1a1a1a;
+  background: #ffffff;
+  border: 1px solid #c8c4bc;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+.return-menu-btn--top {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 3;
+}
+
+.return-menu-btn:hover {
+  background: #f3f1ec;
+}
+
 .enemy-vision-btn img,
 .comm-status-btn img {
   width: 22px;

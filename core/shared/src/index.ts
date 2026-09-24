@@ -17,7 +17,14 @@ export const CAPITAL_HP_MAX = 60;
 export const STARTING_ENERGY = 500;
 export const STARTING_ORGANIZATION = 10;
 
-export type GamePhase = "need_init" | "pick_capital" | "playing";
+export type GamePhase =
+  | "need_init"
+  | "pick_capital"
+  | "playing"
+  | "spectating"
+  | "ended";
+
+export type SnapshotRole = "player" | "spectator";
 
 export interface PlayerHudState {
   capitalHp: number;
@@ -26,6 +33,9 @@ export interface PlayerHudState {
   organization: number;
   organizationMax: number;
 }
+
+/** Idle room destroy threshold (manager + GameRoom hooks). */
+export const ROOM_IDLE_MS = 5 * 60 * 1000;
 
 export type { PlacedBuilding, BuildCostPreview, RepairCostPreview } from "./buildings/actions.js";
 export {
@@ -84,11 +94,40 @@ export interface GameStateSnapshot {
   resourceSight: import("./terrain/types.js").ResourceSightCell[];
   /** Cleared / depleted resource cells + deposit reserves for terrain re-render. */
   resourceTerrain: import("./terrain/types.js").ResourceTerrainSync;
+  /** Room id when in a managed match (omit for legacy single-room debug). */
+  roomId?: string;
+  /** Match rule: capital fall → respawn (pick capital) vs spectate. */
+  allowRespawn?: boolean;
+  /** Viewer role for this snapshot. Spectators get unfiltered world. */
+  role?: SnapshotRole;
+  winnerId?: string | null;
+  winnerName?: string | null;
 }
 
 export type ClientToServer =
-  | { type: "hello"; name?: string }
+  | {
+      type: "hello";
+      /** Browser-cached identity UUID; server may mint if omitted. */
+      playerId?: string;
+      name?: string;
+    }
   | { type: "ping"; t: number }
+  | {
+      type: "create_room";
+      mapSize: import("./map.js").MapSizeId;
+      seed?: number | string;
+      allowRespawn: boolean;
+      /** 2–10 */
+      maxPlayers: number;
+    }
+  | { type: "join_room"; roomId: string }
+  | {
+      type: "queue_match";
+      /** Target lobby size 2–5 */
+      playerCount: number;
+    }
+  | { type: "cancel_queue" }
+  | { type: "leave_room" }
   | {
       type: "init";
       mapSize?: import("./map.js").MapSizeId;
@@ -261,10 +300,45 @@ export type ClientToServer =
     };
 
 export type ServerToClient =
-  | { type: "welcome"; playerId: string; state: GameStateSnapshot }
+  | {
+      type: "welcome";
+      playerId: string;
+      name: string;
+      /** If the player still belongs to a live room. */
+      activeRoomId?: string | null;
+      /** Present when already in a room (or legacy single-room debug). */
+      state?: GameStateSnapshot;
+    }
   | { type: "state"; state: GameStateSnapshot }
   | { type: "pong"; t: number }
   | { type: "error"; code: string; message: string }
+  | { type: "room_ready"; roomId: string }
+  | {
+      type: "match_status";
+      playerCount: number;
+      queued: number;
+      /** Waiting | matched (room_ready follows) */
+      status: "waiting" | "matched" | "cancelled";
+    }
+  | {
+      type: "room_status";
+      roomId: string;
+      players: number;
+      maxPlayers: number;
+      allowRespawn: boolean;
+      mapSize: import("./map.js").MapSizeId;
+    }
+  | {
+      type: "game_over";
+      roomId: string;
+      winnerId: string;
+      winnerName: string;
+    }
+  | {
+      type: "room_closed";
+      roomId: string;
+      reason: "idle" | "game_over" | "destroyed";
+    }
   | {
       type: "chat";
       playerId: string;
