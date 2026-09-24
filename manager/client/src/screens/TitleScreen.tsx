@@ -7,6 +7,7 @@ import {
   saveIdentity,
   saveLastRoomId,
 } from "../storage";
+import versionJson from "@version.json";
 
 type ConnState = "connecting" | "open" | "closed";
 
@@ -218,7 +219,7 @@ export function TitleScreen() {
                 : "离线"}
           </span>
           <span className="build-version" title="版本">
-            {__WOP_VERSION__}
+            {versionJson.version}
           </span>
         </div>
 

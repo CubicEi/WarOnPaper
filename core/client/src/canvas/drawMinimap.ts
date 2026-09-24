@@ -4,6 +4,24 @@ import { terrainFillColor } from "./terrainColors";
 
 const MINIMAP_AREA_RATIO = 1 / 30;
 
+const warningIconCache = { img: null as HTMLImageElement | null, loading: false };
+
+function getWarningIcon(): HTMLImageElement | null {
+  if (warningIconCache.img) return warningIconCache.img;
+  if (!warningIconCache.loading) {
+    warningIconCache.loading = true;
+    const img = new Image();
+    img.onload = () => {
+      warningIconCache.img = img;
+    };
+    img.onerror = () => {
+      warningIconCache.loading = false;
+    };
+    img.src = "/ui/warning.png";
+  }
+  return warningIconCache.img;
+}
+
 export interface MinimapSize {
   width: number;
   height: number;
@@ -104,9 +122,21 @@ export function drawMinimap(
     pan: { x: number; y: number };
     zoom: number;
     terrain?: TerrainMap | null;
+    /** Destroyed-building warning markers (board grid nodes). */
+    destructionMarks?: readonly { gx: number; gy: number }[];
   },
 ): void {
-  const { miniW, miniH, map, viewW, viewH, pan, zoom, terrain } = args;
+  const {
+    miniW,
+    miniH,
+    map,
+    viewW,
+    viewH,
+    pan,
+    zoom,
+    terrain,
+    destructionMarks,
+  } = args;
   const dpr = devicePixelRatio || 1;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, miniW, miniH);
@@ -145,6 +175,32 @@ export function drawMinimap(
   ctx.strokeStyle = "#6a6a6a";
   ctx.lineWidth = 1;
   ctx.strokeRect(0.5, 0.5, miniW - 1, miniH - 1);
+
+  if (destructionMarks && destructionMarks.length > 0) {
+    const warn = getWarningIcon();
+    const iconSize = Math.max(10, Math.min(miniW, miniH) * 0.08);
+    for (const m of destructionMarks) {
+      const px = (m.gx / map.cellsX) * miniW;
+      const py = (m.gy / map.cellsY) * miniH;
+      if (warn) {
+        ctx.drawImage(warn, px - iconSize / 2, py - iconSize / 2, iconSize, iconSize);
+      } else {
+        // Fallback triangle while image loads.
+        ctx.fillStyle = "#f5d000";
+        ctx.beginPath();
+        ctx.moveTo(px, py - iconSize * 0.45);
+        ctx.lineTo(px + iconSize * 0.4, py + iconSize * 0.35);
+        ctx.lineTo(px - iconSize * 0.4, py + iconSize * 0.35);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "#111";
+        ctx.font = `bold ${Math.max(7, iconSize * 0.55)}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText("!", px, py + iconSize * 0.05);
+      }
+    }
+  }
 
   const box = getViewRectOnMinimap(miniW, miniH, viewW, viewH, map, pan, zoom);
   const rw = Math.max(2, box.x1 - box.x0);

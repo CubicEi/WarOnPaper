@@ -68,6 +68,7 @@ import {
   filterBuildingsForViewer,
   filterLiaisonsForViewer,
   filterUnitsForViewer,
+  filterResourceSightForViewer,
   shouldMaskUpgradeOnSatellite,
   isConstructionAllowedAt,
   startCommWave,
@@ -82,6 +83,11 @@ import {
   isPointInPollution,
   createNukePollutionZone,
   tryInterceptFlyingMissile,
+  isLaunchCoolingDown,
+  withLaunchCooldown,
+  unitHp,
+  releaseAwayForUnitDiff,
+  type AntiAirAmmoEvent,
   type ClientToServer,
   type CommWaveState,
   type GamePhase,
@@ -343,6 +349,16 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
   const linked = [...publishedLinks(player.id)];
   const role: SnapshotRole = spectatorIds.has(player.id) ? "spectator" : "player";
   const fullVision = role === "spectator" || phaseFor(player) === "ended";
+  const allSight = terrain ? collectResourceSight(terrain) : [];
+  const resourceSight = fullVision
+    ? allSight
+    : filterResourceSightForViewer(
+        allSight,
+        player.id,
+        buildings,
+        units,
+        linked,
+      );
   return {
     tick,
     map: MAP,
@@ -360,10 +376,11 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
     pollutionZones: pollutionZones.map((z) => ({ ...z })),
     phase: phaseFor(player),
     terrainSeed: terrain?.seed ?? null,
-    resourceSight: terrain ? collectResourceSight(terrain) : [],
+    resourceSight,
     resourceTerrain: terrain
       ? collectResourceTerrainSync(terrain, clearedResourceCells)
       : { cleared: [], deposits: [] },
+    players: [...players.values()].map((p) => ({ id: p.id, name: p.name })),
     roomId,
     allowRespawn,
     role,
@@ -398,6 +415,24 @@ function sendError(ws: WebSocket, code: string, message: string): void {
   lastActionReject = { code, message };
   slog("error", code, message);
   send(ws, { type: "error", code, message });
+}
+
+function sendTip(ws: WebSocket, message: string): void {
+  send(ws, { type: "tip", message });
+}
+
+function notifyAaAmmoEvents(events: readonly AntiAirAmmoEvent[]): void {
+  for (const ev of events) {
+    const owner = players.get(ev.ownerId);
+    if (!owner) continue;
+    const verb =
+      ev.reason === "intercept" ? "拦截导弹，消耗" : "接敌交战，消耗";
+    if (ev.ammoRemaining <= 0) {
+      sendTip(owner.ws, `防空炮${verb}${ev.consumed}发弹药，弹药已耗尽`);
+    } else {
+      sendTip(owner.ws, `防空炮${verb}${ev.consumed}发弹药`);
+    }
+  }
 }
 
 function emitActionResult(
@@ -1187,7 +1222,7 @@ function handleLevelUpgrade(session: PlayerSession, buildingInstanceId: string):
   broadcastState();
 }
 
-/** 高射炮系装填：按建筑表扣除 count×E，弹药 +count，不超过上限。 */
+/** 臼炮系装填：按建筑表扣除 count×E，弹药 +count，不超过上限。 */
 function handleReload(
   session: PlayerSession,
   buildingInstanceId: string,
@@ -1356,11 +1391,12 @@ function handleDeploy(
   broadcastState();
 }
 
-/** 高射炮系发射：射程内敌方建筑受到 H 点伤害，消耗 1 发弹药。 */
+/** 臼炮系发射：射程内敌方建筑受 H 伤害；仅臼炮可打单位（unitH）。消耗 1 发弹药。 */
 function handleFire(
   session: PlayerSession,
   buildingInstanceId: string,
-  targetId: string,
+  targetId: string | undefined,
+  targetUnitId: string | undefined,
 ): void {
   if (rejectIfNotPlaying(session)) return;
 
@@ -1380,6 +1416,96 @@ function handleFire(
     return;
   }
 
+  if (targetUnitId) {
+    handleFireAtUnit(session, source, targetUnitId);
+    return;
+  }
+  if (!targetId) {
+    sendError(session.ws, "no_target", "未指定目标");
+    return;
+  }
+  handleFireAtBuilding(session, source, targetId);
+}
+
+function handleFireAtUnit(
+  session: PlayerSession,
+  source: PlacedBuilding,
+  targetUnitId: string,
+): void {
+  const def = BUILDING_BY_ID[source.buildingId];
+  const unitDamage = def?.unitH;
+  if (unitDamage == null || !(unitDamage > 0) || source.buildingId !== "gun") {
+    sendError(session.ws, "cannot_fire_unit", "该建筑无法攻击单位");
+    return;
+  }
+  if ((source.ammo ?? 0) < 1) {
+    sendError(session.ws, "no_ammo", "弹药不足");
+    return;
+  }
+  if (isLaunchCoolingDown(source, tick)) {
+    sendError(session.ws, "on_cooldown", "发射冷却中");
+    return;
+  }
+
+  const target = units.find((u) => u.id === targetUnitId);
+  if (!target || target.u <= 0) {
+    sendError(session.ws, "not_found", "目标不存在");
+    return;
+  }
+  if (target.ownerId === session.id) {
+    sendError(session.ws, "not_enemy", "只能攻击敌方单位");
+    return;
+  }
+  if (
+    !isInsideWorkRange(
+      target.gx,
+      target.gy,
+      source,
+      buildings,
+      publishedLinks(session.id),
+    )
+  ) {
+    sendError(session.ws, "out_of_range", "目标不在工作范围内");
+    return;
+  }
+
+  source.ammo = (source.ammo ?? 0) - 1;
+  Object.assign(source, withLaunchCooldown(source, tick));
+
+  const beforeUnits = units.map((u) => ({ ...u }));
+  const hp = unitHp(target.kind);
+  const beforeU = target.u;
+  const nextU = Math.max(0, Math.floor((beforeU * hp - unitDamage) / hp));
+  if (nextU <= 0) {
+    const idx = units.findIndex((u) => u.id === target.id);
+    if (idx >= 0) units.splice(idx, 1);
+  } else {
+    target.u = nextU;
+  }
+  const nextBuildings = releaseAwayForUnitDiff(buildings, beforeUnits, units);
+  for (let i = 0; i < buildings.length; i++) {
+    const next = nextBuildings.find((b) => b.id === buildings[i]!.id);
+    if (next) buildings[i]!.awayOccupiedU = next.awayOccupiedU;
+  }
+
+  slog("fire", "unit", {
+    player: session.id.slice(0, 8),
+    buildingId: source.buildingId,
+    target: target.id.slice(0, 8),
+    kind: target.kind,
+    damage: unitDamage,
+    uBefore: beforeU,
+    uAfter: nextU,
+    ammo: source.ammo,
+  });
+  broadcastState();
+}
+
+function handleFireAtBuilding(
+  session: PlayerSession,
+  source: PlacedBuilding,
+  targetId: string,
+): void {
   const def = BUILDING_BY_ID[source.buildingId];
   const damage = def?.h;
   if (damage == null || !(damage > 0)) {
@@ -1388,6 +1514,10 @@ function handleFire(
   }
   if ((source.ammo ?? 0) < 1) {
     sendError(session.ws, "no_ammo", "弹药不足");
+    return;
+  }
+  if (isLaunchCoolingDown(source, tick)) {
+    sendError(session.ws, "on_cooldown", "发射冷却中");
     return;
   }
 
@@ -1425,7 +1555,7 @@ function handleFire(
   const impactGy = target.gy;
   const isNuke = source.buildingId === NUKE_MISSILE_BUILDING_ID;
 
-  // 防空导弹按工作范围并集（含雷达协同）拦截火箭军弹道；高射炮不拦截。
+  // 防空炮按工作范围并集（含雷达协同）拦截火箭军弹道；臼炮不拦截。
   const shot = tryInterceptFlyingMissile(
     buildings,
     {
@@ -1438,15 +1568,21 @@ function handleFire(
       sourceBuildingId: source.buildingId,
     },
     connectedByOwner,
+    { tick },
   );
 
   source.ammo = (source.ammo ?? 0) - 1;
+  Object.assign(source, withLaunchCooldown(source, tick));
   if (shot.intercepted) {
     for (const next of shot.buildings) {
       if (next.id === source.id) continue;
       const live = buildings.find((b) => b.id === next.id);
-      if (live) live.ammo = next.ammo ?? 0;
+      if (live) {
+        live.ammo = next.ammo ?? 0;
+        live.fireCooldownUntilTick = next.fireCooldownUntilTick;
+      }
     }
+    if (shot.ammoEvent) notifyAaAmmoEvents([shot.ammoEvent]);
     slog("fire", "intercepted", {
       player: session.id.slice(0, 8),
       buildingId: source.buildingId,
@@ -1912,7 +2048,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
 
   if (msg.type === "fire") {
     slog("msg", "fire", msg);
-    handleFire(session, msg.id, msg.targetId);
+    handleFire(session, msg.id, msg.targetId, msg.targetUnitId);
     return;
   }
 
@@ -2213,14 +2349,20 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       units,
       connectedByOwner,
     });
-    advanceUnitAntiAir({
-      map: MAP,
-      terrain,
-      buildings,
-      liaisons,
-      units,
-      connectedByOwner,
-    });
+    {
+      const aaEvents = advanceUnitAntiAir(
+        {
+          map: MAP,
+          terrain,
+          buildings,
+          liaisons,
+          units,
+          connectedByOwner,
+        },
+        tick,
+      );
+      if (aaEvents.length > 0) notifyAaAmmoEvents(aaEvents);
+    }
     {
       const energyAvail = new Map<string, number>();
       for (const [pid, p] of players) {

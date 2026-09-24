@@ -97,7 +97,7 @@ export interface UnitGroup {
   /** 机库空军所属机场（损毁时释放 awayOccupied）. */
   embarkedAirHomeBuildingId?: string;
   /**
-   * 防空导弹对空军的持续减 U 交战状态（§7.3）。
+   * 防空炮对空军的持续减 U 交战状态（§7.3）。
    * 离开范围后清除；弹药在进入时一次性扣 2。
    */
   aaEngagement?: {

@@ -115,9 +115,10 @@ export function collectResourceSight(terrain: TerrainMap): ResourceSightCell[] {
     }
     const n = dep.cells.length;
     const sample = cellAt(terrain, dep.cells[0].x, dep.cells[0].y)?.resource;
+    // Fractional centroid at average of cell centers (already Du sample point).
     out.push({
-      x: sx / n,
-      y: sy / n,
+      x: sx / n + 0.5,
+      y: sy / n + 0.5,
       kind: dep.kind,
       reserve: Math.max(0, dep.reserve),
       reserveMax: Math.max(1, dep.reserveMax || sample?.reserveMax || dep.reserve),

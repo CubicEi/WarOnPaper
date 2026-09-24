@@ -1,12 +1,16 @@
 /**
- * 防空导弹结算（§7.3）：
+ * 防空炮结算（§7.3）：
  * - 对敌空军：进入射程后每秒减「进入前 U × 10%」，直到降至进入前 50%；一次消耗 2 枚弹药。
- * - 拦截飞行导弹：射程内每枚耗 1 枚弹药；高射炮发射物不拦截。弹药用尽后不再拦截。
+ * - 拦截飞行导弹：射程内每枚耗 1 枚弹药；臼炮发射物不拦截。弹药用尽后不再拦截。
  * 世界里还没有持续飞行的导弹实体；调用方传入落点，或发射点到落点的弹道。
  */
 
 import type { PlacedBuilding } from "../buildings/actions.js";
 import { isBuildingComplete } from "../buildings/actions.js";
+import {
+  isLaunchCoolingDown,
+  withLaunchCooldown,
+} from "../buildings/catalog.js";
 import { distancePointToSegment, type GridNode } from "../buildings/liaison.js";
 import {
   workRangeCircles,
@@ -24,11 +28,11 @@ export const AA_BUILDING_ID = ANTI_AIR_BUILDING_ID;
 export const ANTI_AIR_AMMO_PER_ENGAGEMENT = 2;
 /** 拦截一枚飞行导弹消耗弹药. */
 export const ANTI_AIR_AMMO_PER_INTERCEPT = 1;
-/** 高射炮发射物不在拦截范围内（规则：不包括高射炮）. */
+/** 臼炮发射物不在拦截范围内（规则：不包括臼炮）. */
 export const GUN_BUILDING_ID = "gun";
 /**
- * 火箭军武器（可被防空导弹拦截的发射建筑）。
- * 高射炮 `gun` 不在此列。
+ * 火箭军武器（可被防空炮拦截的发射建筑）。
+ * 臼炮 `gun` 不在此列。
  */
 export const ROCKET_FORCE_BUILDING_IDS = [
   "missile",
@@ -59,10 +63,24 @@ export const ANTI_AIR_FLOOR_RATIO = 0.5;
 /** @deprecated alias */
 export const AA_U_FLOOR_OF_ENTRY = ANTI_AIR_FLOOR_RATIO;
 
+export interface AntiAirAmmoEvent {
+  ownerId: string;
+  buildingInstanceId: string;
+  consumed: number;
+  ammoRemaining: number;
+  reason: "engagement" | "intercept";
+}
+
 export interface AntiAirTickResult {
   units: UnitGroup[];
   buildings: PlacedBuilding[];
   removedIds: string[];
+  ammoEvents: AntiAirAmmoEvent[];
+}
+
+export interface AntiAirOpts {
+  /** Current server tick; used for launch cooldown. */
+  tick?: number;
 }
 
 function isLiveAntiAir(b: PlacedBuilding): boolean {
@@ -102,7 +120,9 @@ export function advanceAntiAir(
   buildingsIn: readonly PlacedBuilding[],
   dtSec: number,
   connectedByOwner?: AntiAirConnectedByOwner | null,
+  opts?: AntiAirOpts,
 ): AntiAirTickResult {
+  const tick = opts?.tick ?? 0;
   const before = unitsIn.map((u) => ({
     ...u,
     path: u.path?.map((p) => ({ ...p })),
@@ -115,6 +135,7 @@ export function advanceAntiAir(
   }));
   const buildings = buildingsIn.map((b) => ({ ...b }));
   const removed = new Set<string>();
+  const ammoEvents: AntiAirAmmoEvent[] = [];
 
   const aaList = buildings
     .map((b, i) => ({ b, i }))
@@ -142,6 +163,7 @@ export function advanceAntiAir(
     if (!chosen) {
       for (const cand of aaList) {
         if (cand.b.ownerId === air.ownerId) continue;
+        if (isLaunchCoolingDown(buildings[cand.i]!, tick)) continue;
         const linked = connectedByOwner?.get(cand.b.ownerId) ?? [];
         if (!airInAaRange(air, cand.b, buildings, linked)) continue;
         if ((buildings[cand.i]!.ammo ?? 0) < ANTI_AIR_AMMO_PER_ENGAGEMENT) continue;
@@ -161,15 +183,29 @@ export function advanceAntiAir(
     const same = eng && eng.buildingId === chosen.b.id;
     if (!same) {
       const live = buildings[chosen.i]!;
+      if (isLaunchCoolingDown(live, tick)) {
+        units[ui] = { ...air, aaEngagement: undefined };
+        continue;
+      }
       const ammo = live.ammo ?? 0;
       if (ammo < ANTI_AIR_AMMO_PER_ENGAGEMENT) {
         units[ui] = { ...air, aaEngagement: undefined };
         continue;
       }
-      buildings[chosen.i] = {
+      const ammoRemaining = Math.max(0, ammo - ANTI_AIR_AMMO_PER_ENGAGEMENT);
+      let next = {
         ...live,
-        ammo: Math.max(0, ammo - ANTI_AIR_AMMO_PER_ENGAGEMENT),
+        ammo: ammoRemaining,
       };
+      next = withLaunchCooldown(next, tick);
+      buildings[chosen.i] = next;
+      ammoEvents.push({
+        ownerId: live.ownerId,
+        buildingInstanceId: live.id,
+        consumed: ANTI_AIR_AMMO_PER_ENGAGEMENT,
+        ammoRemaining,
+        reason: "engagement",
+      });
       eng = {
         buildingId: chosen.b.id,
         entryU: air.u,
@@ -209,12 +245,13 @@ export function advanceAntiAir(
     units: surviving,
     buildings: withAway,
     removedIds: [...removed],
+    ammoEvents,
   };
 }
 
 /**
  * 飞行导弹。世界状态里还没有这种实体时，由开火瞬间传入弹道。
- * 仅拦截 {@link ROCKET_FORCE_BUILDING_IDS}；高射炮发射物不拦截。
+ * 仅拦截 {@link ROCKET_FORCE_BUILDING_IDS}；臼炮发射物不拦截。
  */
 export interface FlyingMissileStub {
   id: string;
@@ -275,16 +312,22 @@ function missileThreatInAaRange(
 }
 
 /**
- * 范围内拦截一枚火箭军导弹（不含高射炮），消耗 1 枚弹药。
+ * 范围内拦截一枚火箭军导弹（不含臼炮），消耗 1 枚弹药。
  * 射程与信息框工作范围一致（自身 R + 合格雷达协同圆）。
- * 只拦截敌方导弹；弹药不足的防空导弹不参与。多座炮位时由最近的一座拦截。
+ * 只拦截敌方导弹；弹药不足 / 冷却中的防空炮不参与。多座炮位时由最近的一座拦截。
  */
 export function tryInterceptFlyingMissile(
   buildingsIn: readonly PlacedBuilding[],
   missile: FlyingMissileStub | null | undefined,
   connectedByOwner?: AntiAirConnectedByOwner | null,
-): { buildings: PlacedBuilding[]; intercepted: boolean } {
+  opts?: AntiAirOpts,
+): {
+  buildings: PlacedBuilding[];
+  intercepted: boolean;
+  ammoEvent?: AntiAirAmmoEvent;
+} {
   const buildings = cloneBuildings(buildingsIn);
+  const tick = opts?.tick ?? 0;
   if (!missile || !isRocketForceWeapon(missile.sourceBuildingId)) {
     return { buildings, intercepted: false };
   }
@@ -294,6 +337,7 @@ export function tryInterceptFlyingMissile(
     const b = buildings[i]!;
     if (!isLiveAntiAir(b)) continue;
     if (b.ownerId === missile.ownerId) continue;
+    if (isLaunchCoolingDown(b, tick)) continue;
     if ((b.ammo ?? 0) < ANTI_AIR_AMMO_PER_INTERCEPT) continue;
     const linked = connectedByOwner?.get(b.ownerId) ?? [];
     const threat = missileThreatInAaRange(missile, b, buildings, linked);
@@ -310,11 +354,24 @@ export function tryInterceptFlyingMissile(
   if (!best) return { buildings, intercepted: false };
 
   const aa = buildings[best.i]!;
-  buildings[best.i] = {
+  const ammoRemaining = Math.max(0, (aa.ammo ?? 0) - ANTI_AIR_AMMO_PER_INTERCEPT);
+  let next = {
     ...aa,
-    ammo: Math.max(0, (aa.ammo ?? 0) - ANTI_AIR_AMMO_PER_INTERCEPT),
+    ammo: ammoRemaining,
   };
-  return { buildings, intercepted: true };
+  next = withLaunchCooldown(next, tick);
+  buildings[best.i] = next;
+  return {
+    buildings,
+    intercepted: true,
+    ammoEvent: {
+      ownerId: aa.ownerId,
+      buildingInstanceId: aa.id,
+      consumed: ANTI_AIR_AMMO_PER_INTERCEPT,
+      ammoRemaining,
+      reason: "intercept",
+    },
+  };
 }
 
 /** 按顺序拦截多枚导弹，前一枚扣弹会影响后一枚. */
@@ -322,13 +379,27 @@ export function tryInterceptFlyingMissiles(
   buildingsIn: readonly PlacedBuilding[],
   missiles: readonly FlyingMissileStub[],
   connectedByOwner?: AntiAirConnectedByOwner | null,
-): { buildings: PlacedBuilding[]; interceptedIds: string[] } {
+  opts?: AntiAirOpts,
+): {
+  buildings: PlacedBuilding[];
+  interceptedIds: string[];
+  ammoEvents: AntiAirAmmoEvent[];
+} {
   let buildings = cloneBuildings(buildingsIn);
   const interceptedIds: string[] = [];
+  const ammoEvents: AntiAirAmmoEvent[] = [];
   for (const missile of missiles) {
-    const step = tryInterceptFlyingMissile(buildings, missile, connectedByOwner);
+    const step = tryInterceptFlyingMissile(
+      buildings,
+      missile,
+      connectedByOwner,
+      opts,
+    );
     buildings = step.buildings;
-    if (step.intercepted) interceptedIds.push(missile.id);
+    if (step.intercepted) {
+      interceptedIds.push(missile.id);
+      if (step.ammoEvent) ammoEvents.push(step.ammoEvent);
+    }
   }
-  return { buildings, interceptedIds };
+  return { buildings, interceptedIds, ammoEvents };
 }

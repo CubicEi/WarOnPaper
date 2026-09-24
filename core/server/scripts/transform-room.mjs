@@ -236,6 +236,16 @@ transformed = transformed.replace(
   const linked = [...publishedLinks(player.id)];
   const role: SnapshotRole = spectatorIds.has(player.id) ? "spectator" : "player";
   const fullVision = role === "spectator" || phaseFor(player) === "ended";
+  const allSight = terrain ? collectResourceSight(terrain) : [];
+  const resourceSight = fullVision
+    ? allSight
+    : filterResourceSightForViewer(
+        allSight,
+        player.id,
+        buildings,
+        units,
+        linked,
+      );
   return {
     tick,
     map: MAP,
@@ -253,10 +263,11 @@ transformed = transformed.replace(
     pollutionZones: pollutionZones.map((z) => ({ ...z })),
     phase: phaseFor(player),
     terrainSeed: terrain?.seed ?? null,
-    resourceSight: terrain ? collectResourceSight(terrain) : [],
+    resourceSight,
     resourceTerrain: terrain
       ? collectResourceTerrainSync(terrain, clearedResourceCells)
       : { cleared: [], deposits: [] },
+    players: [...players.values()].map((p) => ({ id: p.id, name: p.name })),
     roomId,
     allowRespawn,
     role,

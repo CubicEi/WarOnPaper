@@ -566,6 +566,32 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
     };
     const planned = planFor(unit, dest.gx, dest.gy, ctx, planOpts);
     if (planned.error || planned.path.length === 0) {
+      // #region agent log
+      fetch("http://127.0.0.1:7277/ingest/6741dc77-72e2-46ba-9a2a-c7dd9d84b7e9", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Debug-Session-Id": "676d95",
+        },
+        body: JSON.stringify({
+          sessionId: "676d95",
+          runId: "pre-fix",
+          hypothesisId: "F_G",
+          location: "orders.ts:applyUnitMove:planFail",
+          message: "unit plan failed",
+          data: {
+            kind: unit.kind,
+            unitGx: unit.gx,
+            unitGy: unit.gy,
+            dest,
+            error: planned.error ?? "empty_path",
+            pathLen: planned.path.length,
+            homeBuildingId: unit.homeBuildingId ?? null,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
       return fail(planned.error ?? "无法规划路径", buildings, units);
     }
     let path = planned.path;
@@ -1431,6 +1457,45 @@ export function previewUnitMove(
   energyCost: number;
 } {
   const result = applyUnitMove(req, ctx);
+  // #region agent log
+  {
+    const srcKinds = (req.sources ?? [])
+      .map((s) => ctx.buildings.find((b) => b.id === s.buildingId)?.buildingId)
+      .filter(Boolean);
+    const unitKinds = (req.unitIds ?? [])
+      .map((id) => ctx.units.find((u) => u.id === id)?.kind)
+      .filter(Boolean);
+    const interesting =
+      srcKinds.includes("armor_barracks") || unitKinds.includes("armor");
+    if (interesting || result.error) {
+      fetch("http://127.0.0.1:7277/ingest/6741dc77-72e2-46ba-9a2a-c7dd9d84b7e9", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Debug-Session-Id": "676d95",
+        },
+        body: JSON.stringify({
+          sessionId: "676d95",
+          runId: "pre-fix",
+          hypothesisId: "F_G",
+          location: "orders.ts:previewUnitMove",
+          message: "move preview result",
+          data: {
+            ok: result.ok,
+            error: result.error ?? null,
+            gx: req.gx,
+            gy: req.gy,
+            srcKinds,
+            unitKinds,
+            sourceIds: (req.sources ?? []).map((s) => s.buildingId),
+            unitIds: req.unitIds ?? [],
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+    }
+  }
+  // #endregion
   return {
     ok: result.ok,
     error: result.error,

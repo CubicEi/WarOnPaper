@@ -489,3 +489,45 @@ export function constructionRejectReason(
   }
   return "须在直接视野内，或经公路/铁路连入视野后才能建造";
 }
+
+/**
+ * Sample point for a resource-sight cell in board Du.
+ * Integer cells → cell center (x+0.5, y+0.5); fractional deposit centroids → (x, y) as-is.
+ */
+export function resourceSightSamplePoint(c: {
+  x: number;
+  y: number;
+}): { gx: number; gy: number } {
+  if (Number.isInteger(c.x) && Number.isInteger(c.y)) {
+    return { gx: c.x + 0.5, gy: c.y + 0.5 };
+  }
+  return { gx: c.x, gy: c.y };
+}
+
+/**
+ * 储量环仅在直接视野内可见（卫星视野 / 迷雾外不显示）。
+ * 整数格用中心 (x+0.5, y+0.5)；小数质心直接用 (x, y)。
+ */
+export function filterResourceSightForViewer(
+  cells: readonly import("../terrain/types.js").ResourceSightCell[],
+  viewerId: string,
+  buildings: readonly PlacedBuilding[],
+  units: readonly {
+    ownerId: string;
+    gx: number;
+    gy: number;
+    kind: string;
+  }[] = [],
+  connectedIds: ReadonlySet<string> | readonly string[] = [],
+): import("../terrain/types.js").ResourceSightCell[] {
+  const sources = collectAllDirectVisionSources(
+    buildings,
+    units,
+    viewerId,
+    connectedIds,
+  ).filter((s) => !s.airOnly);
+  return cells.filter((c) => {
+    const { gx, gy } = resourceSightSamplePoint(c);
+    return isInDirectVision(gx, gy, sources);
+  });
+}

@@ -94,6 +94,8 @@ export interface GameStateSnapshot {
   resourceSight: import("./terrain/types.js").ResourceSightCell[];
   /** Cleared / depleted resource cells + deposit reserves for terrain re-render. */
   resourceTerrain: import("./terrain/types.js").ResourceTerrainSync;
+  /** Roster for owner-name display in inspect HUD. */
+  players?: Array<{ id: string; name: string }>;
   /** Room id when in a managed match (omit for legacy single-room debug). */
   roomId?: string;
   /** Match rule: capital fall → respawn (pick capital) vs spectate. */
@@ -202,8 +204,10 @@ export type ClientToServer =
       type: "fire";
       /** Firing building instance id. */
       id: string;
-      /** Enemy building instance id. */
-      targetId: string;
+      /** Enemy building instance id (omit when targeting a unit). */
+      targetId?: string;
+      /** Enemy unit group id; gun only. */
+      targetUnitId?: string;
     }
   | {
       type: "move_units";
@@ -312,6 +316,7 @@ export type ServerToClient =
   | { type: "state"; state: GameStateSnapshot }
   | { type: "pong"; t: number }
   | { type: "error"; code: string; message: string }
+  | { type: "tip"; message: string }
   | { type: "room_ready"; roomId: string }
   | {
       type: "match_status";
@@ -445,6 +450,10 @@ export {
   getBuildTree,
   isSettlementMainline,
   extractSettlementSpine,
+  launchCooldownSec,
+  launchCooldownTicks,
+  isLaunchCoolingDown,
+  withLaunchCooldown,
 } from "./buildings/catalog.js";
 
 export {
@@ -625,6 +634,8 @@ export {
 export {
   transportAt,
   isMountainTerrain,
+  isFoothillTerrain,
+  isPureMountainTerrain,
   isOceanTerrain,
   isLandTerrain,
   terrainAllowsKind,
@@ -734,6 +745,8 @@ export {
 export type {
   AntiAirTickResult,
   AntiAirConnectedByOwner,
+  AntiAirAmmoEvent,
+  AntiAirOpts,
   FlyingMissileStub,
   RocketForceBuildingId,
 } from "./units/antiAir.js";
@@ -793,6 +806,8 @@ export {
   filterLiaisonForViewer,
   filterBuildingsForViewer,
   filterLiaisonsForViewer,
+  filterResourceSightForViewer,
+  resourceSightSamplePoint,
   shouldMaskUpgradeOnSatellite,
   buildRoadRailAdjacency,
   isConstructionAllowedAt,

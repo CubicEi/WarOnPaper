@@ -37,7 +37,8 @@ export interface TerrainMap {
 }
 
 /** Client overlay for revealed resource reserves (server-authoritative).
- *  `x`/`y` are cell indices (may be fractional for deposit centroids). */
+ *  Forest: integer cell indices; oil/uranium: fractional deposit centroids
+ *  already at cell-center Du (average of cell centers). */
 export interface ResourceSightCell {
   x: number;
   y: number;

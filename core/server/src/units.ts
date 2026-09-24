@@ -742,18 +742,23 @@ export function handleMutualDefense(
   broadcast();
 }
 
-/** Tick anti-air continuous drain vs enemy air. */
-export function advanceUnitAntiAir(world: UnitWorld): void {
+/** Tick anti-air continuous drain vs enemy air. Returns ammo consume events. */
+export function advanceUnitAntiAir(
+  world: UnitWorld,
+  tick = 0,
+): import("@wop/shared").AntiAirAmmoEvent[] {
   const result = advanceAntiAir(
     world.units,
     world.buildings,
     TICK_MS / 1000,
     world.connectedByOwner,
+    { tick },
   );
   world.units.length = 0;
   world.units.push(...result.units);
   world.buildings.length = 0;
   world.buildings.push(...result.buildings);
+  return result.ammoEvents;
 }
 
 export function handleBuildCarrier(

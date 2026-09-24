@@ -21,9 +21,13 @@ import {
   directVisionRadiusForBuilding,
   awayOccupiedU,
   effectiveUmax,
+  filterResourceSightForViewer,
   isBuildingComplete,
   isBuildingCommsLinked,
+  isLaunchCoolingDown,
   isMovingState,
+  launchCooldownTicks,
+  resourceSightSamplePoint,
   romanLevelLabel,
   supportsLinearUpgrade,
   trainingHeadProgress,
@@ -181,6 +185,8 @@ export interface DrawMapArgs {
   showCommStatus?: boolean;
   /** Launcher fire-aim: draw cancel affordance at this building node. */
   fireAimAt?: { gx: number; gy: number } | null;
+  /** Server tick — used for launcher/AA fire-cooldown pie sectors. */
+  tick?: number;
 }
 
 /** Fixed screen-pixel cancel control while aiming a launcher. */
@@ -364,8 +370,9 @@ function drawResourceReserveRings(
   const rInner = cell * 0.16;
 
   for (const s of sight) {
-    const cx = originX + (s.x + 0.5) * cell;
-    const cy = originY + (s.y + 0.5) * cell;
+    const { gx, gy } = resourceSightSamplePoint(s);
+    const cx = originX + gx * cell;
+    const cy = originY + gy * cell;
     const ratio =
       s.reserveMax > 0 ? Math.max(0, Math.min(1, s.reserve / s.reserveMax)) : 0;
 
@@ -520,6 +527,36 @@ function drawUnits(
   }
 }
 
+/** Gray fill for remaining launch-cooldown pie sector. */
+const LAUNCH_CD_FILL = "rgba(90, 90, 90, 0.55)";
+
+/**
+ * Remaining cooldown as a filled pie sector centered on the building.
+ * Full circle = full cooldown remaining; sector shrinks as ticks elapse.
+ */
+function drawLaunchCooldownSector(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  radius: number,
+  remainingFrac: number,
+): void {
+  if (!(remainingFrac > 0) || !(radius > 0)) return;
+  const sweep = Math.min(1, remainingFrac) * Math.PI * 2;
+  if (sweep <= 0) return;
+  // Start at 12 o'clock; sweep clockwise (canvas arcs are clockwise with +angle).
+  const start = -Math.PI / 2;
+  const end = start + sweep;
+  ctx.save();
+  ctx.fillStyle = LAUNCH_CD_FILL;
+  ctx.beginPath();
+  ctx.moveTo(x, y);
+  ctx.arc(x, y, radius, start, end);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawBuildings(
   ctx: CanvasRenderingContext2D,
   buildings: readonly PlacedBuilding[],
@@ -530,6 +567,7 @@ function drawBuildings(
   myPlayerId: string | null,
   connectedIds?: ReadonlySet<string> | null,
   showCommStatus = false,
+  tick = 0,
 ): void {
   const sig = buildings
     .map((b) => `${b.id}:${b.buildingId}@${b.gx},${b.gy}:own=${b.ownerId === myPlayerId}`)
@@ -568,6 +606,22 @@ function drawBuildings(
       ctx.fill();
     }
     ctx.restore();
+
+    // Launch / AA cooldown: gray pie over the icon (remaining fraction of period).
+    const reloadE = BUILDING_BY_ID[b.buildingId]?.reloadE ?? 0;
+    if (reloadE > 0 && isLaunchCoolingDown(b, tick)) {
+      const total = launchCooldownTicks(reloadE);
+      const remaining = (b.fireCooldownUntilTick ?? 0) - tick;
+      if (total > 0 && remaining > 0) {
+        drawLaunchCooldownSector(
+          ctx,
+          x,
+          y,
+          half * 0.72,
+          Math.min(1, remaining / total),
+        );
+      }
+    }
 
     // Comm-status ring: stroke-only so the building icon stays visible.
     if (showCommStatus && mine) {
@@ -1087,6 +1141,7 @@ export function drawMap(
     showCommStatus,
     focusMarks,
     fireAimAt,
+    tick = 0,
   }: DrawMapArgs,
 ): void {
   const dpr = devicePixelRatio || 1;
@@ -1171,10 +1226,6 @@ export function drawMap(
     );
   }
 
-  if (resourceSight && resourceSight.length > 0) {
-    drawResourceReserveRings(ctx, resourceSight, originX, originY, cell);
-  }
-
   if (pollutionZones && pollutionZones.length > 0) {
     drawPollutionZones(ctx, pollutionZones, originX, originY, cell, zoom);
   }
@@ -1190,6 +1241,7 @@ export function drawMap(
       myPlayerId ?? null,
       linked,
       !!showCommStatus,
+      tick,
     );
   }
 
@@ -1226,14 +1278,33 @@ export function drawMap(
 
   // Satellite-only regions: dim everything outside direct vision
   // (buildings + ground units; air-only circles do not clear ground fog).
+  const fogSources = myPlayerId
+    ? collectAllDirectVisionSources(
+        buildings ?? [],
+        units ?? [],
+        myPlayerId,
+        connectedBuildingIds ?? [],
+      ).filter((s) => !s.airOnly)
+    : [];
   if (myPlayerId) {
-    const sources = collectAllDirectVisionSources(
+    drawSatelliteFog(ctx, originX, originY, boardW, boardH, cell, fogSources);
+  }
+
+  // Reserve rings after fog, re-filtered to direct vision only (same sources as fog).
+  if (resourceSight && resourceSight.length > 0 && myPlayerId) {
+    const visibleSight = filterResourceSightForViewer(
+      resourceSight,
+      myPlayerId,
       buildings ?? [],
       units ?? [],
-      myPlayerId,
       connectedBuildingIds ?? [],
-    ).filter((s) => !s.airOnly);
-    drawSatelliteFog(ctx, originX, originY, boardW, boardH, cell, sources);
+    );
+    if (visibleSight.length > 0) {
+      drawResourceReserveRings(ctx, visibleSight, originX, originY, cell);
+    }
+  } else if (resourceSight && resourceSight.length > 0 && !myPlayerId) {
+    // Spectator / no viewer: show all revealed reserves (no fog).
+    drawResourceReserveRings(ctx, resourceSight, originX, originY, cell);
   }
 
   if (showEnemyVision && myPlayerId) {

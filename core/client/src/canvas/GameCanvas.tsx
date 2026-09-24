@@ -119,7 +119,10 @@ interface Props {
     u: number;
     targetIds: string[];
   }) => void;
-  onFire?: (buildingId: string, targetId: string) => void;
+  onFire?: (
+    buildingId: string,
+    target: { targetId?: string; targetUnitId?: string },
+  ) => void;
   onPlaceCapital?: (gx: number, gy: number) => void;
   onMoveUnits?: (args: {
     gx: number;
@@ -165,6 +168,10 @@ interface Props {
   energy?: number;
   /** Local organization. Reload and deploy each spend 1 O. */
   organization?: number;
+  /** Server tick for launch cooldown UI. */
+  tick?: number;
+  /** Player roster for owner-name display. */
+  playerNames?: readonly { id: string; name: string }[];
   /** Draw known enemy building + unit vision circles. */
   showEnemyVision?: boolean;
   /** Overlay own building / liaison / radio-range communication status. */
@@ -230,6 +237,8 @@ export function GameCanvas({
   onMutualDefense,
   energy = 0,
   organization = 0,
+  tick = 0,
+  playerNames = [],
   showEnemyVision = false,
   showCommStatus = false,
   chatMessages = [],
@@ -248,6 +257,13 @@ export function GameCanvas({
   const myPlayerIdRef = useRef(myPlayerId);
   const showEnemyVisionRef = useRef(showEnemyVision);
   const showCommStatusRef = useRef(showCommStatus);
+  const tickRef = useRef(tick);
+  const destructionMarksRef = useRef<
+    Array<{ gx: number; gy: number; expiresAt: number }>
+  >([]);
+  const prevBuildingsForDestroyRef = useRef<readonly PlacedBuilding[]>([]);
+  /** Own demolish requests — skip minimap destroy warnings for these ids. */
+  const pendingDemolishIdsRef = useRef(new Set<string>());
   const sizeRef = useRef({ width, height });
   const miniSizeRef = useRef({ width: 0, height: 0 });
   const panRef = useRef({ x: 0, y: 0 });
@@ -373,6 +389,7 @@ export function GameCanvas({
   myPlayerIdRef.current = myPlayerId;
   showEnemyVisionRef.current = showEnemyVision;
   showCommStatusRef.current = showCommStatus;
+  tickRef.current = tick;
   sizeRef.current = { width, height };
   miniSizeRef.current = miniSize;
   liaisonKindRef.current = liaisonKind;
@@ -388,6 +405,37 @@ export function GameCanvas({
   mutualAimRef.current = mutualAim;
   selectionUiRef.current = selectionUi;
   focusMarksRef.current = focusMarks;
+
+  // Detect destroyed buildings → temporary minimap warning markers.
+  // Only own buildings (fog cannot hide them); skip self-demolish ids.
+  useEffect(() => {
+    const prev = prevBuildingsForDestroyRef.current;
+    const nextIds = new Set(buildings.map((b) => b.id));
+    const now = performance.now();
+    const me = myPlayerIdRef.current;
+    const pending = pendingDemolishIdsRef.current;
+    const added: Array<{ gx: number; gy: number; expiresAt: number }> = [];
+    for (const b of prev) {
+      if (nextIds.has(b.id)) continue;
+      if (pending.has(b.id)) {
+        pending.delete(b.id);
+        continue;
+      }
+      if (me == null || b.ownerId !== me) continue;
+      added.push({ gx: b.gx, gy: b.gy, expiresAt: now + 12_000 });
+    }
+    if (added.length > 0) {
+      destructionMarksRef.current = [
+        ...destructionMarksRef.current.filter((m) => m.expiresAt > now),
+        ...added,
+      ];
+    } else {
+      destructionMarksRef.current = destructionMarksRef.current.filter(
+        (m) => m.expiresAt > now,
+      );
+    }
+    prevBuildingsForDestroyRef.current = buildings;
+  }, [buildings]);
   buildModeRef.current = buildMode;
   enemyLiaisonRef.current = enemyLiaison;
   mobilizeRef.current = mobilize;
@@ -638,8 +686,12 @@ export function GameCanvas({
           const b = buildingsRef.current.find((x) => x.id === id);
           return b ? { gx: b.gx, gy: b.gy } : null;
         })(),
+        tick: tickRef.current,
       });
       if (mini && miniCtx && miniSize.width > 0) {
+        const now = performance.now();
+        const marks = destructionMarksRef.current.filter((m) => m.expiresAt > now);
+        destructionMarksRef.current = marks;
         drawMinimap(miniCtx, {
           miniW: miniSize.width,
           miniH: miniSize.height,
@@ -649,6 +701,7 @@ export function GameCanvas({
           pan: panRef.current,
           zoom: zoomRef.current,
           terrain: terrainRef.current,
+          destructionMarks: marks,
         });
       }
       raf = requestAnimationFrame(paint);
@@ -1136,12 +1189,58 @@ export function GameCanvas({
               setFireAim(null);
               return;
             }
+            const canHitUnits = source.buildingId === "gun";
+            const aimHint = canHitUnits ? "选择敌方建筑或单位" : "选择敌方建筑";
+
+            if (canHitUnits) {
+              const aimUnit = findUnitNear(unitsRef.current, hit.gx, hit.gy, 0.35);
+              if (aimUnit) {
+                if (aimUnit.ownerId === myPlayerIdRef.current) {
+                  setFireAimNote("只能攻击敌方单位");
+                  logLocalReject({
+                    action: "fire",
+                    summary: "建筑开火",
+                    reason: "只能攻击敌方单位",
+                  });
+                  return;
+                }
+                if (
+                  !isInsideWorkRange(
+                    aimUnit.gx,
+                    aimUnit.gy,
+                    source,
+                    buildingsRef.current,
+                    connectedIdsRef.current,
+                  )
+                ) {
+                  setFireAimNote("不在射程内");
+                  logLocalReject({
+                    action: "fire",
+                    summary: `建筑开火 → 单位 ${aimUnit.id.slice(0, 8)}`,
+                    reason: "不在射程内",
+                  });
+                  return;
+                }
+                log.info(
+                  "building-action",
+                  "fire",
+                  source.buildingId,
+                  "→ unit",
+                  aimUnit.kind,
+                  aimUnit.id.slice(0, 8),
+                );
+                onFireRef.current?.(source.id, { targetUnitId: aimUnit.id });
+                setFireAimNote("选择目标");
+                return;
+              }
+            }
+
             if (!near || near.id === source.id) {
-              setFireAimNote("选择敌方建筑");
+              setFireAimNote(aimHint);
               logLocalReject({
                 action: "fire",
                 summary: "建筑开火",
-                reason: "选择敌方建筑",
+                reason: aimHint,
                 detail: `from ${source.id.slice(0, 8)}`,
               });
               return;
@@ -1182,7 +1281,7 @@ export function GameCanvas({
               return;
             }
             log.info("building-action", "fire", source.buildingId, "→", near.buildingId);
-            onFireRef.current?.(source.id, near.id);
+            onFireRef.current?.(source.id, { targetId: near.id });
             setFireAimNote("选择目标");
             return;
           }
@@ -1194,6 +1293,7 @@ export function GameCanvas({
               if (shiftDbl && shiftDbl.id === near.id && now - shiftDbl.at < SHIFT_DBL_MS) {
                 shiftDbl = null;
                 log.info("building-action", "shift-dbl-demolish", near.buildingId, near.gx, near.gy);
+                pendingDemolishIdsRef.current.add(near.id);
                 onDemolishRef.current?.(near.id);
                 clearSelection();
                 return;
@@ -1254,11 +1354,14 @@ export function GameCanvas({
         }
         setSelectionAt(hit.gx, hit.gy, { kind: "point" });
       } else if (fireAimRef.current) {
-        setFireAimNote("选择敌方建筑");
+        const source = buildingsRef.current.find((b) => b.id === fireAimRef.current);
+        const aimHint =
+          source?.buildingId === "gun" ? "选择敌方建筑或单位" : "选择敌方建筑";
+        setFireAimNote(aimHint);
         logLocalReject({
           action: "fire",
           summary: "建筑开火",
-          reason: "选择敌方建筑",
+          reason: aimHint,
         });
       } else clearSelection();
     };
@@ -1939,6 +2042,8 @@ export function GameCanvas({
             screenX={selectionUi.screenX}
             screenY={selectionUi.screenY}
             myPlayerId={myPlayerId}
+            playerNames={playerNames}
+            tick={tick}
             commsLinked={isBuildingCommsLinked(inspectedBuilding.id, connectedBuildingIds)}
             energy={energy}
             organization={organization}
@@ -1998,6 +2103,7 @@ export function GameCanvas({
               }
               const linked = isBuildingCommsLinked(b.id, connectedIdsRef.current);
               if (action === "demolish") {
+                pendingDemolishIdsRef.current.add(b.id);
                 onDemolish?.(b.id);
                 clearSelection();
                 return;

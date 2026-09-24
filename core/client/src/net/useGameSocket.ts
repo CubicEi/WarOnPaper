@@ -73,6 +73,8 @@ export function useGameSocket(
   send: (msg: ClientToServer) => boolean;
   lastError: GameError | null;
   clearError: () => void;
+  lastTip: string | null;
+  clearTip: () => void;
   playerId: string | null;
   playerName: string | null;
   chatMessages: ChatMessage[];
@@ -81,6 +83,7 @@ export function useGameSocket(
 } {
   const [status, setStatus] = useState<SocketStatus>("connecting");
   const [lastError, setLastError] = useState<GameError | null>(null);
+  const [lastTip, setLastTip] = useState<string | null>(null);
   const [playerId, setPlayerId] = useState<string | null>(null);
   const [playerName, setPlayerName] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -94,6 +97,7 @@ export function useGameSocket(
   playerIdRef.current = playerId;
 
   const clearError = useCallback(() => setLastError(null), []);
+  const clearTip = useCallback(() => setLastTip(null), []);
 
   const send = useCallback((msg: ClientToServer): boolean => {
     const ws = wsRef.current;
@@ -238,6 +242,9 @@ export function useGameSocket(
             message: msg.message,
             raw: `${msg.code}: ${msg.message}`,
           });
+        } else if (msg.type === "tip") {
+          log.info("net", "← tip", msg.message);
+          setLastTip(msg.message);
         } else if (msg.type === "pong") {
           // quiet
         } else {
@@ -278,6 +285,8 @@ export function useGameSocket(
     send,
     lastError,
     clearError,
+    lastTip,
+    clearTip,
     playerId,
     playerName,
     chatMessages,

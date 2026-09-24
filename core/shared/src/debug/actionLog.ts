@@ -327,7 +327,9 @@ export function summarizeClientAction(msg: { readonly type: string }): {
       }
       break;
     case "fire":
-      summary = `建筑开火 ${shortId(m.id)} → ${shortId(m.targetId)}`;
+      summary = m.targetUnitId
+        ? `建筑开火 ${shortId(m.id)} → 单位 ${shortId(m.targetUnitId)}`
+        : `建筑开火 ${shortId(m.id)} → ${shortId(m.targetId)}`;
       break;
     case "move_units":
       summary = `调动 → ${xy(m.gx, m.gy)}`;

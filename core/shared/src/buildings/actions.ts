@@ -64,8 +64,13 @@ export interface PlacedBuilding {
   awayOccupiedU?: number;
   /** 补给站当前储能（E）；上限见 catalog.storeEMax。默认 0。 */
   storeE: number;
-  /** 防空导弹当前弹药（发）；上限见 catalog.ammoMax。默认 0。 */
+  /** 防空炮当前弹药（发）；上限见 catalog.ammoMax。默认 0。 */
   ammo: number;
+  /**
+   * 火箭军 / 防空等发射冷却截止 tick（不含）。
+   * 冷却时长 = reloadE / 150 秒。
+   */
+  fireCooldownUntilTick?: number;
   /**
    * 训练场补员队列（仅 training_ground）。FIFO：队首计时，完成后调动送达目标。
    */

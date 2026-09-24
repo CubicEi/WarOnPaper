@@ -72,9 +72,31 @@ function touchesGround(
   });
 }
 
-/** Mountain for move rules: any touching mountain cell. */
+/** Mountain for move rules: any touching mountain cell (incl. foothill). */
 export function isMountainTerrain(map: TerrainMap, gx: number, gy: number): boolean {
   return touchesGround(map, gx, gy, "mountain");
+}
+
+/**
+ * 山脚：同时触及山地与陆地（与公路山区半价分类一致）。
+ * 装甲禁止进入的是「山区」，不是山脚。
+ */
+export function isFoothillTerrain(map: TerrainMap, gx: number, gy: number): boolean {
+  const cells = cellsTouchingUnitCoord(map, gx, gy);
+  if (cells.length === 0) return false;
+  let hasMountain = false;
+  let hasLand = false;
+  for (const { x, y } of cells) {
+    const g = cellAt(map, x, y)?.ground;
+    if (g === "mountain") hasMountain = true;
+    if (g === "land") hasLand = true;
+  }
+  return hasMountain && hasLand;
+}
+
+/** Pure mountain (山区): touches mountain and is not foothill. */
+export function isPureMountainTerrain(map: TerrainMap, gx: number, gy: number): boolean {
+  return isMountainTerrain(map, gx, gy) && !isFoothillTerrain(map, gx, gy);
 }
 
 export function isOceanTerrain(map: TerrainMap, gx: number, gy: number): boolean {
@@ -112,7 +134,8 @@ export function terrainAllowsKind(
 ): boolean {
   if (kind === "air") return true;
   const def = UNIT_BY_KIND[kind];
-  if (def.mountainBlocked && isMountainTerrain(map, gx, gy)) return false;
+  // Armor blocks 山区 only; foothill (山脚) remains passable for deploy/move.
+  if (def.mountainBlocked && isPureMountainTerrain(map, gx, gy)) return false;
   if (kind === "navy" || kind === "navy_carrier") {
     return isOceanTerrain(map, gx, gy);
   }
@@ -312,6 +335,54 @@ export function planLandOrNavyPath(args: {
   }
 
   const sameCell = unitCoordKey(start.gx, start.gy) === unitCoordKey(goal.gx, goal.gy);
+  // #region agent log
+  if (kind === "armor") {
+    const cells = cellsTouchingUnitCoord(terrain, start.gx, start.gy).map(
+      ({ x, y }) => ({
+        x,
+        y,
+        g: cellAt(terrain, x, y)?.ground ?? null,
+      }),
+    );
+    const anyMtn = isMountainTerrain(terrain, start.gx, start.gy);
+    const foothill = isFoothillTerrain(terrain, start.gx, start.gy);
+    const pureMtn = isPureMountainTerrain(terrain, start.gx, start.gy);
+    const allows = terrainAllowsKind(
+      kind,
+      terrain,
+      start.gx,
+      start.gy,
+      terrainOpts,
+    );
+    fetch("http://127.0.0.1:7277/ingest/6741dc77-72e2-46ba-9a2a-c7dd9d84b7e9", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": "676d95",
+      },
+      body: JSON.stringify({
+        sessionId: "676d95",
+        runId: "pre-fix",
+        hypothesisId: "A_B_C",
+        location: "pathfind.ts:planLandOrNavyPath:armorStart",
+        message: "armor path start classify",
+        data: {
+          start,
+          goal,
+          anyMtn,
+          foothill,
+          pureMtn,
+          allows,
+          oldWouldBlock: anyMtn,
+          hasLand: cells.some((c) => c.g === "land"),
+          hasOcean: cells.some((c) => c.g === "ocean"),
+          cells,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+  }
+  // #endregion
   const startOk =
     ignoreTerrain ||
     allowImpassableStart ||
@@ -321,6 +392,45 @@ export function planLandOrNavyPath(args: {
       isLandKind(kind) && isOceanTerrain(terrain, start.gx, start.gy)
         ? LAND_WATER_ERROR
         : "起点地形不可通行";
+    // #region agent log
+    {
+      const cells = cellsTouchingUnitCoord(terrain, start.gx, start.gy).map(
+        ({ x, y }) => ({
+          x,
+          y,
+          g: cellAt(terrain, x, y)?.ground ?? null,
+        }),
+      );
+      fetch("http://127.0.0.1:7277/ingest/6741dc77-72e2-46ba-9a2a-c7dd9d84b7e9", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Debug-Session-Id": "676d95",
+        },
+        body: JSON.stringify({
+          sessionId: "676d95",
+          runId: "pre-fix",
+          hypothesisId: "D_E",
+          location: "pathfind.ts:planLandOrNavyPath:reject",
+          message: "start terrain rejected",
+          data: {
+            kind,
+            start,
+            goal,
+            err,
+            ignoreTerrain,
+            allowImpassableStart,
+            anyMtn: isMountainTerrain(terrain, start.gx, start.gy),
+            foothill: isFoothillTerrain(terrain, start.gx, start.gy),
+            pureMtn: isPureMountainTerrain(terrain, start.gx, start.gy),
+            ocean: isOceanTerrain(terrain, start.gx, start.gy),
+            cells,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+    }
+    // #endregion
     return { path: [], travelTimeSec: 0, error: err };
   }
   const goalOk =

@@ -4,11 +4,13 @@ import {
   CARRIER_BUILD_E,
   HOLD_ACTION_O_COST,
   SIZE_NAME,
+  TICK_HZ,
   UNIT_BY_KIND,
   awayOccupiedU,
   buildingLevel,
   effectiveUmax,
   effectiveWorkR,
+  isLaunchCoolingDown,
   isRepairing,
   needsContinueBuild,
   previewLinearUpgrade,
@@ -56,6 +58,10 @@ interface Props {
   /** Distance from building center to the right panel. */
   offset?: number;
   myPlayerId?: string | null;
+  /** Roster for owner name above HP. */
+  playerNames?: readonly { id: string; name: string }[];
+  /** Server tick for launch cooldown. */
+  tick?: number;
   /** False when this building is not in the published comms set. */
   commsLinked?: boolean;
   /** Current player energy, used to cap reload and deploy amount. */
@@ -87,6 +93,8 @@ export function BuildingInspectHud({
   screenY,
   offset = 44,
   myPlayerId = null,
+  playerNames = [],
+  tick = 0,
   commsLinked = false,
   energy = 0,
   organization = 0,
@@ -99,6 +107,11 @@ export function BuildingInspectHud({
   const vision = building.visionLevel ?? (mine ? "direct" : "satellite");
   const enemySatellite = !mine && vision === "satellite";
   const enemyDirect = !mine && vision === "direct";
+  const ownerNick = playerNames.find((p) => p.id === building.ownerId)?.name;
+  const ownerName =
+    ownerNick && ownerNick.trim()
+      ? ownerNick
+      : building.ownerId.slice(0, 8);
 
   const def = BUILDING_BY_ID[building.buildingId];
   const name = def?.name ?? building.buildingId;
@@ -213,12 +226,25 @@ export function BuildingInspectHud({
   const carrierAfford = energy >= CARRIER_BUILD_E;
   const launchDamage = def?.h;
   const canDamageBuildings = launchDamage != null && launchDamage > 0;
+  const onCooldown = isLaunchCoolingDown(building, tick);
+  const cooldownRemSec = onCooldown
+    ? Math.max(
+        1,
+        Math.ceil(
+          ((building.fireCooldownUntilTick ?? 0) - tick) / TICK_HZ,
+        ),
+      )
+    : 0;
+  const cooldownLabel = onCooldown
+    ? `发射冷却中 ${cooldownRemSec}s`
+    : null;
   const launchDisabled =
     polluted ||
     !commsLinked ||
     inProgress ||
     ammoCur < 1 ||
-    !canDamageBuildings;
+    !canDamageBuildings ||
+    onCooldown;
   const launchTitle = polluted
     ? "污染区内建筑已失效"
     : !commsLinked
@@ -229,7 +255,9 @@ export function BuildingInspectHud({
         ? "无法攻击建筑"
         : ammoCur < 1
           ? "弹药不足"
-          : "选择工作范围内的敌方建筑";
+          : onCooldown
+            ? cooldownLabel ?? "发射冷却中"
+            : "选择工作范围内的敌方建筑";
   const thirdAction: BuildingInspectAction = canReload
     ? "reload"
     : canDeploy
@@ -340,6 +368,9 @@ export function BuildingInspectHud({
       extras.push("训练空闲");
     }
   }
+  if (mine && cooldownLabel && (isLauncher || isAntiAir)) {
+    extras.push(cooldownLabel);
+  }
 
   const fire = (
     action: BuildingInspectAction,
@@ -348,13 +379,46 @@ export function BuildingInspectHud({
     onAction?.(action, building, detail);
   };
 
+  const showLaunchOp = mine && (isLauncher || isAntiAir);
+
   return (
     <div className="building-inspect" aria-label={`${name} 信息`}>
+      {/* Launch / AA control sits on the upper half of the building icon so it
+          does not cover the HP / ammo bars drawn on the lower half. */}
+      {showLaunchOp && (
+        <div
+          className="building-inspect-launch"
+          style={{ left: screenX, top: screenY }}
+        >
+          {isLauncher ? (
+            <OpButton
+              label={onCooldown ? `冷却 ${cooldownRemSec}s` : "发射"}
+              icon={def?.icon ?? OP_MUTUAL}
+              disabled={launchDisabled}
+              title={launchTitle}
+              onFire={() => fire("fire")}
+            />
+          ) : (
+            <OpButton
+              label={onCooldown ? `冷却 ${cooldownRemSec}s` : "防空"}
+              icon={def?.icon ?? OP_MUTUAL}
+              disabled
+              title={
+                onCooldown
+                  ? cooldownLabel ?? "发射冷却中"
+                  : "自动拦截导弹 / 接敌交战"
+              }
+              onFire={() => {}}
+            />
+          )}
+        </div>
+      )}
       <div
         className="building-inspect-row"
         style={{ left: screenX + offset, top: screenY }}
       >
         <div className="building-inspect-panel">
+          <div className="building-inspect-owner">{ownerName}</div>
           {showHp && (
             <div className="building-inspect-box is-hp">
               <div className="building-inspect-box-label">{hpLabel}</div>
@@ -533,15 +597,7 @@ export function BuildingInspectHud({
                   title={polluted ? "污染区内建筑已失效" : undefined}
                   onFire={() => fire("supply")}
                 />
-              ) : isLauncher ? (
-                <OpButton
-                  label="发射"
-                  icon={def?.icon ?? OP_MUTUAL}
-                  disabled={launchDisabled}
-                  title={launchTitle}
-                  onFire={() => fire("fire")}
-                />
-              ) : !isAntiAir ? (
+              ) : !showLaunchOp ? (
                 <OpButton
                   label="互防"
                   icon={OP_MUTUAL}

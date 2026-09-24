@@ -245,79 +245,6 @@ body,
   transform: translateY(1px);
 }
 
-.terrain-gen-btn {
-  pointer-events: auto;
-  cursor: pointer;
-  padding: 6px 12px;
-  font-size: 13px;
-  color: #e8e4dc;
-  background: rgba(20, 20, 20, 0.72);
-  border: 1px solid #5a5a5a;
-  letter-spacing: 0.04em;
-}
-
-.terrain-gen-row {
-  display: flex;
-  flex-direction: row;
-  align-items: center;
-  gap: 6px;
-  pointer-events: auto;
-}
-
-.map-size-select {
-  cursor: pointer;
-  padding: 6px 8px;
-  font-size: 13px;
-  color: #e8e4dc;
-  background: rgba(20, 20, 20, 0.72);
-  border: 1px solid #5a5a5a;
-  letter-spacing: 0.02em;
-}
-
-.map-size-select:hover {
-  border-color: #8a8a8a;
-  background: rgba(36, 36, 36, 0.85);
-}
-
-.map-size-select:focus {
-  outline: 1px solid #8a8a8a;
-  outline-offset: 1px;
-}
-
-.terrain-seed-input {
-  box-sizing: border-box;
-  width: 5.5rem;
-  padding: 6px 8px;
-  font-size: 13px;
-  color: #e8e4dc;
-  background: rgba(20, 20, 20, 0.72);
-  border: 1px solid #5a5a5a;
-  letter-spacing: 0.02em;
-}
-
-.terrain-seed-input::placeholder {
-  color: #8a8680;
-}
-
-.terrain-seed-input:hover {
-  border-color: #8a8a8a;
-  background: rgba(36, 36, 36, 0.85);
-}
-
-.terrain-seed-input:focus {
-  outline: 1px solid #8a8a8a;
-  outline-offset: 1px;
-}
-
-.terrain-gen-btn:hover {
-  border-color: #8a8a8a;
-  background: rgba(36, 36, 36, 0.85);
-}
-
-.terrain-gen-btn:active {
-  transform: translateY(1px);
-}
-
 .minimap-stack {
   position: absolute;
   right: 12px;
@@ -512,6 +439,12 @@ body,
   pointer-events: none;
   transform: translate(-50%, 0);
   animation: error-toast-in 0.28s ease-out;
+}
+
+.error-toast.is-warn {
+  color: #fff8e0;
+  background: rgba(140, 110, 20, 0.94);
+  border-color: #d4b84a;
 }
 
 @keyframes error-toast-in {
@@ -990,6 +923,18 @@ body,
   border-left-color: #c45c5c;
 }
 
+.building-inspect-owner {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: rgba(220, 214, 200, 0.88);
+  margin: 0 2px 4px;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .building-inspect-box.is-u {
   border-left-color: #c9a227;
 }
@@ -1252,6 +1197,16 @@ body,
 .building-inspect-reload-cost {
   font-weight: 600;
   opacity: 0.85;
+}
+
+/* Rocket-force / AA fire control: anchored on building center, sitting in the
+   upper half of the icon (entirely above the vertical midline). */
+.building-inspect-launch {
+  position: absolute;
+  transform: translate(-50%, -100%);
+  margin-top: -2px;
+  pointer-events: auto;
+  z-index: 4;
 }
 
 .building-inspect-ops {

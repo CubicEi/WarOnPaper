@@ -3,13 +3,10 @@ import {
   capitalSiteRejectMessage,
   capitalSiteRejectReason,
   capitalExclusionRejectReason,
-  DEFAULT_MAP_SIZE_ID,
-  MAP_SIZE_OPTIONS,
   type GameStateSnapshot,
   type GroundContext,
   type GridNode,
   type LiaisonKind,
-  type MapSizeId,
   type TerrainMap,
 } from "@wop/shared";
 import { GameCanvas } from "./canvas/GameCanvas";
@@ -19,7 +16,7 @@ import { HudOverlay } from "./components/HudOverlay";
 import { useGameSocket } from "./net/useGameSocket";
 import { log } from "./net/log";
 import { logLocalReject } from "./debug/playerActionLog";
-import { applyTerrainSeed, requestGameInit, syncTerrainResources } from "./game/initGame";
+import { applyTerrainSeed, syncTerrainResources } from "./game/initGame";
 
 function isEditableTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -61,7 +58,7 @@ export function App() {
 
   const pushErrorRef = useRef<(friendly: string, raw: string) => void>(() => {});
 
-  const { status, send, lastError, clearError, playerId, chatMessages, leaveRoom } =
+  const { status, send, lastError, clearError, lastTip, clearTip, playerId, chatMessages, leaveRoom } =
     useGameSocket(onState, {
       onRoomLifecycle: (ev) => {
         log.info("app", "room lifecycle", ev);
@@ -88,19 +85,26 @@ export function App() {
   }, [leaveRoom]);
 
   const [debugOpen, setDebugOpen] = useState(false);
-  const [mapSize, setMapSize] = useState<MapSizeId>(DEFAULT_MAP_SIZE_ID);
-  const [terrainSeedInput, setTerrainSeedInput] = useState("");
   const [showEnemyVision, setShowEnemyVision] = useState(false);
   const [showCommStatus, setShowCommStatus] = useState(false);
   const [errorLog, setErrorLog] = useState<DebugErrorEntry[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastKey, setToastKey] = useState(0);
+  const [toastVariant, setToastVariant] = useState<"error" | "warn">("error");
   const errorIdRef = useRef(0);
 
   const pushError = useCallback((friendly: string, raw: string) => {
     errorIdRef.current += 1;
     const id = errorIdRef.current;
     setErrorLog((prev) => [...prev.slice(-49), { id, text: raw }]);
+    setToastVariant("error");
+    setToastMessage(friendly);
+    setToastKey(id);
+  }, []);
+  const pushTip = useCallback((friendly: string) => {
+    errorIdRef.current += 1;
+    const id = errorIdRef.current;
+    setToastVariant("warn");
     setToastMessage(friendly);
     setToastKey(id);
   }, []);
@@ -109,6 +113,11 @@ export function App() {
     if (!lastError) return;
     pushError(lastError.message, lastError.raw);
   }, [lastError, pushError]);
+  useEffect(() => {
+    if (!lastTip) return;
+    pushTip(lastTip);
+    clearTip();
+  }, [lastTip, pushTip, clearTip]);
 
   useEffect(() => {
     const onKeyDown = (ev: KeyboardEvent) => {
@@ -140,11 +149,6 @@ export function App() {
   }, [state?.map, state?.terrainSeed, state?.phase, state?.resourceTerrain]);
 
   const windowHudSize = Math.max(viewport.w, viewport.h) / 16;
-
-  const onInit = useCallback(() => {
-    const seed = terrainSeedInput.trim();
-    requestGameInit(send, mapSize, seed || undefined);
-  }, [send, mapSize, terrainSeedInput]);
 
   const onBuild = useCallback(
     (args: { buildingId: string; gx: number; gy: number; ground: GroundContext }) => {
@@ -270,10 +274,10 @@ export function App() {
   );
 
   const onFire = useCallback(
-    (id: string, targetId: string) => {
-      log.info("app", "fire", id, targetId);
-      const ok = send({ type: "fire", id, targetId });
-      if (!ok) log.error("app", "fire send returned false", id, targetId);
+    (id: string, target: { targetId?: string; targetUnitId?: string }) => {
+      log.info("app", "fire", id, target);
+      const ok = send({ type: "fire", id, ...target });
+      if (!ok) log.error("app", "fire send returned false", id, target);
     },
     [send],
   );
@@ -443,7 +447,6 @@ export function App() {
   const liaisonCount = state?.liaisons?.length ?? 0;
   const phase = state?.phase ?? "need_init";
   const role = state?.role ?? "player";
-  const interactive = phase === "playing";
 
   const foreignCapital =
     phase === "pick_capital" &&
@@ -476,7 +479,8 @@ export function App() {
   const dismissToast = useCallback(() => {
     setToastMessage(null);
     clearError();
-  }, [clearError]);
+    clearTip();
+  }, [clearError, clearTip]);
 
   const onSendChat = useCallback(
     (text: string) => {
@@ -527,6 +531,8 @@ export function App() {
         onMutualDefense={onMutualDefense}
         energy={state?.you.energy ?? 0}
         organization={state?.you.organization ?? 0}
+        tick={state?.tick ?? 0}
+        playerNames={state?.players ?? []}
         showEnemyVision={showEnemyVision}
         showCommStatus={showCommStatus}
         chatMessages={chatMessages}
@@ -538,7 +544,12 @@ export function App() {
           windowHudSize={windowHudSize}
         />
       )}
-      <ErrorToast message={toastMessage} toastKey={toastKey} onDismiss={dismissToast} />
+      <ErrorToast
+        message={toastMessage}
+        toastKey={toastKey}
+        variant={toastVariant}
+        onDismiss={dismissToast}
+      />
       <DebugOverlay
         open={debugOpen}
         status={status}
@@ -579,49 +590,6 @@ export function App() {
           </button>
         </div>
         <div className="corner-tools-col">
-          {debugOpen && (
-            <div className="terrain-gen-row">
-              <button
-                type="button"
-                className="terrain-gen-btn"
-                onClick={onInit}
-                title="调试：房间制下服务端会拒绝 init"
-                disabled={!interactive && phase !== "need_init"}
-              >
-                初始化(调试)
-              </button>
-              <select
-                className="map-size-select"
-                value={mapSize}
-                title="地图大小"
-                aria-label="地图大小"
-                onChange={(ev) => setMapSize(ev.target.value as MapSizeId)}
-              >
-                {MAP_SIZE_OPTIONS.map((opt) => (
-                  <option key={opt.id} value={opt.id}>
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              <input
-                className="terrain-seed-input"
-                type="text"
-                value={terrainSeedInput}
-                placeholder="种子"
-                title="地形种子（空则随机）"
-                aria-label="地形种子"
-                spellCheck={false}
-                autoComplete="off"
-                onChange={(ev) => setTerrainSeedInput(ev.target.value)}
-                onKeyDown={(ev) => {
-                  if (ev.key === "Enter") {
-                    ev.preventDefault();
-                    onInit();
-                  }
-                }}
-              />
-            </div>
-          )}
           {phaseHint && (
             <div className="status-chip" data-status="connecting">
               {phaseHint}

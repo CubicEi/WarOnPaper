@@ -1,22 +1,32 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const rootVersion = JSON.parse(
-  readFileSync(path.resolve(__dirname, "../../version.json"), "utf8"),
-).version as string;
+const versionJsonPath = path.resolve(__dirname, "../../version.json");
 
 export default defineConfig({
-  plugins: [react()],
-  define: {
-    __WOP_VERSION__: JSON.stringify(rootVersion),
+  plugins: [
+    react(),
+    {
+      name: "watch-version-json",
+      configureServer(server) {
+        server.watcher.add(versionJsonPath);
+      },
+    },
+  ],
+  resolve: {
+    alias: {
+      "@version.json": versionJsonPath,
+    },
   },
   server: {
     host: true,
     port: 5174,
+    fs: {
+      allow: [path.resolve(__dirname, "../..")],
+    },
     proxy: {
       "/ws": {
         target: "ws://localhost:4358",

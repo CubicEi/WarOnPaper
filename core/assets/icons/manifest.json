@@ -157,13 +157,13 @@
     },
     {
       "id": "gun",
-      "name": "高射炮",
+      "name": "臼炮",
       "category": "military",
       "path": "buildings/military/gun.svg"
     },
     {
       "id": "anti-air_gun",
-      "name": "防空导弹",
+      "name": "防空炮",
       "category": "military",
       "path": "buildings/military/anti-air_gun.svg"
     },
@@ -175,7 +175,7 @@
     },
     {
       "id": "advenced_missile",
-      "name": "洲际导弹",
+      "name": "远程导弹",
       "category": "military",
       "path": "buildings/military/advenced_missile.svg"
     },
