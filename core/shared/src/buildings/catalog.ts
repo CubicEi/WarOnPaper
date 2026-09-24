@@ -105,7 +105,7 @@ export const BUILDINGS: BuildingDef[] = [
 
   // 7.2 指挥通信
   { id: "boardcast", name: "电台", category: "command", prereq: "outpost", upgradeLevels: 3, hp: 2, size: "small", workR: 6, notes: "R 6", icon: "/icons/buildings/command/boardcast.png" },
-  { id: "radar", name: "雷达", category: "command", prereq: "boardcast", upgradeLevels: 5, hp: 5, size: "small", workR: 8, notes: "R 8）", icon: "/icons/buildings/command/radar.png" },
+  { id: "radar", name: "雷达", category: "command", prereq: "boardcast", upgradeLevels: 5, hp: 5, size: "small", workR: 8, notes: "R 8", icon: "/icons/buildings/command/radar.png" },
   { id: "advanced_commander", name: "高级指挥所", category: "command", prereq: "commander", upgradeLevels: 10, hp: 20, u: 10, size: "medium", orgBonus: 2, notes: "O +2", icon: "/icons/buildings/command/advanced_commander.png" },
   { id: "boardcast_station", name: "广播站", category: "command", prereq: "advanced_commander", upgradeLevels: 10, hp: 15, u: 5, size: "medium", notes: "连接所有电台", icon: "/icons/buildings/command/boardcast_station.png" },
   { id: "regional_commander", name: "区域司令部", category: "command", prereq: "advanced_commander", upgradeLevels: 15, hp: 30, u: 12, size: "large", orgBonus: 3, notes: "O +3", icon: "/icons/buildings/command/regional_commander.png" },
@@ -114,7 +114,7 @@ export const BUILDINGS: BuildingDef[] = [
 
   // 7.3 兵力
   { id: "port", name: "港口", category: "military", prereq: "camp", upgradeLevels: 9, hp: 12, u: 4, size: "large", workR: 8, notes: "须建在海岸线；U 4，R 8；可建造航母（容纳 3U 空军，500E）", icon: "/icons/buildings/military/port.png" },
-  { id: "gun", name: "臼炮", category: "military", prereq: "camp", upgradeLevels: 4, hp: 8, size: "medium", workR: 5, ammoMax: 10, reloadE: 75, h: 4, unitH: 10, notes: "H 4 / 对单位 10，R 5，75E装填1发", icon: "/icons/buildings/military/gun.png" },
+  { id: "gun", name: "臼炮", category: "military", prereq: "camp", upgradeLevels: 4, hp: 8, size: "medium", workR: 5, ammoMax: 10, reloadE: 75, h: 4, unitH: 3, notes: "H 4 / 对单位 3，R 5，75E装填1发", icon: "/icons/buildings/military/gun.png" },
   { id: "anti-air_gun", name: "防空炮", category: "military", prereq: "gun", upgradeLevels: 5, hp: 12, size: "medium", workR: 5, ammoMax: 8, reloadE: 100, notes: "R 5；装填 100E。拦截导弹（不含臼炮）；对空军造成持续减 U", icon: "/icons/buildings/military/anti-air_gun.png" },
   { id: "missile", name: "导弹", category: "military", prereq: "gun", upgradeLevels: 5, hp: 10, size: "medium", workR: 8, ammoMax: 5, reloadE: 200, h: 8, notes: "H 8，R 8，200E装填1发", icon: "/icons/buildings/military/missile.png" },
   { id: "advenced_missile", name: "远程导弹", category: "military", prereq: "missile", upgradeLevels: 10, hp: 15, size: "medium", workR: 10, ammoMax: 5, reloadE: 600, h: 12, notes: "H 12，R 10，600E装填1发", icon: "/icons/buildings/military/advanced_missile.png" },

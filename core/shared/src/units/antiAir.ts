@@ -43,7 +43,7 @@ export type RocketForceBuildingId = (typeof ROCKET_FORCE_BUILDING_IDS)[number];
 
 const ROCKET_FORCE_SET = new Set<string>(ROCKET_FORCE_BUILDING_IDS);
 
-/** 是否为火箭军可拦截弹药（导弹 / 洲际 / 核）. */
+/** 是否为火箭军可拦截弹药（导弹 / 远程导弹 / 核）. */
 export function isRocketForceWeapon(
   buildingId: string | null | undefined,
 ): boolean {
