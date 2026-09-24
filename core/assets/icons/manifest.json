@@ -174,10 +174,10 @@
       "path": "buildings/military/missile.svg"
     },
     {
-      "id": "advenced-missile",
+      "id": "advenced_missile",
       "name": "洲际导弹",
       "category": "military",
-      "path": "buildings/military/advenced-missile.svg"
+      "path": "buildings/military/advenced_missile.svg"
     },
     {
       "id": "nuke-missile",

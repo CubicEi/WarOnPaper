@@ -32,7 +32,7 @@ export const GUN_BUILDING_ID = "gun";
  */
 export const ROCKET_FORCE_BUILDING_IDS = [
   "missile",
-  "advenced-missile",
+  "advenced_missile",
   "nuke_missile",
 ] as const;
 export type RocketForceBuildingId = (typeof ROCKET_FORCE_BUILDING_IDS)[number];
