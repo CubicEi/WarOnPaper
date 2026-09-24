@@ -7,8 +7,11 @@
 
 import type { PlacedBuilding } from "../buildings/actions.js";
 import { isBuildingComplete } from "../buildings/actions.js";
-import { effectiveWorkR } from "../buildings/levelUpgrade.js";
 import { distancePointToSegment, type GridNode } from "../buildings/liaison.js";
+import {
+  workRangeCircles,
+  type WorkRangeCircle,
+} from "../buildings/workRange.js";
 import { releaseAwayForUnitDiff } from "./garrison.js";
 import type { UnitGroup } from "./types.js";
 import { visionDistDu } from "../vision/vision.js";
@@ -23,6 +26,26 @@ export const ANTI_AIR_AMMO_PER_ENGAGEMENT = 2;
 export const ANTI_AIR_AMMO_PER_INTERCEPT = 1;
 /** 高射炮发射物不在拦截范围内（规则：不包括高射炮）. */
 export const GUN_BUILDING_ID = "gun";
+/**
+ * 火箭军武器（可被防空导弹拦截的发射建筑）。
+ * 高射炮 `gun` 不在此列。
+ */
+export const ROCKET_FORCE_BUILDING_IDS = [
+  "missile",
+  "advenced-missile",
+  "nuke_missile",
+] as const;
+export type RocketForceBuildingId = (typeof ROCKET_FORCE_BUILDING_IDS)[number];
+
+const ROCKET_FORCE_SET = new Set<string>(ROCKET_FORCE_BUILDING_IDS);
+
+/** 是否为火箭军可拦截弹药（导弹 / 洲际 / 核）. */
+export function isRocketForceWeapon(
+  buildingId: string | null | undefined,
+): boolean {
+  return !!buildingId && ROCKET_FORCE_SET.has(buildingId);
+}
+
 /** @deprecated alias */
 export const AA_AMMO_PER_AIR_ENGAGEMENT = ANTI_AIR_AMMO_PER_ENGAGEMENT;
 
@@ -42,10 +65,6 @@ export interface AntiAirTickResult {
   removedIds: string[];
 }
 
-function aaWorkR(building: PlacedBuilding): number {
-  return effectiveWorkR(building) ?? 5;
-}
-
 function isLiveAntiAir(b: PlacedBuilding): boolean {
   return (
     b.buildingId === ANTI_AIR_BUILDING_ID &&
@@ -55,8 +74,18 @@ function isLiveAntiAir(b: PlacedBuilding): boolean {
   );
 }
 
-function airInRange(air: UnitGroup, aa: PlacedBuilding): boolean {
-  return visionDistDu(air.gx, air.gy, aa.gx, aa.gy) <= aaWorkR(aa) + 1e-9;
+function airInAaRange(
+  air: UnitGroup,
+  aa: PlacedBuilding,
+  buildings: readonly PlacedBuilding[],
+  connectedIds: ReadonlySet<string> | readonly string[],
+): boolean {
+  for (const circle of workRangeCircles(aa, buildings, connectedIds)) {
+    if (visionDistDu(air.gx, air.gy, circle.gx, circle.gy) <= circle.radiusDu + 1e-9) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function floorU(entryU: number): number {
@@ -66,11 +95,13 @@ function floorU(entryU: number): number {
 /**
  * 推进防空对空军的持续减 U。
  * 新进入且弹药 ≥ 2 时扣弹并锁定 entryU；离开范围后清除交战记录。
+ * 射程与工作范围并集一致（含雷达协同）。
  */
 export function advanceAntiAir(
   unitsIn: readonly UnitGroup[],
   buildingsIn: readonly PlacedBuilding[],
   dtSec: number,
+  connectedByOwner?: AntiAirConnectedByOwner | null,
 ): AntiAirTickResult {
   const before = unitsIn.map((u) => ({
     ...u,
@@ -103,12 +134,16 @@ export function advanceAntiAir(
     const ongoing = air.aaEngagement;
     if (ongoing) {
       const hit = aaList.find(({ b }) => b.id === ongoing.buildingId);
-      if (hit && hit.b.ownerId !== air.ownerId && airInRange(air, hit.b)) chosen = hit;
+      if (hit && hit.b.ownerId !== air.ownerId) {
+        const linked = connectedByOwner?.get(hit.b.ownerId) ?? [];
+        if (airInAaRange(air, hit.b, buildings, linked)) chosen = hit;
+      }
     }
     if (!chosen) {
       for (const cand of aaList) {
         if (cand.b.ownerId === air.ownerId) continue;
-        if (!airInRange(air, cand.b)) continue;
+        const linked = connectedByOwner?.get(cand.b.ownerId) ?? [];
+        if (!airInAaRange(air, cand.b, buildings, linked)) continue;
         if ((buildings[cand.i]!.ammo ?? 0) < ANTI_AIR_AMMO_PER_ENGAGEMENT) continue;
         chosen = cand;
         break;
@@ -179,7 +214,7 @@ export function advanceAntiAir(
 
 /**
  * 飞行导弹。世界状态里还没有这种实体时，由开火瞬间传入弹道。
- * `sourceBuildingId === gun` 的高射炮发射物不拦截。
+ * 仅拦截 {@link ROCKET_FORCE_BUILDING_IDS}；高射炮发射物不拦截。
  */
 export interface FlyingMissileStub {
   id: string;
@@ -190,33 +225,67 @@ export interface FlyingMissileStub {
   /** 发射点。缺省时只按落点是否进入射程判断. */
   fromGx?: number;
   fromGy?: number;
-  /** 发射建筑 id。高射炮不拦截. */
+  /** 发射建筑 catalog id。须为火箭军武器才拦截. */
   sourceBuildingId?: string;
 }
+
+export type AntiAirConnectedByOwner = ReadonlyMap<
+  string,
+  ReadonlySet<string> | readonly string[]
+>;
 
 function cloneBuildings(buildings: readonly PlacedBuilding[]): PlacedBuilding[] {
   return buildings.map((b) => ({ ...b }));
 }
 
-function threatDistance(missile: FlyingMissileStub, aa: PlacedBuilding): number {
+/** 点 / 弹道到单个工作圆的距离（落点或发射点→落点线段）. */
+function distanceToWorkCircle(
+  missile: FlyingMissileStub,
+  circle: WorkRangeCircle,
+): number {
   if (missile.fromGx == null || missile.fromGy == null) {
-    return visionDistDu(missile.gx, missile.gy, aa.gx, aa.gy);
+    return visionDistDu(missile.gx, missile.gy, circle.gx, circle.gy);
   }
   const from: GridNode = { gx: missile.fromGx, gy: missile.fromGy };
   const to: GridNode = { gx: missile.gx, gy: missile.gy };
-  return distancePointToSegment(aa.gx, aa.gy, from, to);
+  return distancePointToSegment(circle.gx, circle.gy, from, to);
 }
 
 /**
- * 范围内拦截一枚导弹（不含高射炮），消耗 1 枚弹药。
+ * 导弹是否进入该防空的工作范围并集（与 UI `workRangeCircles` 一致，含邻近雷达协同）。
+ * 返回威胁距离（各圆到弹道的最小距离），供多座防空择近。
+ */
+function missileThreatInAaRange(
+  missile: FlyingMissileStub,
+  aa: PlacedBuilding,
+  buildings: readonly PlacedBuilding[],
+  connectedIds: ReadonlySet<string> | readonly string[],
+): { inRange: boolean; dist: number } {
+  const circles = workRangeCircles(aa, buildings, connectedIds);
+  if (circles.length === 0) return { inRange: false, dist: Infinity };
+
+  let bestDist = Infinity;
+  let inRange = false;
+  for (const circle of circles) {
+    const d = distanceToWorkCircle(missile, circle);
+    if (d < bestDist) bestDist = d;
+    if (d <= circle.radiusDu + 1e-9) inRange = true;
+  }
+  return { inRange, dist: bestDist };
+}
+
+/**
+ * 范围内拦截一枚火箭军导弹（不含高射炮），消耗 1 枚弹药。
+ * 射程与信息框工作范围一致（自身 R + 合格雷达协同圆）。
  * 只拦截敌方导弹；弹药不足的防空导弹不参与。多座炮位时由最近的一座拦截。
  */
 export function tryInterceptFlyingMissile(
   buildingsIn: readonly PlacedBuilding[],
   missile: FlyingMissileStub | null | undefined,
+  connectedByOwner?: AntiAirConnectedByOwner | null,
 ): { buildings: PlacedBuilding[]; intercepted: boolean } {
   const buildings = cloneBuildings(buildingsIn);
-  if (!missile || missile.sourceBuildingId === GUN_BUILDING_ID) {
+  if (!missile || !isRocketForceWeapon(missile.sourceBuildingId)) {
     return { buildings, intercepted: false };
   }
 
@@ -226,8 +295,10 @@ export function tryInterceptFlyingMissile(
     if (!isLiveAntiAir(b)) continue;
     if (b.ownerId === missile.ownerId) continue;
     if ((b.ammo ?? 0) < ANTI_AIR_AMMO_PER_INTERCEPT) continue;
-    const d = threatDistance(missile, b);
-    if (d > aaWorkR(b) + 1e-9) continue;
+    const linked = connectedByOwner?.get(b.ownerId) ?? [];
+    const threat = missileThreatInAaRange(missile, b, buildings, linked);
+    if (!threat.inRange) continue;
+    const d = threat.dist;
     if (
       !best ||
       d < best.d - 1e-9 ||
@@ -250,11 +321,12 @@ export function tryInterceptFlyingMissile(
 export function tryInterceptFlyingMissiles(
   buildingsIn: readonly PlacedBuilding[],
   missiles: readonly FlyingMissileStub[],
+  connectedByOwner?: AntiAirConnectedByOwner | null,
 ): { buildings: PlacedBuilding[]; interceptedIds: string[] } {
   let buildings = cloneBuildings(buildingsIn);
   const interceptedIds: string[] = [];
   for (const missile of missiles) {
-    const step = tryInterceptFlyingMissile(buildings, missile);
+    const step = tryInterceptFlyingMissile(buildings, missile, connectedByOwner);
     buildings = step.buildings;
     if (step.intercepted) interceptedIds.push(missile.id);
   }

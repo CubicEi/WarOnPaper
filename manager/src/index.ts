@@ -175,16 +175,16 @@ async function main(): Promise<void> {
         case "create_room": {
           if (!requireIdentity(session)) return;
           if (session.roomId) {
-            sendError(session.ws, "ALREADY_IN_ROOM", "Leave the current room first");
+            sendError(session.ws, "ALREADY_IN_ROOM", "请先离开当前房间");
             return;
           }
           if (!isMapSizeId(msg.mapSize)) {
-            sendError(session.ws, "BAD_MAP", "mapSize must be 89x59 or 119x79");
+            sendError(session.ws, "BAD_MAP", "地图尺寸须为 89x59 或 119x79");
             return;
           }
           const maxPlayers = Number(msg.maxPlayers);
           if (!Number.isFinite(maxPlayers) || maxPlayers < 2 || maxPlayers > 10) {
-            sendError(session.ws, "BAD_MAX", "maxPlayers must be 2–10");
+            sendError(session.ws, "BAD_MAX", "人数上限须为 2–10");
             return;
           }
           matchQueues.remove(session.playerId!);
@@ -218,7 +218,7 @@ async function main(): Promise<void> {
             });
           } catch (err) {
             console.error("[manager] create_room failed", err);
-            sendError(session.ws, "CREATE_FAILED", "Could not create room");
+            sendError(session.ws, "CREATE_FAILED", "无法创建房间");
           }
           return;
         }
@@ -226,7 +226,7 @@ async function main(): Promise<void> {
           if (!requireIdentity(session)) return;
           const roomId = normalizeRoomId(msg.roomId ?? "");
           if (!/^[A-Z0-9]{4,8}$/.test(roomId)) {
-            sendError(session.ws, "BAD_ROOM_ID", "Invalid room code");
+            sendError(session.ws, "BAD_ROOM_ID", "房间码无效");
             return;
           }
           if (session.roomId && session.roomId !== roomId) {
@@ -259,11 +259,11 @@ async function main(): Promise<void> {
         case "queue_match": {
           if (!requireIdentity(session)) return;
           if (session.roomId) {
-            sendError(session.ws, "ALREADY_IN_ROOM", "Leave the current room first");
+            sendError(session.ws, "ALREADY_IN_ROOM", "请先离开当前房间");
             return;
           }
           if (!isMatchPlayerCount(msg.playerCount)) {
-            sendError(session.ws, "BAD_QUEUE", "playerCount must be 2–5");
+            sendError(session.ws, "BAD_QUEUE", "匹配人数须为 2–5");
             return;
           }
           matchQueues.enqueue({
@@ -304,7 +304,7 @@ async function main(): Promise<void> {
     if (session.playerId && session.roomId) {
       const forwarded = rooms.dispatch(session.playerId, msg);
       if (!forwarded) {
-        sendError(session.ws, "NOT_IN_ROOM", "Not in a room");
+        sendError(session.ws, "NOT_IN_ROOM", "当前不在房间内");
       }
       return;
     }
@@ -312,13 +312,13 @@ async function main(): Promise<void> {
     sendError(
       session.ws,
       "UNKNOWN_MESSAGE",
-      `Unhandled message type: ${type}`,
+      `未处理的消息类型：${type}`,
     );
   }
 
   function requireIdentity(session: ConnSession): boolean {
     if (!session.playerId || !session.name) {
-      sendError(session.ws, "NOT_HELLO", "Send hello first");
+      sendError(session.ws, "NOT_HELLO", "请先发送 hello");
       return false;
     }
     return true;

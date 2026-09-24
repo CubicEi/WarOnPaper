@@ -167,10 +167,10 @@ export class RoomRegistry {
     const id = normalizeRoomId(roomId);
     const meta = this.rooms.get(id);
     if (!meta) {
-      return { ok: false, code: "ROOM_NOT_FOUND", message: "Room not found" };
+      return { ok: false, code: "ROOM_NOT_FOUND", message: "房间不存在" };
     }
     if (meta.game.closed) {
-      return { ok: false, code: "ROOM_CLOSED", message: "Room is closed" };
+      return { ok: false, code: "ROOM_CLOSED", message: "房间已关闭" };
     }
 
     const prev = this.playerRoom.get(playerId);
@@ -180,7 +180,7 @@ export class RoomRegistry {
 
     const alreadySeated = meta.game.getPlayerIds().includes(playerId);
     if (!alreadySeated && meta.game.playerCount() >= meta.maxPlayers) {
-      return { ok: false, code: "ROOM_FULL", message: "Room is full" };
+      return { ok: false, code: "ROOM_FULL", message: "房间已满" };
     }
 
     const result = meta.game.join({

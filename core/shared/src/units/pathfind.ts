@@ -152,35 +152,7 @@ export function speedAt(
   return speed;
 }
 
-function clampToCoverageEdge(
-  fromGx: number,
-  fromGy: number,
-  toGx: number,
-  toGy: number,
-  circles: readonly WorkRangeCircle[],
-): { gx: number; gy: number } {
-  if (circles.length === 0) return snapToUnitCoord(fromGx, fromGy);
-  if (isInsideAnyCircle(toGx, toGy, circles)) return snapToUnitCoord(toGx, toGy);
-
-  // Binary search the last in-range point along the segment.
-  let lo = 0;
-  let hi = 1;
-  let best = { gx: fromGx, gy: fromGy };
-  for (let i = 0; i < 24; i++) {
-    const mid = (lo + hi) / 2;
-    const x = fromGx + (toGx - fromGx) * mid;
-    const y = fromGy + (toGy - fromGy) * mid;
-    if (isInsideAnyCircle(x, y, circles)) {
-      best = { gx: x, gy: y };
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-  }
-  return snapToUnitCoord(best.gx, best.gy);
-}
-
-/** Straight-line air path; clamped to airport coverage (unless `ignoreCoverage`). */
+/** Straight-line air path; destination must lie in airport coverage (unless `ignoreCoverage`). */
 export function planAirPath(
   fromGx: number,
   fromGy: number,
@@ -190,16 +162,16 @@ export function planAirPath(
   opts?: { ignoreCoverage?: boolean },
 ): { path: Array<{ gx: number; gy: number }>; error?: string } {
   const start = snapToUnitCoord(fromGx, fromGy);
-  let end = snapToUnitCoord(toGx, toGy);
+  const end = snapToUnitCoord(toGx, toGy);
   if (!opts?.ignoreCoverage) {
+    if (coverage.length === 0) {
+      return { path: [], error: "所属机场工作范围不可用" };
+    }
     if (!isInsideAnyCircle(start.gx, start.gy, coverage)) {
       return { path: [], error: "起点不在所属机场工作范围内" };
     }
     if (!isInsideAnyCircle(end.gx, end.gy, coverage)) {
-      end = clampToCoverageEdge(start.gx, start.gy, end.gx, end.gy, coverage);
-      if (unitCoordKey(end.gx, end.gy) === unitCoordKey(start.gx, start.gy)) {
-        return { path: [], error: "目标超出所属机场工作范围" };
-      }
+      return { path: [], error: "目标不在所属机场工作范围内（含关联雷达）" };
     }
   }
   if (unitCoordKey(start.gx, start.gy) === unitCoordKey(end.gx, end.gy)) {

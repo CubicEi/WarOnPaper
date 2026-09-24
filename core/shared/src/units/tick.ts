@@ -4,8 +4,7 @@ import type { PlacedLiaison } from "../buildings/liaison.js";
 import { UNIT_BY_KIND } from "./catalog.js";
 import type { UnitGroup } from "./types.js";
 import { speedAt, terrainAllowsKind, findFreeUnitCoord, planAirPath } from "./pathfind.js";
-import { unitCoordKey, snapToUnitCoord } from "./garrison.js";
-import { returnToBuilding } from "./garrison.js";
+import { unitCoordKey, snapToUnitCoord, returnToBuilding, releaseAwayForUnitDiff } from "./garrison.js";
 import { buildingCenterKeys, occupiedUnitKeys } from "./occupy.js";
 import { collectMovingUnitCoverage, isInsideAnyCircle } from "./radio.js";
 import {
@@ -15,6 +14,7 @@ import {
   usesCarriedSupply,
 } from "./supply.js";
 import { autoEmbarkCoLocatedAir } from "./carrier.js";
+import { applyAirHitAndRunStrike } from "./fight.js";
 
 const EPS = 1e-6;
 
@@ -60,7 +60,15 @@ export function advanceUnits(
     const path = unit.path;
     let idx = unit.pathIndex ?? 1;
     if (!path || path.length < 2 || idx >= path.length) {
-      if (!unit.depositOnArrival && tryStartAirReturn(unit, buildings, removed, units, settleReserved)) {
+      // Pending attack must settle into fighting before any air auto-return.
+      // Otherwise returnGx steals the arrival and the fight starts at the airport.
+      const pendingAttack =
+        !!unit.pendingAttackUnitId || !!unit.pendingAttackBuildingId;
+      if (
+        !unit.depositOnArrival &&
+        !pendingAttack &&
+        tryStartAirReturn(unit, buildings, removed, units, settleReserved)
+      ) {
         continue;
       }
       settleIdle(unit, buildings, removed, { arrived: true }, units, settleReserved, terrain, liaisons);
@@ -189,7 +197,13 @@ export function advanceUnits(
     if (unit.state !== "moving" && unit.state !== "training") continue;
 
     if (idx >= path.length) {
-      if (!unit.depositOnArrival && tryStartAirReturn(unit, buildings, removed, units, settleReserved)) {
+      const pendingAttack =
+        !!unit.pendingAttackUnitId || !!unit.pendingAttackBuildingId;
+      if (
+        !unit.depositOnArrival &&
+        !pendingAttack &&
+        tryStartAirReturn(unit, buildings, removed, units, settleReserved)
+      ) {
         continue;
       }
       settleIdle(unit, buildings, removed, { arrived: true }, units, settleReserved, terrain, liaisons);
@@ -200,9 +214,13 @@ export function advanceUnits(
 
   yieldOffBuildingCenters(units, buildings, terrain, liaisons, removed, settleReserved);
 
+  const surviving = units.filter((u) => !removed.has(u.id) && u.u > 0);
+  // Release awayOccupiedU for combat losses / deaths during movement (air strike).
+  const afterAway = releaseAwayForUnitDiff(buildings, unitsIn, surviving);
+
   return {
-    units: autoEmbarkCoLocatedAir(units.filter((u) => !removed.has(u.id))),
-    buildings,
+    units: autoEmbarkCoLocatedAir(surviving),
+    buildings: afterAway,
     removedIds: [...removed],
   };
 }
@@ -253,8 +271,147 @@ function settleIdle(
   unit.pendingAttackUnitId = undefined;
   unit.pendingAttackBuildingId = undefined;
 
-  // Anti-stack, and do not sit on a building center (deposit still uses building id).
-  // Exception: navy may remain on a port cell (dock).
+  if (enterBlockade) {
+    nudgeOffBuildingCenters(unit, buildings, allUnits, removed, reserved, terrain, liaisons);
+    unit.state = "blockading";
+    unit.blockadeTimerSec = 0;
+    unit.depositOnArrival = undefined;
+    unit.depositBuildingId = undefined;
+    return;
+  }
+
+  if (enterHold && holdBuildingId) {
+    nudgeOffBuildingCenters(unit, buildings, allUnits, removed, reserved, terrain, liaisons);
+    unit.state = "holding";
+    unit.holdBuildingId = holdBuildingId;
+    unit.holdTimerSec = 0;
+    unit.depositOnArrival = undefined;
+    unit.depositBuildingId = undefined;
+    return;
+  }
+
+  if (enterAttack) {
+    // Air: one-round strike then immediate return — never linger as fighting/siege.
+    if (unit.kind === "air") {
+      const liveUnits = allUnits as UnitGroup[];
+      applyAirHitAndRunStrike(
+        unit,
+        attackUnitId,
+        attackBuildingId,
+        liveUnits,
+        buildings,
+        removed,
+      );
+      if (removed.has(unit.id)) return;
+      if (!tryStartAirReturn(unit, buildings, removed, liveUnits, reserved)) {
+        nudgeOffBuildingCenters(unit, buildings, allUnits, removed, reserved, terrain, liaisons);
+      }
+      return;
+    }
+    nudgeOffBuildingCenters(unit, buildings, allUnits, removed, reserved, terrain, liaisons);
+    if (attackUnitId) {
+      unit.state = "fighting";
+      unit.fightTargetUnitId = attackUnitId;
+      unit.combatTimerSec = 0;
+      unit.siegeBuildingId = undefined;
+    } else if (attackBuildingId) {
+      unit.state = "fighting";
+      unit.siegeBuildingId = attackBuildingId;
+      unit.siegeTimerSec = 0;
+      unit.siegeDamageDealt = 0;
+      unit.siegeAirDamageDealt = 0;
+      unit.fightTargetUnitId = undefined;
+    }
+    unit.depositOnArrival = undefined;
+    unit.depositBuildingId = undefined;
+    return;
+  }
+
+  unit.state = "idle";
+  unit.blockadeTimerSec = undefined;
+
+  if (doSupply) {
+    // Supply allows adjacent cells; nudge first so anti-stack does not block the station node.
+    nudgeOffBuildingCenters(unit, buildings, allUnits, removed, reserved, terrain, liaisons);
+    unit.depositOnArrival = undefined;
+    unit.depositBuildingId = undefined;
+    const station = findSupplyStationAt(
+      buildings,
+      unit.ownerId,
+      unit.gx,
+      unit.gy,
+      supplyBuildingId,
+    );
+    if (station) {
+      const result = resupplyUnitFromStation(unit, station);
+      if (result.ok) {
+        unit.carriedE = result.unit.carriedE;
+        const bi = buildings.findIndex((b) => b.id === station.id);
+        if (bi >= 0) buildings[bi] = result.building;
+      }
+    }
+    return;
+  }
+
+  // Deposit BEFORE nudging off building centers. Pushing first broke position-based
+  //入库 (and home fallback) for air return / retreat when depositBuildingId was missing.
+  if (unit.depositOnArrival) {
+    const byId = unit.depositBuildingId
+      ? buildings.find(
+          (b) => b.id === unit.depositBuildingId && b.ownerId === unit.ownerId,
+        )
+      : undefined;
+    const dest = buildings.find(
+      (b) =>
+        b.ownerId === unit.ownerId &&
+        unitCoordKey(b.gx, b.gy) === unitCoordKey(unit.gx, unit.gy),
+    );
+    const home = buildings.find(
+      (b) => b.id === unit.homeBuildingId && b.ownerId === unit.ownerId,
+    );
+    const target =
+      byId ??
+      dest ??
+      (home &&
+      (unit.retreating ||
+        unit.kind === "air" ||
+        unit.depositBuildingId === home.id ||
+        !unit.depositBuildingId)
+        ? home
+        : undefined);
+    if (target) {
+      const releaseAway = target.id === unit.homeBuildingId;
+      const result = returnToBuilding(target, unit.u, { releaseAway });
+      const bi = buildings.findIndex((b) => b.id === target.id);
+      if (bi >= 0) buildings[bi] = result.building;
+      if (result.leftover <= 0) {
+        reserved.delete(unitCoordKey(unit.gx, unit.gy));
+        removed.add(unit.id);
+        unit.depositOnArrival = undefined;
+        unit.depositBuildingId = undefined;
+        unit.retreating = undefined;
+        return;
+      }
+      unit.u = result.leftover;
+    }
+  }
+  unit.depositOnArrival = undefined;
+  unit.depositBuildingId = undefined;
+  unit.retreating = undefined;
+
+  nudgeOffBuildingCenters(unit, buildings, allUnits, removed, reserved, terrain, liaisons);
+}
+
+/** Anti-stack: leave building centers free (navy may remain docked on a port). */
+function nudgeOffBuildingCenters(
+  unit: UnitGroup,
+  buildings: readonly PlacedBuilding[],
+  allUnits: readonly UnitGroup[],
+  removed: ReadonlySet<string>,
+  reserved: Set<string>,
+  terrain: TerrainMap | null,
+  liaisons: readonly PlacedLiaison[],
+): void {
   const ignore = new Set<string>([unit.id, ...removed]);
   const occupied = occupiedUnitKeys(allUnits, ignore, unit);
   for (const k of reserved) occupied.add(k);
@@ -287,99 +444,6 @@ function settleIdle(
   unit.gx = free.gx;
   unit.gy = free.gy;
   reserved.add(unitCoordKey(free.gx, free.gy));
-
-  if (enterBlockade) {
-    unit.state = "blockading";
-    unit.blockadeTimerSec = 0;
-    unit.depositOnArrival = undefined;
-    unit.depositBuildingId = undefined;
-    return;
-  }
-
-  if (enterHold && holdBuildingId) {
-    unit.state = "holding";
-    unit.holdBuildingId = holdBuildingId;
-    unit.holdTimerSec = 0;
-    unit.depositOnArrival = undefined;
-    unit.depositBuildingId = undefined;
-    return;
-  }
-
-  if (enterAttack) {
-    if (attackUnitId) {
-      unit.state = "fighting";
-      unit.fightTargetUnitId = attackUnitId;
-      unit.combatTimerSec = 0;
-      unit.siegeBuildingId = undefined;
-    } else if (attackBuildingId) {
-      unit.state = "fighting";
-      unit.siegeBuildingId = attackBuildingId;
-      unit.siegeTimerSec = 0;
-      unit.siegeDamageDealt = 0;
-      unit.siegeAirDamageDealt = 0;
-      unit.fightTargetUnitId = undefined;
-    }
-    unit.depositOnArrival = undefined;
-    unit.depositBuildingId = undefined;
-    return;
-  }
-
-  unit.state = "idle";
-  unit.blockadeTimerSec = undefined;
-
-  if (doSupply) {
-    unit.depositOnArrival = undefined;
-    unit.depositBuildingId = undefined;
-    const station = findSupplyStationAt(
-      buildings,
-      unit.ownerId,
-      unit.gx,
-      unit.gy,
-      supplyBuildingId,
-    );
-    if (station) {
-      const result = resupplyUnitFromStation(unit, station);
-      if (result.ok) {
-        unit.carriedE = result.unit.carriedE;
-        const bi = buildings.findIndex((b) => b.id === station.id);
-        if (bi >= 0) buildings[bi] = result.building;
-      }
-    }
-    return;
-  }
-
-  if (unit.depositOnArrival) {
-    const byId = unit.depositBuildingId
-      ? buildings.find(
-          (b) => b.id === unit.depositBuildingId && b.ownerId === unit.ownerId,
-        )
-      : undefined;
-    const dest = buildings.find(
-      (b) =>
-        b.ownerId === unit.ownerId &&
-        unitCoordKey(b.gx, b.gy) === unitCoordKey(unit.gx, unit.gy),
-    );
-    const home = buildings.find((b) => b.id === unit.homeBuildingId);
-    const target =
-      byId ??
-      dest ??
-      (home && (unit.retreating || unit.depositBuildingId === home.id) ? home : undefined);
-    if (target) {
-      const releaseAway = target.id === unit.homeBuildingId;
-      const result = returnToBuilding(target, unit.u, { releaseAway });
-      const bi = buildings.findIndex((b) => b.id === target.id);
-      if (bi >= 0) buildings[bi] = result.building;
-      if (result.leftover <= 0) {
-        reserved.delete(unitCoordKey(unit.gx, unit.gy));
-        removed.add(unit.id);
-        return;
-      }
-      unit.u = result.leftover;
-    }
-  }
-  unit.depositOnArrival = undefined;
-  unit.depositBuildingId = undefined;
-  unit.retreating = undefined;
 }
 
 function tryStartAirReturn(
@@ -392,6 +456,9 @@ function tryStartAirReturn(
   if (unit.kind !== "air" || unit.retreating) return false;
   if (unit.returnGx == null || unit.returnGy == null) return false;
   if (unit.depositOnArrival) return false;
+  // Do not abort an inbound attack: pending fight must start at the target first.
+  if (unit.pendingAttackUnitId || unit.pendingAttackBuildingId) return false;
+  if (unit.state === "fighting") return false;
   const home = buildings.find(
     (b) => b.id === unit.homeBuildingId && b.ownerId === unit.ownerId,
   );
@@ -400,7 +467,8 @@ function tryStartAirReturn(
   unit.returnGx = undefined;
   unit.returnGy = undefined;
   unit.depositOnArrival = true;
-  unit.depositBuildingId = home?.id;
+  // Prefer live home id; fall back to homeBuildingId so settleIdle can still resolve by id.
+  unit.depositBuildingId = home?.id ?? unit.homeBuildingId;
   const end = snapToUnitCoord(gx, gy);
   if (unitCoordKey(unit.gx, unit.gy) === unitCoordKey(end.gx, end.gy)) {
     settleIdle(unit, buildings, removed, { arrived: true }, allUnits, reserved, null, []);

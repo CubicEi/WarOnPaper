@@ -20,7 +20,7 @@ import {
   type UnitState,
 } from "./catalog.js";
 import { attackOrganizationCost } from "./combat.js";
-import { findHoldCoordOutside, isBuildingHeld } from "./fight.js";
+import { applyAirHitAndRunStrike, findHoldCoordOutside, isBuildingHeld } from "./fight.js";
 import {
   deployFromBuilding,
   releaseAwayOccupation,
@@ -470,6 +470,17 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
     if (asSupply && !usesCarriedSupply(deployed.unit.kind)) {
       return fail("空军无需携行补给", buildings, units);
     }
+    // Air sortie: target must be inside home airport work range (incl. linked radar).
+    if (deployed.unit.kind === "air" && isAttack) {
+      const coverage = collectMovingUnitCoverage(
+        deployed.unit,
+        buildings,
+        ctx.connectedIds,
+      );
+      if (!isInsideAnyCircle(dest.gx, dest.gy, coverage)) {
+        return fail("目标不在所属机场工作范围内（含关联雷达）", buildings, units);
+      }
+    }
     const idx = buildings.findIndex((x) => x.id === b.id);
     buildings[idx] = deployed.building;
     created.push(deployed.unit);
@@ -491,6 +502,12 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
     }
     if (asSupply && !usesCarriedSupply(u.kind)) {
       return fail("空军无需携行补给", buildings, units);
+    }
+    if (u.kind === "air" && isAttack) {
+      const coverage = collectMovingUnitCoverage(u, buildings, ctx.connectedIds);
+      if (!isInsideAnyCircle(dest.gx, dest.gy, coverage)) {
+        return fail("目标不在所属机场工作范围内（含关联雷达）", buildings, units);
+      }
     }
     movingIds.add(id);
   }
@@ -520,8 +537,31 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
 
   for (const unit of toMove) {
     totalU += unit.u;
+    // Air ordered onto its home airport: fly straight in and deposit (no ring bounce + returnGx).
+    let unitDeposit = deposit;
+    let unitDepositBuildingId = depositBuildingId;
+    if (
+      !unitDeposit &&
+      !asBlockade &&
+      !asSupply &&
+      !asHold &&
+      !isAttack &&
+      !req.asTrainingDelivery &&
+      unit.kind === "air"
+    ) {
+      const home = buildings.find(
+        (b) => b.id === unit.homeBuildingId && b.ownerId === req.ownerId,
+      );
+      if (
+        home &&
+        unitCoordKey(dest.gx, dest.gy) === unitCoordKey(home.gx, home.gy)
+      ) {
+        unitDeposit = true;
+        unitDepositBuildingId = home.id;
+      }
+    }
     const planOpts: PlanOpts = {
-      ignoreCoverage: !!req.asTrainingDelivery,
+      ignoreCoverage: !!req.asTrainingDelivery || unitDeposit,
       ignoreTerrain: !!req.asTrainingDelivery && unit.kind === "navy",
     };
     const planned = planFor(unit, dest.gx, dest.gy, ctx, planOpts);
@@ -529,9 +569,8 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
       return fail(planned.error ?? "无法规划路径", buildings, units);
     }
     let path = planned.path;
-    // Hold already chose an outside free cell. Other arrivals leave building
-    // centers free. Deposit still resolves by building id, including from the ring.
-    const skipNudge = asHold;
+    // Hold / deposit / air strike keep the planned cell (air lands on the target).
+    const skipNudge = asHold || unitDeposit || (isAttack && unit.kind === "air");
     if (!skipNudge && path.length >= 1) {
       const end = path[path.length - 1]!;
       const occupied = occupiedUnitKeys(nextUnits, ignore, unit);
@@ -569,9 +608,9 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
       cleared,
       path,
       state,
-      deposit,
+      unitDeposit,
       asBlockade,
-      depositBuildingId,
+      unitDepositBuildingId,
       asSupply,
       supplyBuildingId,
       asHold,
@@ -580,10 +619,10 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
       attackBuildingId,
     );
     // Already at destination with deposit:入库 immediately.
-    if (deposit && next.state === "idle" && next.depositOnArrival) {
+    if (unitDeposit && next.state === "idle" && next.depositOnArrival) {
       const target =
-        (depositBuildingId
-          ? buildings.find((b) => b.id === depositBuildingId && b.ownerId === req.ownerId)
+        (unitDepositBuildingId
+          ? buildings.find((b) => b.id === unitDepositBuildingId && b.ownerId === req.ownerId)
           : undefined) ??
         buildings.find(
           (b) =>
@@ -645,6 +684,70 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
       );
       if (home) {
         next = { ...next, returnGx: home.gx, returnGy: home.gy };
+      }
+    }
+    // Path≤1 attack: resolve air strike immediately and begin return.
+    if (next.kind === "air" && next.state === "fighting") {
+      const strikeRemoved = new Set<string>();
+      next = applyAirHitAndRunStrike(
+        next,
+        next.fightTargetUnitId,
+        next.siegeBuildingId,
+        nextUnits,
+        buildings,
+        strikeRemoved,
+      );
+      for (const id of strikeRemoved) removed.add(id);
+      if (!strikeRemoved.has(next.id) && next.returnGx != null && next.returnGy != null) {
+        const home = buildings.find(
+          (b) => b.id === next.homeBuildingId && b.ownerId === req.ownerId,
+        );
+        const gx = home?.gx ?? next.returnGx;
+        const gy = home?.gy ?? next.returnGy;
+        const end = snapToUnitCoord(gx, gy);
+        next = {
+          ...next,
+          returnGx: undefined,
+          returnGy: undefined,
+          depositOnArrival: true,
+          depositBuildingId: home?.id ?? next.homeBuildingId,
+        };
+        if (unitCoordKey(next.gx, next.gy) === unitCoordKey(end.gx, end.gy)) {
+          const target =
+            (home && home.ownerId === req.ownerId ? home : undefined) ??
+            buildings.find(
+              (b) =>
+                b.ownerId === req.ownerId &&
+                unitCoordKey(b.gx, b.gy) === unitCoordKey(next.gx, next.gy),
+            );
+          if (target) {
+            const bi = buildings.findIndex((b) => b.id === target.id);
+            const result = returnToBuilding(buildings[bi]!, next.u, { releaseAway: true });
+            if (bi >= 0) buildings[bi] = result.building;
+            if (result.leftover <= 0) {
+              removed.add(next.id);
+            } else {
+              next = {
+                ...next,
+                u: result.leftover,
+                depositOnArrival: undefined,
+                depositBuildingId: undefined,
+                state: "idle",
+              };
+            }
+          }
+        } else {
+          const back = planAirPath(next.gx, next.gy, end.gx, end.gy, [], {
+            ignoreCoverage: true,
+          });
+          const start = snapToUnitCoord(next.gx, next.gy);
+          next = {
+            ...next,
+            state: "moving",
+            path: !back.error && back.path.length > 1 ? back.path : [start, end],
+            pathIndex: 1,
+          };
+        }
       }
     }
     nextUnits[idx] = next;
@@ -918,7 +1021,8 @@ const retreatClearPending = {
 /**
  * Stop / retreat.
  *
- * - 停止：除交战、停泊外均可；原地结束当前行为；−20E −3O。退却中不可停止。
+ * - 停止：陆海军除交战、停泊外均可；原地结束当前行为；−20E −3O。退却中不可停止。
+ *   空军停止 = 强制返航所属建筑入库（不能停泊），费用同停止。
  * - 撤退：任何时候都可以（含交战、停泊）；不耗 O/E；不检电台、地形、携行。
  *   途中若进入封锁半径，由封锁结算应战。回到归属建筑入库前不能接受其他命令。
  */
@@ -941,6 +1045,7 @@ export function applyUnitStop(
   const reserved = new Set<string>();
   const removed = new Set<string>();
   let any = false;
+  let buildingsDirty = false;
 
   const clearInPlace = (u: UnitGroup): UnitGroup => {
     const free = resolveFreeUnitCoord(
@@ -1081,6 +1186,7 @@ export function applyUnitStop(
           units: [...unitsIn],
         };
       }
+      buildingsDirty = true;
       any = true;
       continue;
     }
@@ -1114,7 +1220,24 @@ export function applyUnitStop(
       };
     }
 
-    // 停止：原地结束行为（含空军途中）。不改为退却。
+    // 空军不能停泊：停止 = 强制返航所属建筑入库（与撤退同路径，仍扣停止费用）。
+    if (u.kind === "air") {
+      const r = beginRetreatHome(u);
+      if (!r.ok) {
+        return {
+          ok: false,
+          error: r.error,
+          organizationCost: 0,
+          energyCost: 0,
+          units: [...unitsIn],
+        };
+      }
+      buildingsDirty = true;
+      any = true;
+      continue;
+    }
+
+    // 陆海军停止：原地结束行为。不改为退却。
     units[idx] = clearInPlace(u);
     any = true;
   }
@@ -1135,7 +1258,7 @@ export function applyUnitStop(
     organizationCost: retreat ? 0 : UNIT_STOP_O_COST,
     energyCost: retreat ? 0 : UNIT_STOP_E_COST,
     units: outUnits,
-    buildings: retreat ? buildings : undefined,
+    buildings: buildingsDirty ? buildings : undefined,
   };
 }
 

@@ -10,6 +10,18 @@ import {
 
 type ConnState = "connecting" | "open" | "closed";
 
+function roomClosedReason(raw: unknown): string {
+  const key = String(raw ?? "unknown");
+  const map: Record<string, string> = {
+    idle: "空闲超时",
+    game_over: "对局结束",
+    destroyed: "已解散",
+    join_failed: "加入失败",
+    unknown: "未知",
+  };
+  return map[key] ?? key;
+}
+
 export function TitleScreen() {
   const cached = useMemo(() => loadCachedIdentity(), []);
   const [name, setName] = useState(
@@ -19,7 +31,7 @@ export function TitleScreen() {
     cached.playerId ?? null,
   );
   const [conn, setConn] = useState<ConnState>("connecting");
-  const [status, setStatus] = useState("Connecting…");
+  const [status, setStatus] = useState("连接中…");
   const [statusKind, setStatusKind] = useState<"ok" | "error" | "">("");
   const [activeRoomId, setActiveRoomId] = useState<string | null>(null);
   const [lastRoomId, setLastRoomId] = useState<string | null>(() =>
@@ -63,24 +75,24 @@ export function TitleScreen() {
             saveLastRoomId(active);
             setLastRoomId(active);
           }
-          setStatus(`Signed in as ${n}`);
+          setStatus(`已登录：${n}`);
           setStatusKind("ok");
           break;
         }
         case "queued":
           setQueuing(true);
-          setStatus(`Queued for ${msg.playerCount}-player match`);
+          setStatus(`已加入 ${msg.playerCount} 人匹配队列`);
           setStatusKind("ok");
           break;
         case "match_status":
           setQueueInfo(
-            `Queue ${msg.queued}/${msg.needed} for ${msg.playerCount} players`,
+            `匹配中 ${msg.queued}/${msg.needed}（${msg.playerCount} 人局）`,
           );
           break;
         case "queue_cancelled":
           setQueuing(false);
           setQueueInfo("");
-          setStatus("Matchmaking cancelled");
+          setStatus("已取消匹配");
           setStatusKind("");
           break;
         case "room_ready": {
@@ -88,7 +100,7 @@ export function TitleScreen() {
           setQueuing(false);
           setQueueInfo("");
           setActiveRoomId(roomId);
-          setStatus(`Entering room ${roomId}…`);
+          setStatus(`正在进入房间 ${roomId}…`);
           setStatusKind("ok");
           goPlay(roomId);
           break;
@@ -99,11 +111,11 @@ export function TitleScreen() {
             saveLastRoomId(null);
             setLastRoomId(null);
           }
-          setStatus(`Room closed (${String(msg.reason ?? "unknown")})`);
+          setStatus(`房间已关闭（${roomClosedReason(msg.reason)}）`);
           setStatusKind("");
           break;
         case "error":
-          setStatus(String(msg.message ?? msg.code ?? "Error"));
+          setStatus(String(msg.message ?? msg.code ?? "错误"));
           setStatusKind("error");
           break;
         default:
@@ -119,13 +131,13 @@ export function TitleScreen() {
     socket.setHandlers({
       onOpen: () => {
         setConn("open");
-        setStatus("Connected");
+        setStatus("已连接");
         setStatusKind("");
       },
       onClose: () => {
         setConn("closed");
         setQueuing(false);
-        setStatus("Disconnected — reconnecting…");
+        setStatus("已断开，正在重连…");
         setStatusKind("error");
       },
       onMessage,
@@ -183,7 +195,7 @@ export function TitleScreen() {
   const joinRoom = (code: string) => {
     const roomId = code.trim().toUpperCase();
     if (!roomId) {
-      setStatus("Enter a room code");
+      setStatus("请输入房间码");
       setStatusKind("error");
       return;
     }
@@ -200,19 +212,21 @@ export function TitleScreen() {
           <span>
             <span className={`dot ${conn === "open" ? "live" : ""}`} />
             {conn === "open"
-              ? "Online"
+              ? "在线"
               : conn === "connecting"
-                ? "Connecting"
-                : "Offline"}
+                ? "连接中"
+                : "离线"}
           </span>
-          <span>{playerId ? playerId.slice(0, 8) : "—"}</span>
+          <span className="build-version" title="版本">
+            {__WOP_VERSION__}
+          </span>
         </div>
 
         <h1 className="brand">纸上谈兵</h1>
-        <p className="tagline">Title lobby · match · rooms on :4358</p>
+        <p className="tagline">标题大厅 · 匹配 · 房间</p>
 
         <div className="field">
-          <label htmlFor="username">Commander name</label>
+          <label htmlFor="username">指挥官名称</label>
           <div className="row">
             <input
               id="username"
@@ -223,16 +237,16 @@ export function TitleScreen() {
               onBlur={rename}
             />
             <button type="button" className="btn btn-ghost" onClick={rename}>
-              Save
+              保存
             </button>
           </div>
         </div>
 
         <section className="section">
-          <h2>Matchmaking</h2>
+          <h2>匹配</h2>
           <div className="row">
             <div className="field grow" style={{ marginBottom: 0 }}>
-              <label htmlFor="matchCount">Players (2–5)</label>
+              <label htmlFor="matchCount">人数（2–5）</label>
               <select
                 id="matchCount"
                 value={matchCount}
@@ -241,7 +255,7 @@ export function TitleScreen() {
               >
                 {[2, 3, 4, 5].map((n) => (
                   <option key={n} value={n}>
-                    {n} players · {n <= 3 ? "89×59" : "119×79"}
+                    {n} 人 · {n <= 3 ? "89×59" : "119×79"}
                   </option>
                 ))}
               </select>
@@ -253,11 +267,11 @@ export function TitleScreen() {
                 disabled={conn !== "open"}
                 onClick={startMatch}
               >
-                Queue
+                开始匹配
               </button>
             ) : (
               <button type="button" className="btn btn-ghost" onClick={cancelMatch}>
-                Cancel
+                取消
               </button>
             )}
           </div>
@@ -265,10 +279,10 @@ export function TitleScreen() {
         </section>
 
         <section className="section">
-          <h2>Create room</h2>
+          <h2>创建房间</h2>
           <div className="row">
             <div className="field grow" style={{ marginBottom: 0 }}>
-              <label htmlFor="maxPlayers">Max players (2–10)</label>
+              <label htmlFor="maxPlayers">人数上限（2–10）</label>
               <input
                 id="maxPlayers"
                 type="number"
@@ -279,23 +293,23 @@ export function TitleScreen() {
               />
             </div>
             <div className="field grow" style={{ marginBottom: 0 }}>
-              <label htmlFor="mapSize">Map</label>
+              <label htmlFor="mapSize">地图</label>
               <select
                 id="mapSize"
                 value={createMap}
                 onChange={(e) => setCreateMap(e.target.value as MapSizeId)}
               >
-                <option value="89x59">Small 89×59</option>
-                <option value="119x79">Large 119×79</option>
+                <option value="89x59">小型 89×59</option>
+                <option value="119x79">大型 119×79</option>
               </select>
             </div>
           </div>
           <div className="field">
-            <label htmlFor="seed">Seed (optional)</label>
+            <label htmlFor="seed">种子（可选）</label>
             <input
               id="seed"
               value={createSeed}
-              placeholder="random if empty"
+              placeholder="留空则随机"
               onChange={(e) => setCreateSeed(e.target.value)}
             />
           </div>
@@ -305,7 +319,7 @@ export function TitleScreen() {
               checked={allowRespawn}
               onChange={(e) => setAllowRespawn(e.target.checked)}
             />
-            Allow respawn after capital falls
+            首都沦陷后允许重生
           </label>
           <div className="row" style={{ marginTop: "0.85rem" }}>
             <button
@@ -314,18 +328,18 @@ export function TitleScreen() {
               disabled={conn !== "open"}
               onClick={createRoom}
             >
-              Create & enter
+              创建并进入
             </button>
           </div>
         </section>
 
         <section className="section">
-          <h2>Join by code</h2>
+          <h2>输入房间码</h2>
           <div className="row">
             <input
               className="grow"
               value={joinCode}
-              placeholder="ROOM CODE"
+              placeholder="房间码"
               maxLength={8}
               onChange={(e) => setJoinCode(e.target.value.toUpperCase())}
               onKeyDown={(e) => {
@@ -338,17 +352,17 @@ export function TitleScreen() {
               disabled={conn !== "open"}
               onClick={() => joinRoom(joinCode)}
             >
-              Join
+              加入
             </button>
           </div>
         </section>
 
         {rejoinId ? (
           <section className="section">
-            <h2>Rejoin</h2>
+            <h2>重新加入</h2>
             <div className="row">
               <span className="grow" style={{ color: "var(--ink-muted)" }}>
-                Last room <strong>{rejoinId}</strong>
+                上次房间 <strong>{rejoinId}</strong>
               </span>
               <button
                 type="button"
@@ -356,7 +370,7 @@ export function TitleScreen() {
                 disabled={conn !== "open"}
                 onClick={() => joinRoom(rejoinId)}
               >
-                Re-enter
+                重新进入
               </button>
             </div>
           </section>

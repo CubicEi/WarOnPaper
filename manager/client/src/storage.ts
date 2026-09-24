@@ -43,5 +43,5 @@ export function saveLastRoomId(roomId: string | null): void {
 }
 
 export function randomDefaultName(): string {
-  return `Commander-${Math.floor(Math.random() * 9000 + 1000)}`;
+  return `指挥官-${Math.floor(Math.random() * 9000 + 1000)}`;
 }

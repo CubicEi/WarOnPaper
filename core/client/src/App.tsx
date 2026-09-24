@@ -625,7 +625,7 @@ export function App() {
           {phaseHint && (
             <div className="status-chip" data-status="connecting">
               {phaseHint}
-              {role === "spectator" ? " · spectator" : ""}
+              {role === "spectator" ? " · 观战" : ""}
             </div>
           )}
         </div>

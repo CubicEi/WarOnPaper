@@ -22,7 +22,7 @@ interface IdentityFile {
 function sanitizeName(raw: string | undefined): string {
   const trimmed = (raw ?? "").trim().slice(0, 24);
   if (trimmed.length > 0) return trimmed;
-  return `Commander-${Math.floor(Math.random() * 9000 + 1000)}`;
+  return `指挥官-${Math.floor(Math.random() * 9000 + 1000)}`;
 }
 
 function isUuid(value: string | undefined): value is string {

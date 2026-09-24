@@ -1425,22 +1425,27 @@ function handleFire(
   const impactGy = target.gy;
   const isNuke = source.buildingId === NUKE_MISSILE_BUILDING_ID;
 
-  const shot = tryInterceptFlyingMissile(buildings, {
-    id: `shot-${source.id}-${target.id}`,
-    ownerId: session.id,
-    fromGx: source.gx,
-    fromGy: source.gy,
-    gx: impactGx,
-    gy: impactGy,
-    sourceBuildingId: source.buildingId,
-  });
+  // 防空导弹按工作范围并集（含雷达协同）拦截火箭军弹道；高射炮不拦截。
+  const shot = tryInterceptFlyingMissile(
+    buildings,
+    {
+      id: `shot-${source.id}-${target.id}`,
+      ownerId: session.id,
+      fromGx: source.gx,
+      fromGy: source.gy,
+      gx: impactGx,
+      gy: impactGy,
+      sourceBuildingId: source.buildingId,
+    },
+    connectedByOwner,
+  );
 
   source.ammo = (source.ammo ?? 0) - 1;
   if (shot.intercepted) {
     for (const next of shot.buildings) {
       if (next.id === source.id) continue;
       const live = buildings.find((b) => b.id === next.id);
-      if (live) live.ammo = next.ammo;
+      if (live) live.ammo = next.ammo ?? 0;
     }
     slog("fire", "intercepted", {
       player: session.id.slice(0, 8),

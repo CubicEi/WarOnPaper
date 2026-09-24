@@ -20,8 +20,8 @@ interface Props {
   errors: DebugErrorEntry[];
 }
 
-/** Shown at the top of the F2 panel; bump when shipping a debug build. */
-export const DEBUG_BUILD_VERSION = "beta1.0.2_260921";
+/** Shown at the top of the F2 panel; sourced from repo-root version.json. */
+export const DEBUG_BUILD_VERSION = __WOP_VERSION__;
 
 function shortPlayer(id: string | null): string {
   if (!id) return "";

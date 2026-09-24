@@ -685,6 +685,7 @@ export {
 export {
   advanceHolds,
   advanceFightsAndSieges,
+  applyAirHitAndRunStrike,
   findHoldCoordOutside,
   isBuildingHeld,
   occupyDemolishRefund,
@@ -724,11 +725,18 @@ export {
   ANTI_AIR_DRAIN_RATE_OF_ENTRY,
   ANTI_AIR_FLOOR_RATIO,
   GUN_BUILDING_ID,
+  ROCKET_FORCE_BUILDING_IDS,
+  isRocketForceWeapon,
   advanceAntiAir,
   tryInterceptFlyingMissile,
   tryInterceptFlyingMissiles,
 } from "./units/antiAir.js";
-export type { AntiAirTickResult, FlyingMissileStub } from "./units/antiAir.js";
+export type {
+  AntiAirTickResult,
+  AntiAirConnectedByOwner,
+  FlyingMissileStub,
+  RocketForceBuildingId,
+} from "./units/antiAir.js";
 export {
   applyLiaisonAttack,
   advanceLiaisonCuts,

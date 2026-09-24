@@ -158,7 +158,8 @@ export function advanceUnitTraining(world: UnitWorld): void {
       u: done.job.u,
       gx: done.sourceGx,
       gy: done.sourceGy,
-      homeBuildingId: done.sourceBuildingId,
+      // Prefer the delivery target as home so leftover / return / retreat入库正确。
+      homeBuildingId: done.job.targetBuildingId || done.sourceBuildingId,
     });
     const target = world.buildings.find((b) => b.id === done.job.targetBuildingId);
     if (!target) {
@@ -743,7 +744,12 @@ export function handleMutualDefense(
 
 /** Tick anti-air continuous drain vs enemy air. */
 export function advanceUnitAntiAir(world: UnitWorld): void {
-  const result = advanceAntiAir(world.units, world.buildings, TICK_MS / 1000);
+  const result = advanceAntiAir(
+    world.units,
+    world.buildings,
+    TICK_MS / 1000,
+    world.connectedByOwner,
+  );
   world.units.length = 0;
   world.units.push(...result.units);
   world.buildings.length = 0;

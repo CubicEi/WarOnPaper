@@ -54,6 +54,130 @@ export interface FightMoveContext {
   nextId: () => string;
 }
 
+/**
+ * Air hit-and-run: resolve one unit-combat round or one siege pulse, then clear
+ * fight/siege so the unit can return immediately (does not linger near target).
+ * Preserves `returnGx`/`returnGy`. Mutates `units`/`buildings`; may add to `removed`.
+ */
+export function applyAirHitAndRunStrike(
+  airIn: UnitGroup,
+  attackUnitId: string | undefined,
+  attackBuildingId: string | undefined,
+  units: UnitGroup[],
+  buildings: PlacedBuilding[],
+  removed: Set<string>,
+): UnitGroup {
+  const ai = units.findIndex((u) => u.id === airIn.id);
+  let air: UnitGroup = { ...airIn };
+  const unitId = attackUnitId ?? air.fightTargetUnitId;
+  const buildingId = attackBuildingId ?? air.siegeBuildingId;
+
+  if (unitId) {
+    const ti = units.findIndex((u) => u.id === unitId);
+    if (
+      ti >= 0 &&
+      !removed.has(unitId) &&
+      units[ti]!.u > 0 &&
+      units[ti]!.ownerId !== air.ownerId
+    ) {
+      const round = resolveCombatRound(air.u, "air", units[ti]!.u, units[ti]!.kind);
+      if (round.ua1 <= 0) {
+        removed.add(air.id);
+        air = { ...air, u: 0 };
+      } else {
+        air = { ...air, u: round.ua1 };
+      }
+      if (round.ub1 <= 0) {
+        removed.add(units[ti]!.id);
+        units[ti] = { ...units[ti]!, u: 0 };
+      } else {
+        const t = units[ti]!;
+        const clearFight = t.fightTargetUnitId === air.id;
+        units[ti] = {
+          ...t,
+          u: round.ub1,
+          ...(clearFight
+            ? {
+                state: "idle" as const,
+                fightTargetUnitId: undefined,
+                combatTimerSec: undefined,
+              }
+            : {}),
+        };
+      }
+    }
+  } else if (buildingId) {
+    const bi = buildings.findIndex((b) => b.id === buildingId);
+    if (bi >= 0 && buildings[bi]!.ownerId !== air.ownerId && air.u > 0) {
+      let b0 = buildings[bi]!;
+      const garrisonU = b0.u ?? 0;
+      // Hit-and-run air raid: clear/fight garrison then always apply one HP pulse
+      // (unlike lingering siege which does garrison OR hp per 10s tick).
+      if (garrisonU > 0) {
+        const gKind = unitKindFromBuilding(b0.buildingId) ?? "infantry";
+        const round = resolveCombatRound(air.u, "air", garrisonU, gKind);
+        if (round.ua1 <= 0) {
+          removed.add(air.id);
+          air = { ...air, u: 0 };
+          buildings[bi] = { ...b0, u: round.ub1 };
+        } else {
+          air = { ...air, u: round.ua1 };
+          b0 = { ...b0, u: round.ub1 };
+          buildings[bi] = b0;
+        }
+      }
+      if (!removed.has(air.id) && air.u > 0) {
+        const dmgToBuilding = siegeDamageFromUnits(air.u);
+        const dmgToAir = siegeDamageFromBuilding(air.u);
+        const nextU = Math.max(0, air.u - dmgToAir);
+        if (nextU <= 0) {
+          removed.add(air.id);
+          air = { ...air, u: 0 };
+        } else {
+          air = {
+            ...air,
+            u: nextU,
+            siegeDamageDealt: (air.siegeDamageDealt ?? 0) + dmgToBuilding,
+            siegeAirDamageDealt: (air.siegeAirDamageDealt ?? 0) + dmgToBuilding,
+          };
+        }
+        const damaged = applyBuildingHpDamage(b0, dmgToBuilding);
+        if (damaged.hp <= 0) {
+          // Air-only strike ⇒ air damage share 100% ⇒ always destroy (规则 §4.3).
+          buildings.splice(bi, 1);
+          for (let i = 0; i < units.length; i++) {
+            if (units[i]!.siegeBuildingId === buildingId && !removed.has(units[i]!.id)) {
+              units[i] = clearSiegeState(units[i]!);
+            }
+          }
+        } else {
+          buildings[bi] = damaged;
+        }
+      }
+    }
+  }
+
+  air = {
+    ...air,
+    state: "idle",
+    fightTargetUnitId: undefined,
+    siegeBuildingId: undefined,
+    combatTimerSec: undefined,
+    siegeTimerSec: undefined,
+    siegeDamageDealt: undefined,
+    siegeAirDamageDealt: undefined,
+    pendingAttackUnitId: undefined,
+    pendingAttackBuildingId: undefined,
+    path: undefined,
+    pathIndex: undefined,
+  };
+  // Keep caller reference in sync (settleIdle loops by reference).
+  Object.assign(airIn, air);
+  if (ai >= 0 && units[ai] !== airIn) Object.assign(units[ai]!, air);
+  else if (ai >= 0) units[ai] = airIn;
+  return airIn;
+}
+
 function cloneUnits(units: readonly UnitGroup[]): UnitGroup[] {
   return units.map((u) => ({ ...u, path: u.path?.map((p) => ({ ...p })) }));
 }
@@ -128,7 +252,16 @@ function clearFightsWithGoneTargets(units: UnitGroup[], removed: Set<string>): v
     if (u.siegeBuildingId) continue;
     if (u.liaisonCut && u.liaisonCut.elapsedSec >= 0) continue;
     const targetId = u.fightTargetUnitId;
-    if (!targetId) continue;
+    // Orphan fighting (no unit target): drop back to idle so air can auto-return.
+    if (!targetId) {
+      units[i] = {
+        ...u,
+        state: "idle",
+        fightTargetUnitId: undefined,
+        combatTimerSec: undefined,
+      };
+      continue;
+    }
     const target = units.find((x) => x.id === targetId);
     if (!target || removed.has(targetId) || target.u <= 0) {
       units[i] = {
@@ -454,6 +587,32 @@ export function advanceFightsAndSieges(
       units[ti]!.state !== "fighting" ||
       units[ti]!.fightTargetUnitId !== units[i]!.id
     ) {
+      // Ground cannot pin air into a standing fight (air is hit-and-run).
+      if (units[ti]!.kind === "air" && units[i]!.kind !== "air") {
+        units[i] = {
+          ...units[i]!,
+          state: "idle",
+          fightTargetUnitId: undefined,
+          combatTimerSec: undefined,
+        };
+        continue;
+      }
+      // Do not yank retreating / returning air back into combat.
+      if (
+        units[ti]!.kind === "air" &&
+        (units[ti]!.retreating ||
+          units[ti]!.depositOnArrival ||
+          units[ti]!.returnGx != null ||
+          units[ti]!.state === "moving")
+      ) {
+        units[i] = {
+          ...units[i]!,
+          state: "idle",
+          fightTargetUnitId: undefined,
+          combatTimerSec: undefined,
+        };
+        continue;
+      }
       units[ti] = {
         ...units[ti]!,
         state: "fighting",
@@ -462,6 +621,20 @@ export function advanceFightsAndSieges(
         path: undefined,
         pathIndex: undefined,
       };
+    }
+
+    // Air already in a standing fight (e.g. path≤1 order): one round then leave.
+    if (units[i]!.kind === "air") {
+      const struck = applyAirHitAndRunStrike(
+        units[i]!,
+        units[i]!.fightTargetUnitId,
+        undefined,
+        units,
+        buildings,
+        removed,
+      );
+      if (!removed.has(struck.id)) units[i] = struck;
+      continue;
     }
 
     let timer =
@@ -533,6 +706,34 @@ export function advanceFightsAndSieges(
     }
 
     triggerMutualDefense(buildingId, units, buildings, ctx);
+
+    // Air hit-and-run: one siege pulse then leave (do not linger).
+    {
+      const airAtk = units
+        .map((u, i) => ({ u, i }))
+        .filter(
+          ({ u }) =>
+            !removed.has(u.id) &&
+            u.kind === "air" &&
+            u.state === "fighting" &&
+            u.siegeBuildingId === buildingId &&
+            u.u > 0 &&
+            u.ownerId !== (buildings.find((b) => b.id === buildingId)?.ownerId ?? ""),
+        );
+      for (const { i } of airAtk) {
+        applyAirHitAndRunStrike(
+          units[i]!,
+          undefined,
+          buildingId,
+          units,
+          buildings,
+          removed,
+        );
+      }
+      if (destroyed.has(buildingId) || buildings.findIndex((b) => b.id === buildingId) < 0) {
+        continue;
+      }
+    }
 
     const listAttackers = () =>
       units

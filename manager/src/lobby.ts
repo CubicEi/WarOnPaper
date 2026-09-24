@@ -156,7 +156,7 @@ export class MatchQueues {
           hooks.send(p.ws, {
             type: "error",
             code: "MATCH_FAILED",
-            message: "Failed to create match room",
+            message: "匹配房间创建失败",
           });
         }
       }
