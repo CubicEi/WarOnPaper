@@ -67,7 +67,7 @@ let lastDrawnBuildingSig = "";
 export const MAP_FIT_MARGIN_RATIO = 0.06;
 export const MAP_FIT_MARGIN_MIN = 56;
 export const MAP_ZOOM_MIN = 1;
-export const MAP_ZOOM_MAX = 8;
+export const MAP_ZOOM_MAX = 16;
 
 export function mapFitMargin(width: number, height: number): number {
   return Math.max(MAP_FIT_MARGIN_MIN, Math.min(width, height) * MAP_FIT_MARGIN_RATIO);

@@ -19,6 +19,8 @@ export const BUILD_O_COST = 2;
 export const DEMOLISH_O_COST = 1;
 /** 装填 / 补给站部署：每次操作 −1 O（与数量无关）。 */
 export const HOLD_ACTION_O_COST = 1;
+/** 首府迁都：−50 O */
+export const RELOCATE_CAPITAL_O_COST = 50;
 /** 规则 §⑦：已建成建筑拆除 E 返还比例（再乘剩余 HP / 最大 HP） */
 export const DEMOLISH_E_REFUND_RATE = 0.8;
 /** 正在建造的建筑拆除时，返还已投入 E 的比例，不按 HP 折算 */
@@ -386,4 +388,64 @@ export function isDemolishLockedByRepair(
   const at = building.repairedAtTick;
   if (at == null) return false;
   return currentTick - at < demolishLockTicksAfterRepair(tickHz);
+}
+
+/** Clamp present + away U into catalog Umax (prefer keeping away occupation). */
+function clampGarrisonToBuildingId(b: PlacedBuilding, buildingId: string): void {
+  const uMax = BUILDING_BY_ID[buildingId]?.u ?? 0;
+  const away = Math.max(0, b.awayOccupiedU ?? 0);
+  if (uMax <= 0) {
+    b.u = 0;
+    b.awayOccupiedU = undefined;
+    return;
+  }
+  const nextAway = Math.min(away, uMax);
+  const nextPresent = Math.min(Math.max(0, b.u ?? 0), Math.max(0, uMax - nextAway));
+  b.u = nextPresent;
+  b.awayOccupiedU = nextAway > 0 ? nextAway : undefined;
+}
+
+/**
+ * In-place capital relocate via a completed metropolis:
+ * - Metropolis cell → capital (hp = metropolis hp before transform; hpMax = capital catalog)
+ * - Capital cell → metropolis (hp = min(metropolis hpMax, capital hp before); hpMax = metropolis catalog)
+ * Instance ids / gx,gy stay put so links and homeBuildingId refs remain coherent.
+ */
+export function applyCapitalRelocateInPlace(
+  metropolis: PlacedBuilding,
+  capital: PlacedBuilding,
+): void {
+  const capitalDef = BUILDING_BY_ID.capital;
+  const metroDef = BUILDING_BY_ID.metropolis;
+  const capitalHpMax = capitalDef?.hp ?? 120;
+  const metroHpMax = metroDef?.hp ?? 100;
+  const metroHpBefore = metropolis.hp;
+  const capitalHpBefore = capital.hp;
+  const metroInvestedE = metropolis.investedE;
+
+  metropolis.buildingId = "capital";
+  metropolis.hpMax = capitalHpMax;
+  metropolis.hp = Math.max(0, Math.min(capitalHpMax, metroHpBefore));
+  metropolis.investedE = metroInvestedE;
+  metropolis.level = undefined;
+  metropolis.satelliteBuildingId = null;
+  metropolis.constructionHalted = undefined;
+  metropolis.repairTicksRemaining = 0;
+  metropolis.repairTicksTotal = 0;
+  metropolis.repairHpBefore = undefined;
+  metropolis.repairHpRestore = undefined;
+  clampGarrisonToBuildingId(metropolis, "capital");
+
+  capital.buildingId = "metropolis";
+  capital.hpMax = metroHpMax;
+  capital.hp = Math.max(0, Math.min(metroHpMax, capitalHpBefore));
+  capital.investedE = Math.max(capital.investedE, investedEForBuilding("metropolis"));
+  capital.level = undefined;
+  capital.satelliteBuildingId = null;
+  capital.constructionHalted = undefined;
+  capital.repairTicksRemaining = 0;
+  capital.repairTicksTotal = 0;
+  capital.repairHpBefore = undefined;
+  capital.repairHpRestore = undefined;
+  clampGarrisonToBuildingId(capital, "metropolis");
 }

@@ -178,8 +178,11 @@ export function useGameSocket(
             name: msg.name,
             activeRoomId: msg.activeRoomId,
             hasState: !!msg.state,
+            E: msg.state?.you.energy,
+            O: msg.state?.you.organization,
           });
           if (msg.state) {
+            // Server-authoritative E/O (and world) — apply immediately on join/rejoin.
             onStateRef.current(msg.state);
           } else {
             // Fallback: /play/?roomId=… or cached room when manager did not rebind
@@ -201,6 +204,7 @@ export function useGameSocket(
             O: msg.state.you.organization,
             buildings: msg.state.buildings?.length ?? 0,
           });
+          // Replace HUD balances wholesale from server; never invent local E/O.
           onStateRef.current(msg.state);
         } else if (msg.type === "chat") {
           chatIdRef.current += 1;

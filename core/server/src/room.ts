@@ -13,6 +13,7 @@ import {
   TICK_MS,
   DEMOLISH_O_COST,
   HOLD_ACTION_O_COST,
+  RELOCATE_CAPITAL_O_COST,
   canPlaceBuildingDef,
   capitalSiteRejectMessage,
   capitalSiteRejectReason,
@@ -36,6 +37,7 @@ import {
   isRepairing,
   needsContinueBuild,
   applyBuildingHpDamage,
+  applyCapitalRelocateInPlace,
   isValidCapitalSite,
   isValidPortSite,
   orgBonusPer30s,
@@ -397,10 +399,33 @@ function send(ws: WebSocket, msg: ServerToClient): void {
   }
 }
 
+/**
+ * Full authoritative snapshot for one player (includes you.energy / you.organization).
+ * E/O are never sent as deltas — always the current absolute balances.
+ */
+function sendPlayerState(player: PlayerSession, state = snapshotFor(player)): void {
+  send(player.ws, { type: "state", state });
+}
+
 function broadcastState(): void {
   for (const player of players.values()) {
-    send(player.ws, { type: "state", state: snapshotFor(player) });
+    sendPlayerState(player);
   }
+}
+
+/** Join / rejoin: push current E/O immediately (do not wait for the next 1s economy tick). */
+function syncPlayerOnJoin(player: PlayerSession): GameStateSnapshot {
+  const state = snapshotFor(player);
+  send(player.ws, {
+    type: "welcome",
+    playerId: player.id,
+    name: player.name,
+    activeRoomId: roomId,
+    state,
+  });
+  // Also emit a normal `state` so play clients that key off that path get E/O now.
+  sendPlayerState(player, state);
+  return state;
 }
 
 function broadcastChat(msg: Extract<ServerToClient, { type: "chat" }>): void {
@@ -560,7 +585,11 @@ function advanceRepair(): void {
   }
 }
 
-/** §3.1 / §4.6：每秒产 E；每 10 秒功耗；每 30 秒 O；E 为负则扣首都 HP；每 30 秒开采耗储量 */
+/**
+ * §3.1 / §4.6：每秒产 E；每 10 秒功耗；每 30 秒 O；E 为负则扣首都 HP；每 30 秒开采耗储量.
+ * Mutates server hud only — clients learn absolute E/O via the next broadcastState
+ * (tickRoom always broadcasts; 1Hz economy mutations are included in that full snapshot).
+ */
 function simulateEconomy(): void {
   const atSecond = tick % TICKS_PER_SEC === 0;
   const at10s = tick % TICKS_PER_10S === 0;
@@ -1218,6 +1247,91 @@ function handleLevelUpgrade(session: PlayerSession, buildingInstanceId: string):
     eCost: preview.energy,
     hpMax: next.hpMax,
     E: session.hud.energy,
+  });
+  broadcastState();
+}
+
+/** 首府迁都：−50 O；首府格变首都（HP 取首府当前），原首都格变首府（HP = min(100, 原首都 HP)）。 */
+function handleRelocateCapital(session: PlayerSession, metropolisInstanceId: string): void {
+  if (rejectIfNotPlaying(session)) return;
+
+  const metro = buildings.find((b) => b.id === metropolisInstanceId);
+  if (!metro) {
+    sendError(session.ws, "not_found", "建筑不存在");
+    return;
+  }
+  if (metro.ownerId !== session.id) {
+    sendError(session.ws, "not_owner", "无法在他人首府迁都");
+    return;
+  }
+  if (metro.buildingId !== "metropolis") {
+    sendError(session.ws, "not_metropolis", "只能从首府迁都");
+    return;
+  }
+  if (rejectIfNotLinked(session, metro.id)) return;
+  if (rejectIfPolluted(session, metro)) return;
+  if (!isBuildingComplete(metro)) {
+    sendError(session.ws, "still_constructing", "建筑建造中，无法迁都");
+    return;
+  }
+  if (isRepairing(metro)) {
+    sendError(session.ws, "repairing", "修复中，无法迁都");
+    return;
+  }
+  if (metro.hp < metro.hpMax) {
+    sendError(session.ws, "need_repair", "须先修复再迁都");
+    return;
+  }
+
+  const capital = findPlayerCapital(session.id);
+  if (!capital) {
+    sendError(session.ws, "no_capital", "没有首都，无法迁都");
+    return;
+  }
+  if (capital.id === metro.id) {
+    sendError(session.ws, "already_capital", "已是首都");
+    return;
+  }
+  if (isRepairing(capital)) {
+    sendError(session.ws, "capital_repairing", "首都修复中，无法迁都");
+    return;
+  }
+
+  if (session.hud.organization < RELOCATE_CAPITAL_O_COST) {
+    sendError(
+      session.ws,
+      "not_enough_org",
+      `组织度不足（需要 ${RELOCATE_CAPITAL_O_COST} O）`,
+    );
+    return;
+  }
+
+  const fromNode = { gx: capital.gx, gy: capital.gy };
+  const toNode = { gx: metro.gx, gy: metro.gy };
+  const capitalHpBefore = capital.hp;
+  const metroHpBefore = metro.hp;
+
+  session.hud.organization -= RELOCATE_CAPITAL_O_COST;
+  applyCapitalRelocateInPlace(metro, capital);
+  syncCapitalHud(session);
+
+  // Restart comms from the new capital; keep prior published links until wave commits.
+  commWaves.delete(session.id);
+  const linked = new Set(publishedLinks(session.id));
+  linked.add(metro.id);
+  linked.add(capital.id);
+  connectedByOwner.set(session.id, linked);
+  beginCommWaves();
+
+  slog("relocate_capital", "ok", {
+    player: session.id.slice(0, 8),
+    from: fromNode,
+    to: toNode,
+    capitalHp: metro.hp,
+    capitalHpBefore: capitalHpBefore,
+    metroHp: capital.hp,
+    metroHpBefore,
+    O: session.hud.organization,
   });
   broadcastState();
 }
@@ -2013,6 +2127,12 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     return;
   }
 
+  if (msg.type === "relocate_capital") {
+    slog("msg", "relocate_capital", msg);
+    handleRelocateCapital(session, msg.id);
+    return;
+  }
+
   if (msg.type === "reload") {
     slog("msg", "reload", msg);
     handleReload(session, msg.id, msg.count);
@@ -2382,6 +2502,8 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       }
     }
     reconcileCapitals();
+    // Full snapshot each tick (15 Hz) includes absolute you.energy / you.organization.
+    // Economy mutates those at 1 Hz (and 10s/30s); this broadcast is the client source of truth.
     broadcastState();
     if (isIdleNow()) {
       destroyRoom("idle");
@@ -2439,14 +2561,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
         existing.name = opts.name.slice(0, 24) || existing.name;
         existing.ws = makeSocket(opts.send);
         touchInteraction();
-        const state = snapshotFor(existing);
-        send(existing.ws, {
-          type: "welcome",
-          playerId: existing.id,
-          name: existing.name,
-          activeRoomId: roomId,
-          state,
-        });
+        const state = syncPlayerOnJoin(existing);
         return { ok: true, playerId: existing.id, state };
       }
       if (players.size >= maxPlayers) {
@@ -2460,14 +2575,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       };
       players.set(session.id, session);
       touchInteraction();
-      const state = snapshotFor(session);
-      send(session.ws, {
-        type: "welcome",
-        playerId: session.id,
-        name: session.name,
-        activeRoomId: roomId,
-        state,
-      });
+      const state = syncPlayerOnJoin(session);
       slog("conn", "join", roomId, session.id.slice(0, 8), "players=", players.size);
       return { ok: true, playerId: session.id, state };
     },

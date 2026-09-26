@@ -26,6 +26,11 @@ export type GamePhase =
 
 export type SnapshotRole = "player" | "spectator";
 
+/**
+ * Per-player HUD in `GameStateSnapshot.you`.
+ * `energy` / `organization` are server-authoritative balances — clients must
+ * display them only (affordance costs OK) and never simulate or invent values.
+ */
 export interface PlayerHudState {
   capitalHp: number;
   capitalHpMax: number;
@@ -42,6 +47,7 @@ export {
   BUILD_O_COST,
   DEMOLISH_O_COST,
   HOLD_ACTION_O_COST,
+  RELOCATE_CAPITAL_O_COST,
   DEMOLISH_E_REFUND_RATE,
   DEMOLISH_CONSTRUCTION_E_REFUND_RATE,
   DEMOLISH_LOCK_AFTER_REPAIR_SEC,
@@ -74,6 +80,7 @@ export {
   demolishEnergyRefund,
   demolishLockTicksAfterRepair,
   isDemolishLockedByRepair,
+  applyCapitalRelocateInPlace,
 } from "./buildings/actions.js";
 
 export interface GameStateSnapshot {
@@ -172,6 +179,11 @@ export type ClientToServer =
   | {
       type: "level_upgrade";
       /** Placed building instance id (雷达/港口/兵营/装甲营/机场线性升级). */
+      id: string;
+    }
+  | {
+      type: "relocate_capital";
+      /** Metropolis (首府) instance id to become the new capital. */
       id: string;
     }
   | {

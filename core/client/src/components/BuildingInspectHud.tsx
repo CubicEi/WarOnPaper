@@ -3,6 +3,7 @@ import {
   BUILDING_BY_ID,
   CARRIER_BUILD_E,
   HOLD_ACTION_O_COST,
+  RELOCATE_CAPITAL_O_COST,
   SIZE_NAME,
   TICK_HZ,
   UNIT_BY_KIND,
@@ -25,6 +26,7 @@ export type BuildingInspectAction =
   | "demolish"
   | "upgrade"
   | "level_upgrade"
+  | "relocate_capital"
   | "repair"
   | "deploy"
   | "reload"
@@ -128,15 +130,21 @@ export function BuildingInspectHud({
   const hpFull = building.hp >= building.hpMax && building.hpMax > 0;
   const linearPreview = mine ? previewLinearUpgrade(building) : null;
   const useLinearUpgrade = linearPreview != null;
+  const canRelocateCapital =
+    building.buildingId === "metropolis" && !inProgress && !repairing;
   const midAction: BuildingInspectAction = !hpFull
     ? "repair"
-    : useLinearUpgrade
-      ? "level_upgrade"
-      : "upgrade";
+    : canRelocateCapital
+      ? "relocate_capital"
+      : useLinearUpgrade
+        ? "level_upgrade"
+        : "upgrade";
   const levelUpCost = linearPreview?.energy ?? 0;
   const levelUpDisabled =
     useLinearUpgrade &&
     (!linearPreview.canUpgrade || energy < levelUpCost || inProgress);
+  const relocateDisabled =
+    canRelocateCapital && organization < RELOCATE_CAPITAL_O_COST;
   const midLabel = !hpFull
     ? repairing
       ? continueBuild
@@ -147,11 +155,13 @@ export function BuildingInspectHud({
         : inProgress
           ? "建造中"
           : "修复"
-    : useLinearUpgrade
-      ? linearPreview.canUpgrade
-        ? `升级 ${levelUpCost}E`
-        : "已满级"
-      : "升级";
+    : canRelocateCapital
+      ? `迁都 ${RELOCATE_CAPITAL_O_COST}O`
+      : useLinearUpgrade
+        ? linearPreview.canUpgrade
+          ? `升级 ${levelUpCost}E`
+          : "已满级"
+        : "升级";
   const midTitle = polluted
     ? "污染区内建筑已失效，只能拆除"
     : !commsLinked
@@ -162,6 +172,10 @@ export function BuildingInspectHud({
         : "修复中"
       : midAction === "repair" && inProgress && !continueBuild
         ? "建造进行中"
+        : midAction === "relocate_capital"
+          ? organization < RELOCATE_CAPITAL_O_COST
+            ? `组织度不足（需要 ${RELOCATE_CAPITAL_O_COST} O）`
+            : `迁都至此处 · ${RELOCATE_CAPITAL_O_COST} O`
         : midAction === "level_upgrade"
         ? !linearPreview?.canUpgrade
           ? "已满级"
@@ -536,7 +550,8 @@ export function BuildingInspectHud({
                 !commsLinked ||
                 (repairing && midAction === "repair") ||
                 (midAction === "repair" && inProgress && !continueBuild) ||
-                (midAction === "level_upgrade" && levelUpDisabled)
+                (midAction === "level_upgrade" && levelUpDisabled) ||
+                (midAction === "relocate_capital" && relocateDisabled)
               }
               title={midTitle}
               onPointerDown={(e) => e.stopPropagation()}
@@ -544,6 +559,7 @@ export function BuildingInspectHud({
                 e.stopPropagation();
                 if (polluted || !commsLinked) return;
                 if (midAction === "level_upgrade" && levelUpDisabled) return;
+                if (midAction === "relocate_capital" && relocateDisabled) return;
                 fire(midAction);
               }}
             >

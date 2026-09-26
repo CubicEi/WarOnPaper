@@ -100,7 +100,7 @@ export const BUILDINGS: BuildingDef[] = [
   { id: "base", name: "基地", category: "settlement", prereq: "commander", upgradeLevels: 10, hp: 25, u: 12, size: "medium", icon: "/icons/buildings/settlement/base.png" },
   { id: "town", name: "市镇", category: "settlement", prereq: "base", upgradeLevels: 15, hp: 40, u: 15, size: "large", icon: "/icons/buildings/settlement/town.png" },
   { id: "city", name: "都市", category: "settlement", prereq: "town", upgradeLevels: 25, hp: 65, u: 15, size: "large", icon: "/icons/buildings/settlement/city.png" },
-  { id: "metropolis", name: "首府", category: "settlement", prereq: "city", upgradeLevels: 35, hp: 100, u: 20, size: "large", icon: "/icons/buildings/settlement/metropolis.png" },
+  { id: "metropolis", name: "首府", category: "settlement", prereq: "city", upgradeLevels: 35, hp: 100, u: 20, size: "large", notes: "可迁都（50 O）", icon: "/icons/buildings/settlement/metropolis.png" },
   { id: "capital", name: "首都", category: "settlement", prereq: null, upgradeLevels: null, hp: 120, u: 30, size: "large", p: 4, orgBonus: 3, notes: "P +4，O +3；仅迁都", flags: { relocateOnly: true }, icon: "/icons/buildings/settlement/capital.png" },
 
   // 7.2 指挥通信

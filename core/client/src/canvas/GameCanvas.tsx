@@ -108,6 +108,7 @@ interface Props {
   onDemolish?: (buildingId: string) => void;
   onRepair?: (buildingId: string) => void;
   onLevelUpgrade?: (buildingId: string) => void;
+  onRelocateCapital?: (buildingId: string) => void;
   onReload?: (buildingId: string, count: number) => void;
   onBuildCarrier?: (buildingId: string) => void;
   onEmbarkAir?: (carrierId: string, airUnitId: string, u?: number) => void;
@@ -217,6 +218,7 @@ export function GameCanvas({
   onDemolish,
   onRepair,
   onLevelUpgrade,
+  onRelocateCapital,
   onReload,
   onBuildCarrier,
   onEmbarkAir,
@@ -279,6 +281,16 @@ export function GameCanvas({
     /** Ctrl+drag pans even while a liaison stroke would otherwise be drawn. */
     panGesture?: boolean;
   } | null>(null);
+  /** Active pointer positions (client coords) for multi-touch pinch. */
+  const pointersRef = useRef(new Map<number, { x: number; y: number }>());
+  const pinchRef = useRef<{
+    startDist: number;
+    startZoom: number;
+    startPan: { x: number; y: number };
+    startMid: { x: number; y: number };
+  } | null>(null);
+  /** True after a pinch this gesture; suppress click on final finger-up. */
+  const pinchWasActiveRef = useRef(false);
   const miniDragRef = useRef<{
     grabDu: number;
     grabDv: number;
@@ -829,10 +841,74 @@ export function GameCanvas({
       return Math.max(0, Math.min(1, (speed - 1.5) / 6.5));
     };
 
+    const beginPinchFromPointers = () => {
+      const pts = [...pointersRef.current.values()];
+      if (pts.length < 2) {
+        pinchRef.current = null;
+        return;
+      }
+      const a = toLocal(pts[0].x, pts[0].y);
+      const b = toLocal(pts[1].x, pts[1].y);
+      const dist = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      pinchRef.current = {
+        startDist: dist,
+        startZoom: zoomRef.current,
+        startPan: { ...panRef.current },
+        startMid: mid,
+      };
+      pinchWasActiveRef.current = true;
+      dragRef.current = null;
+      liaisonSpeedRef.current = null;
+      clearSelection();
+    };
+
+    /** Scale + pan so pinch midpoint stays on the same map point (and follows mid drift). */
+    const applyPinchFromPointers = () => {
+      const pinch = pinchRef.current;
+      const pts = [...pointersRef.current.values()];
+      if (!pinch || pts.length < 2) return;
+      const a = toLocal(pts[0].x, pts[0].y);
+      const b = toLocal(pts[1].x, pts[1].y);
+      const dist = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+      const { width: w, height: h } = sizeRef.current;
+      const z0 = pinch.startZoom;
+      const z1 = Math.min(
+        MAP_ZOOM_MAX,
+        Math.max(MAP_ZOOM_MIN, z0 * (dist / pinch.startDist)),
+      );
+      let pan = panAfterZoomAt(
+        pinch.startMid.x,
+        pinch.startMid.y,
+        z0,
+        z1,
+        pinch.startPan,
+        w,
+        h,
+      );
+      pan = {
+        x: pan.x + (mid.x - pinch.startMid.x),
+        y: pan.y + (mid.y - pinch.startMid.y),
+      };
+      zoomRef.current = z1;
+      panRef.current = pan;
+      pointerRef.current = mid;
+      applyClamp();
+    };
+
     const onDown = (e: PointerEvent) => {
       if (miniDragRef.current) return;
+      pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
       rememberPointer(e.clientX, e.clientY);
       canvas.setPointerCapture(e.pointerId);
+
+      // Second+ finger: pinch-zoom (touch-action:none blocks browser pinch).
+      if (pointersRef.current.size >= 2) {
+        e.preventDefault();
+        beginPinchFromPointers();
+        return;
+      }
 
       // Ctrl+drag pans the map, including while a liaison line is being drawn.
       if (e.ctrlKey) {
@@ -880,7 +956,18 @@ export function GameCanvas({
     };
 
     const onMove = (e: PointerEvent) => {
+      if (pointersRef.current.has(e.pointerId)) {
+        pointersRef.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      }
       rememberPointer(e.clientX, e.clientY);
+
+      if (pointersRef.current.size >= 2) {
+        e.preventDefault();
+        if (!pinchRef.current) beginPinchFromPointers();
+        else applyPinchFromPointers();
+        return;
+      }
+
       const d = dragRef.current;
       if (!d) return;
 
@@ -996,6 +1083,33 @@ export function GameCanvas({
     };
 
     const onUp = (e: PointerEvent) => {
+      pointersRef.current.delete(e.pointerId);
+
+      // End or rebaseline pinch; never treat pinch release as a map click.
+      if (pinchWasActiveRef.current) {
+        if (pointersRef.current.size >= 2) {
+          beginPinchFromPointers();
+          return;
+        }
+        pinchRef.current = null;
+        if (pointersRef.current.size === 1) {
+          const rem = [...pointersRef.current.values()][0]!;
+          dragRef.current = {
+            ox: rem.x,
+            oy: rem.y,
+            px: panRef.current.x,
+            py: panRef.current.y,
+            moved: true,
+            panGesture: true,
+          };
+          return;
+        }
+        pinchWasActiveRef.current = false;
+        dragRef.current = null;
+        liaisonSpeedRef.current = null;
+        return;
+      }
+
       const d = dragRef.current;
       dragRef.current = null;
 
@@ -1405,6 +1519,9 @@ export function GameCanvas({
     window.addEventListener("pointermove", onWindowMove);
 
     return () => {
+      pointersRef.current.clear();
+      pinchRef.current = null;
+      pinchWasActiveRef.current = false;
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointermove", onMove);
@@ -2140,6 +2257,10 @@ export function GameCanvas({
               }
               if (action === "level_upgrade") {
                 onLevelUpgrade?.(b.id);
+                return;
+              }
+              if (action === "relocate_capital") {
+                onRelocateCapital?.(b.id);
                 return;
               }
               if (action === "reload") {

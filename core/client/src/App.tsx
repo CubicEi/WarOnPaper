@@ -31,6 +31,7 @@ export function App() {
   const [state, setState] = useState<GameStateSnapshot | null>(null);
   const [terrain, setTerrain] = useState<TerrainMap | null>(null);
   const onState = useCallback((next: GameStateSnapshot) => {
+    // Server is sole source of truth for you.energy / you.organization.
     setState((prev) => {
       const buildingDelta =
         (next.buildings?.length ?? 0) !== (prev?.buildings?.length ?? 0) ||
@@ -210,6 +211,15 @@ export function App() {
       log.info("app", "level_upgrade", id);
       const ok = send({ type: "level_upgrade", id });
       if (!ok) log.error("app", "level_upgrade send returned false", id);
+    },
+    [send],
+  );
+
+  const onRelocateCapital = useCallback(
+    (id: string) => {
+      log.info("app", "relocate_capital", id);
+      const ok = send({ type: "relocate_capital", id });
+      if (!ok) log.error("app", "relocate_capital send returned false", id);
     },
     [send],
   );
@@ -511,6 +521,7 @@ export function App() {
         onDemolish={onDemolish}
         onRepair={onRepair}
         onLevelUpgrade={onLevelUpgrade}
+        onRelocateCapital={onRelocateCapital}
         onReload={onReload}
         onBuildCarrier={onBuildCarrier}
         onEmbarkAir={onEmbarkAir}
@@ -529,6 +540,7 @@ export function App() {
         onHoldUnits={onHoldUnits}
         onEndHold={onEndHold}
         onMutualDefense={onMutualDefense}
+        // Affordance only — balances come from server state.you, never local math.
         energy={state?.you.energy ?? 0}
         organization={state?.you.organization ?? 0}
         tick={state?.tick ?? 0}

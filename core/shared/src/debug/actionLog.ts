@@ -192,6 +192,7 @@ export function categoryForAction(type: string): PlayerActionCategory {
     case "demolish":
     case "repair":
     case "level_upgrade":
+    case "relocate_capital":
     case "reload":
     case "deploy":
     case "build_carrier":
@@ -307,6 +308,9 @@ export function summarizeClientAction(msg: { readonly type: string }): {
       break;
     case "level_upgrade":
       summary = `线性升级 ${shortId(m.id)}`;
+      break;
+    case "relocate_capital":
+      summary = `迁都 ${shortId(m.id)}`;
       break;
     case "reload":
       summary = `装填 ${shortId(m.id)} ×${fmtNum(m.count)}`;

@@ -14,6 +14,7 @@ interface CapSize {
 }
 
 export function HudOverlay({ hud, windowHudSize }: Props) {
+  // hud.energy / hud.organization are server-authoritative (from GameStateSnapshot.you).
   const resourcesRef = useRef<HTMLDivElement>(null);
   /** Natural size of energy/org block at scale 1 — permanent cap. */
   const [cap, setCap] = useState<CapSize | null>(null);
