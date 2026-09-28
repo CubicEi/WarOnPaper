@@ -18,6 +18,7 @@ import {
   NUKE_POLLUTION_R_DU,
   buildingLevel,
   collectAllDirectVisionSources,
+  collectCommUsedEdges,
   directVisionRadiusForBuilding,
   awayOccupiedU,
   effectiveUmax,
@@ -31,6 +32,7 @@ import {
   romanLevelLabel,
   supportsLinearUpgrade,
   trainingHeadProgress,
+  undirectedCommEdgeKey,
   workRangeCircles,
 } from "@wop/shared";
 import type { VisionSource } from "@wop/shared";
@@ -43,7 +45,7 @@ const BG = "#2a2a2a";
 const GRID = "#4a4a4a";
 /** Satellite-only areas (outside direct vision). */
 const SATELLITE_FOG = "rgba(10, 12, 16, 0.5)";
-/** Known enemy vision overlay (beige / 米黄, no stroke; overlaps stack). */
+/** Known enemy vision overlay (beige / 米黄, no stroke; union fill, uniform alpha). */
 const ENEMY_VISION_FILL = "rgba(235, 210, 155, 0.14)";
 /** Match selection half-ring fill. */
 const RESERVE_RING_FILL = "rgba(255, 255, 255, 0.28)";
@@ -56,12 +58,13 @@ const LIAISON_ENEMY = "#eb6040";
 const COMM_STATUS_LINKED = "#2bbbad";
 /** Comm-status overlay: own building not in connectedIds. */
 const COMM_STATUS_UNLINKED = "#8a2f2f";
-/** Comm-status overlay: own building still under construction. */
-const COMM_STATUS_INCOMPLETE = "#6e6e6e";
-/** Comm-status overlay: own liaison not bridging two linked buildings. */
+/** Comm-status overlay: own liaison segment not carrying signal. */
 const COMM_STATUS_LIAISON_IDLE = "#7a7a7a";
 const RADIO_BUILDING_ID = "boardcast";
 let lastDrawnBuildingSig = "";
+/** Cache for comm-status used liaison edges (avoid Dijkstra every frame). */
+let cachedCommUsedEdgesSig = "";
+let cachedCommUsedEdges: ReadonlySet<string> = new Set();
 
 /** Padding around the board at zoom=1 (min zoom shows whole map with slight 留白). */
 export const MAP_FIT_MARGIN_RATIO = 0.06;
@@ -171,6 +174,8 @@ export interface DrawMapArgs {
   selectedUnitId?: string | null;
   /** Checked mobilize rows: light-cyan rings. Cleared when unchecked. */
   focusMarks?: readonly { gx: number; gy: number }[] | null;
+  /** Mobilize / train dry-run march polylines (same stroke as selected-unit path). */
+  pathPreviews?: readonly (readonly { gx: number; gy: number }[])[] | null;
   /** Nuclear pollution zones — red circles. */
   pollutionZones?: readonly PollutionZone[] | null;
   /**
@@ -179,8 +184,8 @@ export interface DrawMapArgs {
    */
   showEnemyVision?: boolean;
   /**
-   * Overlay own communication status: building tints, linked-liaison
-   * colors, and connected radio work-range strokes.
+   * Overlay own communication status: online/offline building icons,
+   * linked-liaison colors, and connected radio work-range strokes.
    */
   showCommStatus?: boolean;
   /** Launcher fire-aim: draw cancel affordance at this building node. */
@@ -563,7 +568,7 @@ function drawBuildings(
   originX: number,
   originY: number,
   cell: number,
-  zoom: number,
+  _zoom: number,
   myPlayerId: string | null,
   connectedIds?: ReadonlySet<string> | null,
   showCommStatus = false,
@@ -582,16 +587,33 @@ function drawBuildings(
     const size = cell * 0.85;
     const half = size / 2;
     const mine = myPlayerId != null && b.ownerId === myPlayerId;
-    const img = getBuildingIcon(b.buildingId, mine ? "own" : "enemy");
     const incomplete = b.buildTicksRemaining > 0;
+    const linked =
+      !!connectedIds && isBuildingCommsLinked(b.id, connectedIds);
+    // Comm advanced view: teal online / red offline icons for own buildings.
+    // Incomplete keeps own (white) icon — no gray status ring.
+    let iconVariant: "own" | "enemy" | "online" | "offline" = mine
+      ? "own"
+      : "enemy";
+    if (showCommStatus && mine && !incomplete) {
+      iconVariant = linked ? "online" : "offline";
+    }
+    const img = getBuildingIcon(b.buildingId, iconVariant);
     let alpha = incomplete
       ? 0.55 + 0.45 * (1 - b.buildTicksRemaining / Math.max(1, b.buildTicksTotal))
       : 1;
     if (incomplete && b.buildPaused) {
       alpha *= 0.55;
     }
-    // Own buildings without comms link render dimmer
-    if (mine && connectedIds && !connectedIds.has(b.id) && b.buildingId !== "capital") {
+    // Own buildings without comms link render dimmer (normal view only;
+    // advanced view already uses red offline icons).
+    if (
+      !showCommStatus &&
+      mine &&
+      connectedIds &&
+      !connectedIds.has(b.id) &&
+      b.buildingId !== "capital"
+    ) {
       alpha *= 0.45;
     }
 
@@ -600,7 +622,15 @@ function drawBuildings(
     if (img) {
       ctx.drawImage(img, x - half, y - half, size, size);
     } else {
-      ctx.fillStyle = mine ? "#8a8a8a" : "#eb6040";
+      const fallback =
+        showCommStatus && mine && !incomplete
+          ? linked
+            ? COMM_STATUS_LINKED
+            : COMM_STATUS_UNLINKED
+          : mine
+            ? "#8a8a8a"
+            : "#eb6040";
+      ctx.fillStyle = fallback;
       ctx.beginPath();
       ctx.arc(x, y, half * 0.55, 0, Math.PI * 2);
       ctx.fill();
@@ -621,23 +651,6 @@ function drawBuildings(
           Math.min(1, remaining / total),
         );
       }
-    }
-
-    // Comm-status ring: stroke-only so the building icon stays visible.
-    if (showCommStatus && mine) {
-      const tint = incomplete
-        ? COMM_STATUS_INCOMPLETE
-        : connectedIds && isBuildingCommsLinked(b.id, connectedIds)
-          ? COMM_STATUS_LINKED
-          : COMM_STATUS_UNLINKED;
-      ctx.save();
-      ctx.strokeStyle = tint;
-      // Fixed 3px on screen under scale(zoom).
-      ctx.lineWidth = 3 / zoom;
-      ctx.beginPath();
-      ctx.arc(x, y, half * 0.62, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.restore();
     }
 
     // 线性升级建筑：左下角罗马数字等级（己方可见）
@@ -789,6 +802,11 @@ function drawLiaisonPolyline(
     mine?: boolean;
     /** Override stroke when showing comm status (own lines only). */
     strokeColor?: string;
+    /**
+     * Comm-status: color each grid edge separately.
+     * Return undefined to fall back to `strokeColor` / default.
+     */
+    segmentColor?: (ax: number, ay: number, bx: number, by: number) => string | undefined;
   },
 ): void {
   if (nodes.length < 2) return;
@@ -796,16 +814,29 @@ function drawLiaisonPolyline(
   const preview = opts?.preview ?? false;
   const selected = opts?.selected ?? false;
   const mine = opts?.mine ?? true;
-  const color = opts?.strokeColor ?? (mine ? LIAISON_OWN : LIAISON_ENEMY);
+  const defaultColor = opts?.strokeColor ?? (mine ? LIAISON_OWN : LIAISON_ENEMY);
   const style = liaisonLineStyle(kind, cell, zoom);
+  const segmentColor = opts?.segmentColor;
 
-  const strokePath = () => {
+  const strokeFullPath = () => {
     ctx.beginPath();
     ctx.moveTo(originX + nodes[0].gx * cell, originY + nodes[0].gy * cell);
     for (let i = 1; i < nodes.length; i++) {
       ctx.lineTo(originX + nodes[i].gx * cell, originY + nodes[i].gy * cell);
     }
     ctx.stroke();
+  };
+
+  const strokeSegments = (colorFor: (ax: number, ay: number, bx: number, by: number) => string) => {
+    for (let i = 1; i < nodes.length; i++) {
+      const a = nodes[i - 1];
+      const b = nodes[i];
+      ctx.strokeStyle = colorFor(a.gx, a.gy, b.gx, b.gy);
+      ctx.beginPath();
+      ctx.moveTo(originX + a.gx * cell, originY + a.gy * cell);
+      ctx.lineTo(originX + b.gx * cell, originY + b.gy * cell);
+      ctx.stroke();
+    }
   };
 
   ctx.save();
@@ -817,10 +848,9 @@ function drawLiaisonPolyline(
     ctx.lineCap = style.lineCap;
     ctx.setLineDash(style.dash);
     ctx.globalAlpha = 1;
-    strokePath();
+    strokeFullPath();
   }
 
-  ctx.strokeStyle = color;
   ctx.lineWidth = style.lineWidth;
   ctx.lineCap = style.lineCap;
   ctx.globalAlpha = preview ? 0.7 : incomplete ? 0.4 : 0.95;
@@ -832,30 +862,48 @@ function drawLiaisonPolyline(
   } else {
     ctx.setLineDash([]);
   }
-  strokePath();
+  if (segmentColor) {
+    strokeSegments((ax, ay, bx, by) => segmentColor(ax, ay, bx, by) ?? defaultColor);
+  } else {
+    ctx.strokeStyle = defaultColor;
+    strokeFullPath();
+  }
   ctx.restore();
 }
 
-/** True when both liaison endpoints sit on own buildings in connectedIds. */
-function liaisonBridgesLinkedBuildings(
-  line: PlacedLiaison,
-  buildings: readonly PlacedBuilding[],
+function resolveCommUsedEdges(
   myPlayerId: string,
+  buildings: readonly PlacedBuilding[],
+  liaisons: readonly PlacedLiaison[],
   connectedIds: ReadonlySet<string>,
-): boolean {
-  if (line.nodes.length < 2) return false;
-  const start = line.nodes[0];
-  const end = line.nodes[line.nodes.length - 1];
-  let startLinked = false;
-  let endLinked = false;
-  for (const b of buildings) {
-    if (b.ownerId !== myPlayerId) continue;
-    if (!connectedIds.has(b.id)) continue;
-    if (b.gx === start.gx && b.gy === start.gy) startLinked = true;
-    if (b.gx === end.gx && b.gy === end.gy) endLinked = true;
-    if (startLinked && endLinked) return true;
-  }
-  return startLinked && endLinked;
+): ReadonlySet<string> {
+  const sig =
+    `${myPlayerId}|${connectedIds.size}|` +
+    buildings
+      .filter((b) => b.ownerId === myPlayerId)
+      .map(
+        (b) =>
+          `${b.id}:${b.buildingId}@${b.gx},${b.gy}:p=${b.polluted ? 1 : 0}:t=${b.buildTicksRemaining}`,
+      )
+      .join(";") +
+    "|" +
+    liaisons
+      .filter((l) => l.ownerId === myPlayerId)
+      .map(
+        (l) =>
+          `${l.id}:${l.kind}:${l.buildTicksRemaining}:` +
+          l.nodes.map((n) => `${n.gx},${n.gy}`).join("-"),
+      )
+      .join(";");
+  if (sig === cachedCommUsedEdgesSig) return cachedCommUsedEdges;
+  cachedCommUsedEdgesSig = sig;
+  cachedCommUsedEdges = collectCommUsedEdges(
+    myPlayerId,
+    buildings,
+    liaisons,
+    connectedIds,
+  );
+  return cachedCommUsedEdges;
 }
 
 function drawLiaisons(
@@ -871,30 +919,30 @@ function drawLiaisons(
   connectedIds?: ReadonlySet<string> | null,
   showCommStatus = false,
 ): void {
+  const usedEdges =
+    showCommStatus &&
+    myPlayerId != null &&
+    connectedIds &&
+    buildings
+      ? resolveCommUsedEdges(myPlayerId, buildings, lines, connectedIds)
+      : null;
+
   for (const line of lines) {
     const mine = myPlayerId == null || line.ownerId === myPlayerId;
-    let strokeColor: string | undefined;
-    if (
-      showCommStatus &&
-      mine &&
-      myPlayerId != null &&
-      connectedIds &&
-      buildings
-    ) {
-      strokeColor = liaisonBridgesLinkedBuildings(
-        line,
-        buildings,
-        myPlayerId,
-        connectedIds,
-      )
-        ? COMM_STATUS_LINKED
-        : COMM_STATUS_LIAISON_IDLE;
+    let segmentColor:
+      | ((ax: number, ay: number, bx: number, by: number) => string | undefined)
+      | undefined;
+    if (showCommStatus && mine && usedEdges) {
+      segmentColor = (ax, ay, bx, by) =>
+        usedEdges.has(undirectedCommEdgeKey(ax, ay, bx, by))
+          ? COMM_STATUS_LINKED
+          : COMM_STATUS_LIAISON_IDLE;
     }
     drawLiaisonPolyline(ctx, line.nodes, line.kind, originX, originY, cell, zoom, {
       incomplete: line.buildTicksRemaining > 0,
       selected: selectedId != null && line.id === selectedId,
       mine,
-      strokeColor,
+      segmentColor,
     });
   }
 }
@@ -1068,7 +1116,6 @@ function drawConnectedRadioRanges(
  * Known enemy vision from the viewer-filtered snapshot:
  * all known enemy buildings (incl. small already in our vision; radius via
  * directVisionRadiusForBuilding) and all enemy units (kind R).
- * Fills stack with normal alpha compositing (no stroke, no union punch).
  */
 function collectKnownEnemyVisionSources(
   buildings: readonly PlacedBuilding[],
@@ -1095,6 +1142,10 @@ function collectKnownEnemyVisionSources(
   return out;
 }
 
+/**
+ * Draw known enemy vision as one union path so overlapping circles keep a
+ * single uniform alpha (no per-circle compositing stack).
+ */
 function drawEnemyVisionRanges(
   ctx: CanvasRenderingContext2D,
   sources: readonly VisionSource[],
@@ -1103,15 +1154,22 @@ function drawEnemyVisionRanges(
   cell: number,
 ): void {
   if (sources.length === 0) return;
-  ctx.save();
-  ctx.fillStyle = ENEMY_VISION_FILL;
+  const path = new Path2D();
+  let any = false;
   for (const s of sources) {
     const radius = Math.max(0, s.radiusDu) * cell;
     if (radius <= 0) continue;
-    ctx.beginPath();
-    ctx.arc(originX + s.gx * cell, originY + s.gy * cell, radius, 0, Math.PI * 2);
-    ctx.fill();
+    const x = originX + s.gx * cell;
+    const y = originY + s.gy * cell;
+    // Separate subpaths so arcs do not connect with chords.
+    path.moveTo(x + radius, y);
+    path.arc(x, y, radius, 0, Math.PI * 2);
+    any = true;
   }
+  if (!any) return;
+  ctx.save();
+  ctx.fillStyle = ENEMY_VISION_FILL;
+  ctx.fill(path, "nonzero");
   ctx.restore();
 }
 
@@ -1140,6 +1198,7 @@ export function drawMap(
     showEnemyVision,
     showCommStatus,
     focusMarks,
+    pathPreviews,
     fireAimAt,
     tick = 0,
   }: DrawMapArgs,
@@ -1256,6 +1315,14 @@ export function drawMap(
       myPlayerId ?? null,
       selectedUnitId ?? null,
     );
+  }
+
+  if (pathPreviews && pathPreviews.length > 0) {
+    for (const nodes of pathPreviews) {
+      if (nodes.length >= 2) {
+        drawUnitPathPreview(ctx, nodes, originX, originY, cell, zoom);
+      }
+    }
   }
 
   if (focusMarks && focusMarks.length > 0) {

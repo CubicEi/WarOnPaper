@@ -28,6 +28,7 @@ import {
   canUnitStop,
   isMovingState,
   previewUnitMove,
+  previewTrainingDeliveryPath,
   applyAssignHome,
   unitKindFromBuilding,
   extendLiaisonPath,
@@ -54,6 +55,7 @@ import {
   getBoardLayout,
   hitFireAimCancel,
   layoutToScreen,
+  mapFitMargin,
   MAP_ZOOM_MAX,
   MAP_ZOOM_MIN,
   panAfterZoomAt,
@@ -198,6 +200,14 @@ const ACTION_BTN_R = 18;
 const ACTION_ARC_RADIUS = SEL_RING_OUTER + ACTION_BTN_R + 10;
 /** Unit inspect: place the unit at ~38% width (center-left), vertical center. */
 const UNIT_FOCUS_X_RATIO = 0.38;
+/** Pan/zoom camera tween when focusing a building or fitting fire range. */
+const CAMERA_FOCUS_MS = 500;
+/** Delay before building focus pan + inspect HUD so Shift+双击拆除 can win. */
+const BUILDING_FOCUS_DELAY_MS = 150;
+/** CSS ease-in-out equivalent: accelerate then decelerate. */
+function easeInOutCubic(t: number): number {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
 
 export function GameCanvas({
   map,
@@ -270,6 +280,11 @@ export function GameCanvas({
   const miniSizeRef = useRef({ width: 0, height: 0 });
   const panRef = useRef({ x: 0, y: 0 });
   const zoomRef = useRef(MAP_ZOOM_MIN);
+  const cameraAnimRef = useRef<number | null>(null);
+  /** Pending building focus (delay before camera + inspect HUD). */
+  const pendingBuildingFocusRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** While set, pan keeps this unit centered (cleared with selection / camera cancel). */
+  const followUnitIdRef = useRef<string | null>(null);
   const dragRef = useRef<{
     ox: number;
     oy: number;
@@ -317,6 +332,8 @@ export function GameCanvas({
 
   const [miniSize, setMiniSize] = useState({ width: 0, height: 0 });
   const [selectionUi, setSelectionUi] = useState<SelectionView | null>(null);
+  /** Building inspect HUD waits until focus-to-center pan finishes. */
+  const [inspectHudReady, setInspectHudReady] = useState(false);
   const [buildMode, setBuildMode] = useState<{
     fromX: number;
     fromY: number;
@@ -358,6 +375,7 @@ export function GameCanvas({
   } | null>(null);
   const [focusMarks, setFocusMarks] = useState<{ id: string; gx: number; gy: number }[]>([]);
   const focusMarksRef = useRef(focusMarks);
+  const pathPreviewsRef = useRef<Array<Array<{ gx: number; gy: number }>>>([]);
   const [mutualAim, setMutualAim] = useState<string | null>(null);
   const [mutualAimNote, setMutualAimNote] = useState("选择互防伙伴");
   const [enemyLiaison, setEnemyLiaison] = useState<{
@@ -382,6 +400,7 @@ export function GameCanvas({
   const buildModeRef = useRef(buildMode);
   const enemyLiaisonRef = useRef(enemyLiaison);
   const mobilizeRef = useRef(mobilize);
+  const trainUiRef = useRef(trainUi);
   const shiftHintRef = useRef<HTMLDivElement>(null);
   const fireHintRef = useRef<HTMLDivElement>(null);
   const mutualHintRef = useRef<HTMLDivElement>(null);
@@ -451,6 +470,7 @@ export function GameCanvas({
   buildModeRef.current = buildMode;
   enemyLiaisonRef.current = enemyLiaison;
   mobilizeRef.current = mobilize;
+  trainUiRef.current = trainUi;
 
   const onLiaisonKindChange = useCallback((kind: LiaisonKind | null) => {
     setLiaisonKind(kind);
@@ -469,9 +489,20 @@ export function GameCanvas({
     }
   }, []);
 
+  const cancelPendingBuildingFocus = () => {
+    if (pendingBuildingFocusRef.current != null) {
+      clearTimeout(pendingBuildingFocusRef.current);
+      pendingBuildingFocusRef.current = null;
+    }
+  };
+
   const clearSelection = () => {
+    cancelPendingBuildingFocus();
+    cancelCameraAnim();
+    followUnitIdRef.current = null;
     selectionRef.current = null;
     setSelectionUi(null);
+    setInspectHudReady(false);
     setFireAim(null);
     setMutualAim(null);
     setEnemyLiaison(null);
@@ -501,6 +532,54 @@ export function GameCanvas({
     );
   };
 
+  const cancelCameraAnim = () => {
+    if (cameraAnimRef.current != null) {
+      cancelAnimationFrame(cameraAnimRef.current);
+      cameraAnimRef.current = null;
+    }
+    // Same gestures that cancel a focus tween also drop unit camera follow.
+    followUnitIdRef.current = null;
+  };
+
+  /** Animate pan (+ optional zoom) over CAMERA_FOCUS_MS with ease-in-out. */
+  const animateCameraTo = (
+    targetPan: { x: number; y: number },
+    targetZoom: number,
+    onDone?: () => void,
+  ) => {
+    cancelCameraAnim();
+    const fromPan = { ...panRef.current };
+    const fromZoom = zoomRef.current;
+    const dx = targetPan.x - fromPan.x;
+    const dy = targetPan.y - fromPan.y;
+    const dz = targetZoom - fromZoom;
+    if (Math.hypot(dx, dy) < 0.5 && Math.abs(dz) < 1e-4) {
+      panRef.current = targetPan;
+      zoomRef.current = targetZoom;
+      onDone?.();
+      return;
+    }
+    const t0 = performance.now();
+    const step = (now: number) => {
+      const u = Math.min(1, (now - t0) / CAMERA_FOCUS_MS);
+      const e = easeInOutCubic(u);
+      panRef.current = {
+        x: fromPan.x + dx * e,
+        y: fromPan.y + dy * e,
+      };
+      zoomRef.current = fromZoom + dz * e;
+      if (u < 1) {
+        cameraAnimRef.current = requestAnimationFrame(step);
+      } else {
+        cameraAnimRef.current = null;
+        panRef.current = targetPan;
+        zoomRef.current = targetZoom;
+        onDone?.();
+      }
+    };
+    cameraAnimRef.current = requestAnimationFrame(step);
+  };
+
   /** Pan so (gx,gy) lands at a target screen point, then clamp. */
   const panGridToScreen = (gx: number, gy: number, targetX: number, targetY: number) => {
     const m = mapRef.current;
@@ -525,14 +604,150 @@ export function GameCanvas({
     );
   };
 
-  const syncFocus = (id: string, gx: number, gy: number, on: boolean) => {
-    setFocusMarks((cur) => {
-      const without = cur.filter((m) => m.id !== id);
-      return on ? [...without, { id, gx, gy }] : without;
-    });
-    if (!on) return;
+  /** Target pan (clamped) that places (gx,gy) at a screen point with given zoom. */
+  const panForGridAtScreen = (
+    gx: number,
+    gy: number,
+    targetX: number,
+    targetY: number,
+    zoom: number,
+  ) => {
+    const m = mapRef.current;
+    if (!m) return null;
     const { width: w, height: h } = sizeRef.current;
-    panGridToScreen(gx, gy, w / 2, h / 2);
+    const { cell, originX, originY, boardW, boardH } = getBoardLayout(w, h, m);
+    const lx = originX + gx * cell;
+    const ly = originY + gy * cell;
+    const cx = w / 2;
+    const cy = h / 2;
+    return clampPan(
+      {
+        x: targetX - cx - zoom * (lx - cx),
+        y: targetY - cy - zoom * (ly - cy),
+      },
+      w,
+      h,
+      boardW,
+      boardH,
+      zoom,
+    );
+  };
+
+  /** Zoom + pan so all work-range circles (incl. radar) fit in the viewport. */
+  const fitWorkRangeCircles = (
+    circles: readonly { gx: number; gy: number; radiusDu: number }[],
+  ) => {
+    const m = mapRef.current;
+    if (!m || circles.length === 0) return;
+    const { width: w, height: h } = sizeRef.current;
+    const { cell, originX, originY, boardW, boardH } = getBoardLayout(w, h, m);
+    let minGx = Infinity;
+    let maxGx = -Infinity;
+    let minGy = Infinity;
+    let maxGy = -Infinity;
+    for (const c of circles) {
+      minGx = Math.min(minGx, c.gx - c.radiusDu);
+      maxGx = Math.max(maxGx, c.gx + c.radiusDu);
+      minGy = Math.min(minGy, c.gy - c.radiusDu);
+      maxGy = Math.max(maxGy, c.gy + c.radiusDu);
+    }
+    const lx0 = originX + minGx * cell;
+    const ly0 = originY + minGy * cell;
+    const lx1 = originX + maxGx * cell;
+    const ly1 = originY + maxGy * cell;
+    const boxW = Math.max(1, lx1 - lx0);
+    const boxH = Math.max(1, ly1 - ly0);
+    const margin = mapFitMargin(w, h);
+    const zFit = Math.min(
+      MAP_ZOOM_MAX,
+      Math.max(
+        MAP_ZOOM_MIN,
+        Math.min((w - 2 * margin) / boxW, (h - 2 * margin) / boxH),
+      ),
+    );
+    const lcx = (lx0 + lx1) / 2;
+    const lcy = (ly0 + ly1) / 2;
+    const cx = w / 2;
+    const cy = h / 2;
+    const pan = clampPan(
+      {
+        x: -zFit * (lcx - cx),
+        y: -zFit * (lcy - cy),
+      },
+      w,
+      h,
+      boardW,
+      boardH,
+      zFit,
+    );
+    animateCameraTo(pan, zFit);
+  };
+
+  /** Zoom + pan so a march polyline (start, end, and all waypoints) fits the viewport. */
+  const fitPathNodes = (
+    nodes: readonly { gx: number; gy: number }[],
+    onDone?: () => void,
+  ) => {
+    const m = mapRef.current;
+    if (!m || nodes.length === 0) {
+      onDone?.();
+      return;
+    }
+    let minGx = Infinity;
+    let maxGx = -Infinity;
+    let minGy = Infinity;
+    let maxGy = -Infinity;
+    for (const n of nodes) {
+      minGx = Math.min(minGx, n.gx);
+      maxGx = Math.max(maxGx, n.gx);
+      minGy = Math.min(minGy, n.gy);
+      maxGy = Math.max(maxGy, n.gy);
+    }
+    // Keep a usable bbox when start≈end or the path is nearly colinear.
+    const minSpan = 2;
+    if (maxGx - minGx < minSpan) {
+      const mid = (minGx + maxGx) / 2;
+      minGx = mid - minSpan / 2;
+      maxGx = mid + minSpan / 2;
+    }
+    if (maxGy - minGy < minSpan) {
+      const mid = (minGy + maxGy) / 2;
+      minGy = mid - minSpan / 2;
+      maxGy = mid + minSpan / 2;
+    }
+    const pad = 1.5;
+    const { width: w, height: h } = sizeRef.current;
+    const { cell, originX, originY, boardW, boardH } = getBoardLayout(w, h, m);
+    const lx0 = originX + (minGx - pad) * cell;
+    const ly0 = originY + (minGy - pad) * cell;
+    const lx1 = originX + (maxGx + pad) * cell;
+    const ly1 = originY + (maxGy + pad) * cell;
+    const boxW = Math.max(1, lx1 - lx0);
+    const boxH = Math.max(1, ly1 - ly0);
+    const margin = mapFitMargin(w, h);
+    const zFit = Math.min(
+      MAP_ZOOM_MAX,
+      Math.max(
+        MAP_ZOOM_MIN,
+        Math.min((w - 2 * margin) / boxW, (h - 2 * margin) / boxH),
+      ),
+    );
+    const lcx = (lx0 + lx1) / 2;
+    const lcy = (ly0 + ly1) / 2;
+    const cx = w / 2;
+    const cy = h / 2;
+    const pan = clampPan(
+      {
+        x: -zFit * (lcx - cx),
+        y: -zFit * (lcy - cy),
+      },
+      w,
+      h,
+      boardW,
+      boardH,
+      zFit,
+    );
+    animateCameraTo(pan, zFit, onDone);
   };
 
   const closeMobilize = () => {
@@ -595,6 +810,81 @@ export function GameCanvas({
     myPlayerId,
   ]);
 
+  /** Dry-run march polylines for checked mobilize sources / train targets. */
+  const marchPathPreviews = useMemo(() => {
+    const paths: Array<Array<{ gx: number; gy: number }>> = [];
+    if (!map || !terrain || myPlayerId == null) return paths;
+    let n = 0;
+    const ctx = {
+      map,
+      terrain,
+      buildings,
+      liaisons,
+      units,
+      connectedIds: connectedBuildingIds,
+      nextId: () => `preview-${++n}`,
+    };
+    if (
+      mobilize &&
+      mobilize.mode !== "assign" &&
+      !(mobilize.mode === "attack" && mobilize.targetLiaisonId)
+    ) {
+      const base = {
+        ownerId: myPlayerId,
+        gx: mobilize.gx,
+        gy: mobilize.gy,
+        asBlockade: mobilize.mode === "blockade",
+        asSupply: mobilize.mode === "supply",
+        supplyBuildingId: mobilize.supplyBuildingId,
+        asHold: mobilize.mode === "hold",
+        holdBuildingId: mobilize.holdBuildingId,
+        attackTargetUnitId: mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
+        attackTargetBuildingId:
+          mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
+      };
+      for (const [buildingId, u] of Object.entries(mobilize.sources)) {
+        const result = previewUnitMove({ ...base, sources: [{ buildingId, u }] }, ctx);
+        for (const p of result.paths) paths.push(p);
+      }
+      for (const id of mobilize.unitIds) {
+        const result = previewUnitMove({ ...base, unitIds: [id] }, ctx);
+        for (const p of result.paths) paths.push(p);
+      }
+    }
+    if (trainUi) {
+      const source = buildings.find((b) => b.id === trainUi.sourceId);
+      if (source) {
+        for (const tid of trainUi.targetIds) {
+          const target = buildings.find((b) => b.id === tid);
+          if (!target) continue;
+          const result = previewTrainingDeliveryPath(
+            myPlayerId,
+            trainUi.kind,
+            source.gx,
+            source.gy,
+            target.gx,
+            target.gy,
+            target.id,
+            ctx,
+          );
+          if (result.path.length >= 2) paths.push(result.path);
+        }
+      }
+    }
+    return paths;
+  }, [
+    mobilize,
+    trainUi,
+    map,
+    terrain,
+    buildings,
+    liaisons,
+    units,
+    connectedBuildingIds,
+    myPlayerId,
+  ]);
+  pathPreviewsRef.current = marchPathPreviews;
+
   const setSelectionAt = (
     gx: number,
     gy: number,
@@ -604,15 +894,31 @@ export function GameCanvas({
       unitId?: string;
       /** When selecting a unit, pan viewport so it sits center-left. */
       focusCenterLeft?: boolean;
+      /** Animate building/unit to viewport center, then reveal inspect HUD. */
+      focusCenter?: boolean;
     },
   ) => {
     const m = mapRef.current;
     if (!m) return;
     const { width: w, height: h } = sizeRef.current;
     const kind = opts?.kind ?? "point";
-    if (kind === "unit" && opts?.focusCenterLeft) {
-      panGridToScreen(gx, gy, w * UNIT_FOCUS_X_RATIO, h / 2);
+    const useFocusCenter =
+      !!opts?.focusCenter && (kind === "building" || kind === "unit");
+
+    cancelPendingBuildingFocus();
+
+    if (!useFocusCenter) {
+      cancelCameraAnim();
+      if (kind === "unit" && opts?.focusCenterLeft) {
+        setInspectHudReady(true);
+        panGridToScreen(gx, gy, w * UNIT_FOCUS_X_RATIO, h / 2);
+      } else if (kind === "building") {
+        setInspectHudReady(true);
+      } else {
+        setInspectHudReady(false);
+      }
     }
+
     const screen = gridScreenAt(gx, gy);
     if (!screen) return;
     selectionRef.current = kind === "point" ? { gx, gy } : null;
@@ -626,6 +932,178 @@ export function GameCanvas({
       buildingId: opts?.buildingId,
       unitId: opts?.unitId,
     });
+
+    if (useFocusCenter) {
+      setInspectHudReady(false);
+      const startFocusAnim = () => {
+        pendingBuildingFocusRef.current = null;
+        const stillSelected =
+          kind === "building"
+            ? selectionUiRef.current?.kind === "building" &&
+              selectionUiRef.current.buildingId === opts?.buildingId
+            : kind === "unit"
+              ? selectionUiRef.current?.kind === "unit" &&
+                selectionUiRef.current.unitId === opts?.unitId
+              : false;
+        if (!stillSelected) return;
+
+        const targetPan = panForGridAtScreen(gx, gy, w / 2, h / 2, zoomRef.current);
+        if (!targetPan) {
+          if (kind === "unit" && opts?.unitId) followUnitIdRef.current = opts.unitId;
+          setInspectHudReady(true);
+          return;
+        }
+        // animateCameraTo → cancelCameraAnim clears follow; re-enable after settle for units.
+        animateCameraTo(targetPan, zoomRef.current, () => {
+          const stillAfterAnim =
+            kind === "building"
+              ? selectionUiRef.current?.kind === "building" &&
+                selectionUiRef.current.buildingId === opts?.buildingId
+              : kind === "unit"
+                ? selectionUiRef.current?.kind === "unit" &&
+                  selectionUiRef.current.unitId === opts?.unitId
+                : false;
+          if (!stillAfterAnim) {
+            setInspectHudReady(true);
+            return;
+          }
+          const liveGx =
+            kind === "unit" && opts?.unitId
+              ? (unitsRef.current.find((u) => u.id === opts.unitId)?.gx ?? gx)
+              : gx;
+          const liveGy =
+            kind === "unit" && opts?.unitId
+              ? (unitsRef.current.find((u) => u.id === opts.unitId)?.gy ?? gy)
+              : gy;
+          if (kind === "unit" && opts?.unitId) {
+            const { width: cw, height: ch } = sizeRef.current;
+            panGridToScreen(liveGx, liveGy, cw / 2, ch / 2);
+            followUnitIdRef.current = opts.unitId;
+          }
+          const settled = gridScreenAt(liveGx, liveGy);
+          if (!settled) {
+            setInspectHudReady(true);
+            return;
+          }
+          setSelectionUi((cur) => {
+            if (!cur) return cur;
+            if (
+              kind === "building" &&
+              cur.kind === "building" &&
+              cur.buildingId === opts?.buildingId
+            ) {
+              return { ...cur, gx: liveGx, gy: liveGy, screenX: settled.x, screenY: settled.y };
+            }
+            if (kind === "unit" && cur.kind === "unit" && cur.unitId === opts?.unitId) {
+              return { ...cur, gx: liveGx, gy: liveGy, screenX: settled.x, screenY: settled.y };
+            }
+            return cur;
+          });
+          setInspectHudReady(true);
+        });
+      };
+
+      if (kind === "building") {
+        pendingBuildingFocusRef.current = setTimeout(
+          startFocusAnim,
+          BUILDING_FOCUS_DELAY_MS,
+        );
+      } else {
+        startFocusAnim();
+      }
+    }
+  };
+
+  /** Light-cyan ring + path fit + inspect HUD for panel row toggles. */
+  const syncFocus = (
+    id: string,
+    gx: number,
+    gy: number,
+    on: boolean,
+    opts?: {
+      kind: "building" | "unit";
+      buildingId?: string;
+      unitId?: string;
+      /** Planned march polyline; camera fits this instead of centering the building/unit. */
+      path?: Array<{ gx: number; gy: number }> | null;
+    },
+  ) => {
+    setFocusMarks((cur) => {
+      const without = cur.filter((m) => m.id !== id);
+      return on ? [...without, { id, gx, gy }] : without;
+    });
+    if (!on) {
+      const sel = selectionUiRef.current;
+      if (
+        opts?.kind === "building" &&
+        sel?.kind === "building" &&
+        sel.buildingId === opts.buildingId
+      ) {
+        clearSelection();
+      } else if (
+        opts?.kind === "unit" &&
+        sel?.kind === "unit" &&
+        sel.unitId === opts.unitId
+      ) {
+        clearSelection();
+      }
+      return;
+    }
+
+    const path = opts?.path;
+    const revealHud = () => {
+      const liveGx =
+        opts?.kind === "unit" && opts.unitId
+          ? (unitsRef.current.find((u) => u.id === opts.unitId)?.gx ?? gx)
+          : opts?.kind === "building" && opts.buildingId
+            ? (buildingsRef.current.find((b) => b.id === opts.buildingId)?.gx ?? gx)
+            : gx;
+      const liveGy =
+        opts?.kind === "unit" && opts.unitId
+          ? (unitsRef.current.find((u) => u.id === opts.unitId)?.gy ?? gy)
+          : opts?.kind === "building" && opts.buildingId
+            ? (buildingsRef.current.find((b) => b.id === opts.buildingId)?.gy ?? gy)
+            : gy;
+      const settled = gridScreenAt(liveGx, liveGy);
+      if (!settled) {
+        setInspectHudReady(true);
+        return;
+      }
+      setSelectionUi((cur) => {
+        if (!cur) return cur;
+        if (
+          opts?.kind === "building" &&
+          cur.kind === "building" &&
+          cur.buildingId === opts.buildingId
+        ) {
+          return { ...cur, gx: liveGx, gy: liveGy, screenX: settled.x, screenY: settled.y };
+        }
+        if (opts?.kind === "unit" && cur.kind === "unit" && cur.unitId === opts.unitId) {
+          return { ...cur, gx: liveGx, gy: liveGy, screenX: settled.x, screenY: settled.y };
+        }
+        return cur;
+      });
+      setInspectHudReady(true);
+    };
+
+    if (opts?.kind === "building" && opts.buildingId) {
+      setSelectionAt(gx, gy, {
+        kind: "building",
+        buildingId: opts.buildingId,
+      });
+    } else if (opts?.kind === "unit" && opts.unitId) {
+      setSelectionAt(gx, gy, {
+        kind: "unit",
+        unitId: opts.unitId,
+      });
+    }
+
+    if (path && path.length >= 1) {
+      setInspectHudReady(false);
+      fitPathNodes(path, revealHud);
+    } else {
+      setInspectHudReady(true);
+    }
   };
 
   useEffect(() => {
@@ -692,6 +1170,7 @@ export function GameCanvas({
         showEnemyVision: showEnemyVisionRef.current,
         showCommStatus: showCommStatusRef.current,
         focusMarks: focusMarksRef.current,
+        pathPreviews: pathPreviewsRef.current,
         fireAimAt: (() => {
           const id = fireAimRef.current;
           if (!id) return null;
@@ -731,6 +1210,20 @@ export function GameCanvas({
       return { x: clientX - rect.left, y: clientY - rect.top };
     };
 
+    /** Pan / zoom / pinch while mobilize or train panel is open: keep focus + path. */
+    const clearSelectionOnMapGesture = () => {
+      if (mobilizeRef.current != null || trainUiRef.current != null) {
+        cancelPendingBuildingFocus();
+        if (cameraAnimRef.current != null) {
+          cancelAnimationFrame(cameraAnimRef.current);
+          cameraAnimRef.current = null;
+        }
+        followUnitIdRef.current = null;
+        return;
+      }
+      clearSelection();
+    };
+
     const rememberPointer = (clientX: number, clientY: number) => {
       pointerRef.current = toLocal(clientX, clientY);
     };
@@ -752,7 +1245,7 @@ export function GameCanvas({
       const z1 = Math.min(MAP_ZOOM_MAX, Math.max(MAP_ZOOM_MIN, z0 * factor));
       if (z1 === z0) return;
 
-      clearSelection();
+      clearSelectionOnMapGesture();
       panRef.current = panAfterZoomAt(pivot.x, pivot.y, z0, z1, panRef.current, w, h);
       zoomRef.current = z1;
       applyClamp();
@@ -860,7 +1353,7 @@ export function GameCanvas({
       pinchWasActiveRef.current = true;
       dragRef.current = null;
       liaisonSpeedRef.current = null;
-      clearSelection();
+      clearSelectionOnMapGesture();
     };
 
     /** Scale + pan so pinch midpoint stays on the same map point (and follows mid drift). */
@@ -974,7 +1467,7 @@ export function GameCanvas({
       if (d.panGesture) {
         if (!d.moved && Math.hypot(e.clientX - d.ox, e.clientY - d.oy) > CLICK_PX) {
           d.moved = true;
-          clearSelection();
+          clearSelectionOnMapGesture();
         }
         if (!d.moved) return;
         panRef.current = {
@@ -1072,7 +1565,7 @@ export function GameCanvas({
 
       if (!d.moved && Math.hypot(e.clientX - d.ox, e.clientY - d.oy) > CLICK_PX) {
         d.moved = true;
-        clearSelection();
+        clearSelectionOnMapGesture();
       }
       if (!d.moved) return;
       panRef.current = {
@@ -1243,7 +1736,7 @@ export function GameCanvas({
             setSelectionAt(nearUnit.gx, nearUnit.gy, {
               kind: "unit",
               unitId: nearUnit.id,
-              focusCenterLeft: true,
+              focusCenter: true,
             });
             return;
           }
@@ -1253,7 +1746,7 @@ export function GameCanvas({
               setSelectionAt(near.gx, near.gy, {
                 kind: "building",
                 buildingId: near.id,
-                focusCenterLeft: true,
+                focusCenter: true,
               });
             }
             return;
@@ -1423,6 +1916,7 @@ export function GameCanvas({
             setSelectionAt(near.gx, near.gy, {
               kind: "building",
               buildingId: near.id,
+              focusCenter: true,
             });
             return;
           }
@@ -1569,7 +2063,16 @@ export function GameCanvas({
       e.preventDefault();
       mini.setPointerCapture(e.pointerId);
       dragRef.current = null;
-      clearSelection();
+      if (mobilizeRef.current != null || trainUiRef.current != null) {
+        cancelPendingBuildingFocus();
+        if (cameraAnimRef.current != null) {
+          cancelAnimationFrame(cameraAnimRef.current);
+          cameraAnimRef.current = null;
+        }
+        followUnitIdRef.current = null;
+      } else {
+        clearSelection();
+      }
       miniDragRef.current = {
         grabDu: p.x / miniW - box.uc,
         grabDv: p.y / miniH - box.vc,
@@ -1839,13 +2342,17 @@ export function GameCanvas({
     }
   }, [buildings, selectionUi?.buildingId]);
 
-  // Keep unit inspect HUD on the moving unit (no re-pan after initial focus)
+  // Keep unit inspect HUD on the moving unit; camera follows while followUnitIdRef is set
   useEffect(() => {
     if (!selectionUi || selectionUi.kind !== "unit" || !selectionUi.unitId) return;
     const live = units.find((u) => u.id === selectionUi.unitId);
     if (!live) {
       clearSelection();
       return;
+    }
+    if (followUnitIdRef.current === live.id) {
+      const { width: w, height: h } = sizeRef.current;
+      panGridToScreen(live.gx, live.gy, w / 2, h / 2);
     }
     const screen = gridScreenAt(live.gx, live.gy);
     if (!screen) return;
@@ -2026,13 +2533,7 @@ export function GameCanvas({
       if (e.code === "KeyE") {
         e.preventDefault();
         if (buildModeRef.current && liaisonEditActiveRef.current) {
-          setLiaisonKind(null);
-          setLiaisonDraft(null);
-          setLiaisonAwaitConfirm(false);
-          setLiaisonDemolishId(null);
-          setLiaisonEditActive(false);
-          setLiaisonLocalError(null);
-          setBuildMode(null);
+          // BuildModeOverlay handles E→close with liaison exit animation.
           return;
         }
         if (buildModeRef.current) {
@@ -2151,6 +2652,7 @@ export function GameCanvas({
       {selectionUi &&
         selectionUi.kind === "building" &&
         inspectedBuilding &&
+        inspectHudReady &&
         !buildMode &&
         !fireAim &&
         (phase === "playing" || phase === "spectating" || phase === "ended") && (
@@ -2247,7 +2749,17 @@ export function GameCanvas({
               }
               if (action === "fire") {
                 setFireAimNote("选择目标");
-                setFireAim((cur) => (cur === b.id ? null : b.id));
+                if (fireAim === b.id) {
+                  setFireAim(null);
+                } else {
+                  setFireAim(b.id);
+                  const circles = workRangeCircles(
+                    b,
+                    buildings,
+                    connectedBuildingIds,
+                  );
+                  if (circles.length > 0) fitWorkRangeCircles(circles);
+                }
                 return;
               }
               if (action === "repair") {
@@ -2319,6 +2831,7 @@ export function GameCanvas({
                 return;
               }
               if (action === "train") {
+                setFocusMarks([]);
                 setTrainUi({
                   sourceId: b.id,
                   kind: "infantry",
@@ -2345,6 +2858,7 @@ export function GameCanvas({
       {selectionUi &&
         selectionUi.kind === "unit" &&
         inspectedUnit &&
+        inspectHudReady &&
         !buildMode &&
         (phase === "playing" || phase === "spectating" || phase === "ended") && (
           <UnitInspectHud
@@ -2450,7 +2964,56 @@ export function GameCanvas({
           onToggleSource={(buildingId, u) => {
             const turningOn = mobilize.sources[buildingId] == null;
             const b = buildings.find((x) => x.id === buildingId);
-            if (b) syncFocus(`b:${buildingId}`, b.gx, b.gy, turningOn);
+            let path: Array<{ gx: number; gy: number }> | null = null;
+            if (
+              turningOn &&
+              b &&
+              map &&
+              terrain &&
+              myPlayerId != null &&
+              mobilize.mode !== "assign" &&
+              !(mobilize.mode === "attack" && mobilize.targetLiaisonId)
+            ) {
+              let n = 0;
+              const result = previewUnitMove(
+                {
+                  ownerId: myPlayerId,
+                  gx: mobilize.gx,
+                  gy: mobilize.gy,
+                  sources: [{ buildingId, u }],
+                  asBlockade: mobilize.mode === "blockade",
+                  asSupply: mobilize.mode === "supply",
+                  supplyBuildingId: mobilize.supplyBuildingId,
+                  asHold: mobilize.mode === "hold",
+                  holdBuildingId: mobilize.holdBuildingId,
+                  attackTargetUnitId:
+                    mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
+                  attackTargetBuildingId:
+                    mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
+                },
+                {
+                  map,
+                  terrain,
+                  buildings,
+                  liaisons,
+                  units,
+                  connectedIds: connectedBuildingIds,
+                  nextId: () => `preview-${++n}`,
+                },
+              );
+              path =
+                result.paths[0] ??
+                [
+                  { gx: b.gx, gy: b.gy },
+                  { gx: mobilize.gx, gy: mobilize.gy },
+                ];
+            }
+            if (b)
+              syncFocus(`b:${buildingId}`, b.gx, b.gy, turningOn, {
+                kind: "building",
+                buildingId,
+                path,
+              });
             setMobilize((cur) => {
               if (!cur) return cur;
               const next = { ...cur.sources };
@@ -2462,7 +3025,56 @@ export function GameCanvas({
           onToggleUnit={(id) => {
             const turningOn = !mobilize.unitIds.includes(id);
             const u = units.find((x) => x.id === id);
-            if (u) syncFocus(`u:${id}`, u.gx, u.gy, turningOn);
+            let path: Array<{ gx: number; gy: number }> | null = null;
+            if (
+              turningOn &&
+              u &&
+              map &&
+              terrain &&
+              myPlayerId != null &&
+              mobilize.mode !== "assign" &&
+              !(mobilize.mode === "attack" && mobilize.targetLiaisonId)
+            ) {
+              let n = 0;
+              const result = previewUnitMove(
+                {
+                  ownerId: myPlayerId,
+                  gx: mobilize.gx,
+                  gy: mobilize.gy,
+                  unitIds: [id],
+                  asBlockade: mobilize.mode === "blockade",
+                  asSupply: mobilize.mode === "supply",
+                  supplyBuildingId: mobilize.supplyBuildingId,
+                  asHold: mobilize.mode === "hold",
+                  holdBuildingId: mobilize.holdBuildingId,
+                  attackTargetUnitId:
+                    mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
+                  attackTargetBuildingId:
+                    mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
+                },
+                {
+                  map,
+                  terrain,
+                  buildings,
+                  liaisons,
+                  units,
+                  connectedIds: connectedBuildingIds,
+                  nextId: () => `preview-${++n}`,
+                },
+              );
+              path =
+                result.paths[0] ??
+                [
+                  { gx: u.gx, gy: u.gy },
+                  { gx: mobilize.gx, gy: mobilize.gy },
+                ];
+            }
+            if (u)
+              syncFocus(`u:${id}`, u.gx, u.gy, turningOn, {
+                kind: "unit",
+                unitId: id,
+                path,
+              });
             setMobilize((cur) => {
               if (!cur) return cur;
               const has = cur.unitIds.includes(id);
@@ -2591,11 +3203,50 @@ export function GameCanvas({
             kind={trainUi.kind}
             u={trainUi.u}
             targetIds={trainUi.targetIds}
-            onKind={(kind) =>
-              setTrainUi((cur) => (cur ? { ...cur, kind, targetIds: [] } : cur))
-            }
+            onKind={(kind) => {
+              setFocusMarks([]);
+              setTrainUi((cur) => (cur ? { ...cur, kind, targetIds: [] } : cur));
+            }}
             onU={(u) => setTrainUi((cur) => (cur ? { ...cur, u } : cur))}
-            onToggleTarget={(id) =>
+            onToggleTarget={(id) => {
+              const turningOn = !trainUi.targetIds.includes(id);
+              const b = buildings.find((x) => x.id === id);
+              const source = buildings.find((x) => x.id === trainUi.sourceId);
+              let path: Array<{ gx: number; gy: number }> | null = null;
+              if (turningOn && b && source && map && terrain && myPlayerId != null) {
+                let n = 0;
+                const result = previewTrainingDeliveryPath(
+                  myPlayerId,
+                  trainUi.kind,
+                  source.gx,
+                  source.gy,
+                  b.gx,
+                  b.gy,
+                  b.id,
+                  {
+                    map,
+                    terrain,
+                    buildings,
+                    liaisons,
+                    units,
+                    connectedIds: connectedBuildingIds,
+                    nextId: () => `preview-${++n}`,
+                  },
+                );
+                path =
+                  result.path.length >= 1
+                    ? result.path
+                    : [
+                        { gx: source.gx, gy: source.gy },
+                        { gx: b.gx, gy: b.gy },
+                      ];
+              }
+              if (b)
+                syncFocus(`t:${id}`, b.gx, b.gy, turningOn, {
+                  kind: "building",
+                  buildingId: id,
+                  path,
+                });
               setTrainUi((cur) => {
                 if (!cur) return cur;
                 const on = cur.targetIds.includes(id);
@@ -2603,17 +3254,17 @@ export function GameCanvas({
                   ? cur.targetIds.filter((x) => x !== id)
                   : [...cur.targetIds, id];
                 const maxU = targetIds.reduce((sum, tid) => {
-                  const b = buildings.find((x) => x.id === tid);
-                  if (!b) return sum;
-                  return sum + availableTrainingRoom(b, buildings, units);
+                  const tb = buildings.find((x) => x.id === tid);
+                  if (!tb) return sum;
+                  return sum + availableTrainingRoom(tb, buildings, units);
                 }, 0);
                 return {
                   ...cur,
                   targetIds,
                   u: maxU >= 1 ? maxU : cur.u,
                 };
-              })
-            }
+              });
+            }}
             onGo={(amount) => {
               if (trainUi.targetIds.length === 0) {
                 logLocalReject({
@@ -2629,10 +3280,14 @@ export function GameCanvas({
                 u: amount,
                 targetIds: trainUi.targetIds,
               });
+              setFocusMarks([]);
               setTrainUi(null);
               clearSelection();
             }}
-            onClose={() => setTrainUi(null)}
+            onClose={() => {
+              setFocusMarks([]);
+              setTrainUi(null);
+            }}
           />
         );
       })()}

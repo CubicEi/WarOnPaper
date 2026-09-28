@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   useCallback,
+  type CSSProperties,
 } from "react";
 import {
   extractSettlementSpine,
@@ -23,6 +24,8 @@ interface Props {
   currentLabel: string;
   /** null = 空地，用于区分建造 / 升级耗时规则 */
   currentBuildingId?: string | null;
+  /** When true, reverse BFS hide (~0.5s) before the overlay unmounts. */
+  exiting?: boolean;
   onSelect?: (building: BuildingDef) => void;
 }
 
@@ -45,7 +48,45 @@ type GraphNode = {
 
 type Edge = { from: string; to: string };
 
+type WirePath = { key: string; d: string; revealIndex: number };
+
 type Pos = { x: number; y: number };
+
+/** Whole-tree reveal/hide finishes in this window (last node delay + anim). */
+export const BUILD_TREE_REVEAL_MS = 500;
+/** Per-node fade duration — keep in sync with `.spine-node-reveal/hide` in styles.css. */
+const REVEAL_ANIM_MS = 360;
+
+/**
+ * BFS order from `__origin__` so the tree gradually appears along edges.
+ * Index 0 = current building / empty land; children follow tree adjacency.
+ */
+function computeRevealOrder(nodes: GraphNode[], edges: Edge[]): Map<string, number> {
+  const children = new Map<string, string[]>();
+  for (const e of edges) {
+    const list = children.get(e.from) ?? [];
+    if (!list.includes(e.to)) list.push(e.to);
+    children.set(e.from, list);
+  }
+
+  const order = new Map<string, number>();
+  const queue: string[] = ["__origin__"];
+  order.set("__origin__", 0);
+
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    for (const child of children.get(id) ?? []) {
+      if (order.has(child)) continue;
+      order.set(child, order.size);
+      queue.push(child);
+    }
+  }
+
+  for (const n of nodes) {
+    if (!order.has(n.id)) order.set(n.id, order.size);
+  }
+  return order;
+}
 
 const LONG_CHAIN_ROOT_IDS = new Set([
   "gun",
@@ -558,6 +599,7 @@ function SettlementSpineView({
   spine,
   axis,
   fromBuildingId,
+  exiting = false,
   onSelect,
 }: {
   currentLabel: string;
@@ -565,6 +607,7 @@ function SettlementSpineView({
   spine: SettlementSpineSeg[];
   axis: Axis;
   fromBuildingId: string | null;
+  exiting?: boolean;
   onSelect?: (building: BuildingDef) => void;
 }) {
   const { nodes, edges } = useMemo(
@@ -572,13 +615,31 @@ function SettlementSpineView({
     [currentLabel, originBranches, spine],
   );
 
+  const revealOrder = useMemo(
+    () => computeRevealOrder(nodes, edges),
+    [nodes, edges],
+  );
+  const revealMaxIndex = useMemo(() => {
+    let max = 0;
+    for (const i of revealOrder.values()) if (i > max) max = i;
+    return max;
+  }, [revealOrder]);
+  /** Enter: origin→leaves. Exit: leaves→origin (reverse BFS). */
+  const staggerDelayMs = (index: number) => {
+    if (revealMaxIndex <= 0) return 0;
+    const span = BUILD_TREE_REVEAL_MS - REVEAL_ANIM_MS;
+    const orderIndex = exiting ? revealMaxIndex - index : index;
+    return (orderIndex / revealMaxIndex) * span;
+  };
+  const phaseClass = exiting ? "spine-hide" : "spine-reveal";
+
   const layout = useMemo(
     () => computePositions(axis, originBranches, spine),
     [axis, originBranches, spine],
   );
 
   const canvasRef = useRef<HTMLDivElement>(null);
-  const [paths, setPaths] = useState<string[]>([]);
+  const [paths, setPaths] = useState<WirePath[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const measure = useCallback(() => {
@@ -599,8 +660,13 @@ function SettlementSpineView({
     });
 
     const R = 24;
-    const next: string[] = [];
+    const next: WirePath[] = [];
+    const seen = new Set<string>();
     for (const e of edges) {
+      const key = `${e.from}->${e.to}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
       const a = centers.get(e.from);
       const b = centers.get(e.to);
       if (!a || !b) continue;
@@ -609,10 +675,15 @@ function SettlementSpineView({
       const y1 = a.y;
       const x2 = b.x;
       const y2 = b.y;
+      const revealIndex = revealOrder.get(e.to) ?? 0;
 
       if (Math.abs(x1 - x2) < 0.5 || Math.abs(y1 - y2) < 0.5) {
         const c = clipToIcon(x1, y1, x2, y2, R);
-        next.push(`M ${c.x1} ${c.y1} L ${c.x2} ${c.y2}`);
+        next.push({
+          key,
+          d: `M ${c.x1} ${c.y1} L ${c.x2} ${c.y2}`,
+          revealIndex,
+        });
         continue;
       }
 
@@ -620,10 +691,14 @@ function SettlementSpineView({
       const cy = axis === "horizontal" ? y1 : y2;
       const from = clipToIcon(x1, y1, cx, cy, R);
       const to = clipToIcon(cx, cy, x2, y2, R);
-      next.push(`M ${from.x1} ${from.y1} L ${cx} ${cy} L ${to.x2} ${to.y2}`);
+      next.push({
+        key,
+        d: `M ${from.x1} ${from.y1} L ${cx} ${cy} L ${to.x2} ${to.y2}`,
+        revealIndex,
+      });
     }
     setPaths(next);
-  }, [edges, axis]);
+  }, [edges, axis, revealOrder]);
 
   useLayoutEffect(() => {
     measure();
@@ -669,8 +744,17 @@ function SettlementSpineView({
           height={layout.height}
           aria-hidden
         >
-          {paths.map((d, i) => (
-            <path key={i} d={d} className="spine-wire" />
+          {paths.map((p) => (
+            <path
+              key={p.key}
+              d={p.d}
+              className={`spine-wire ${phaseClass}`}
+              style={
+                {
+                  "--reveal-delay": `${staggerDelayMs(p.revealIndex)}ms`,
+                } as CSSProperties
+              }
+            />
           ))}
         </svg>
 
@@ -679,11 +763,20 @@ function SettlementSpineView({
           if (!cell) return null;
           const { left, top } = toPx(cell);
           const selected = selectedId === n.id;
+          const revealIndex = revealOrder.get(n.id) ?? 0;
           return (
             <div
               key={n.id}
-              className={`spine-node${selected ? " is-selected" : ""}`}
-              style={{ left, top, width: CELL_X, height: CELL_Y }}
+              className={`spine-node ${phaseClass}${selected ? " is-selected" : ""}`}
+              style={
+                {
+                  left,
+                  top,
+                  width: CELL_X,
+                  height: CELL_Y,
+                  "--reveal-delay": `${staggerDelayMs(revealIndex)}ms`,
+                } as CSSProperties
+              }
             >
               {n.building ? (
                 <BuildingCard
@@ -711,12 +804,14 @@ function ForestFallback({
   currentLabel,
   axis,
   fromBuildingId,
+  exiting,
   onSelect,
 }: {
   roots: BuildTreeNode[];
   currentLabel: string;
   axis: Axis;
   fromBuildingId: string | null;
+  exiting?: boolean;
   onSelect?: (building: BuildingDef) => void;
 }) {
   return (
@@ -726,6 +821,7 @@ function ForestFallback({
       spine={[]}
       axis={axis}
       fromBuildingId={fromBuildingId}
+      exiting={exiting}
       onSelect={onSelect}
     />
   );
@@ -735,6 +831,7 @@ export function BuildTreePanel({
   roots,
   currentLabel,
   currentBuildingId = null,
+  exiting = false,
   onSelect,
 }: Props) {
   const axis = useLongerAxis();
@@ -742,9 +839,13 @@ export function BuildTreePanel({
 
   return (
     <div
-      className={`build-tree-panel${settlement ? ` build-tree-panel-spine-${axis === "horizontal" ? "h" : "v"}` : ""}`}
+      className={`build-tree-panel${settlement ? ` build-tree-panel-spine-${axis === "horizontal" ? "h" : "v"}` : ""}${exiting ? " is-exiting" : ""}`}
     >
-      <div className="build-tree-root-label">从「{currentLabel}」可建造 / 升级</div>
+      <div
+        className={`build-tree-root-label${exiting ? " is-hiding" : ""}`}
+      >
+        从「{currentLabel}」可建造 / 升级
+      </div>
       {roots.length === 0 ? (
         <div className="build-tree-empty">此处没有可建造的建筑</div>
       ) : settlement ? (
@@ -754,6 +855,7 @@ export function BuildTreePanel({
           spine={settlement.spine}
           axis={axis}
           fromBuildingId={currentBuildingId}
+          exiting={exiting}
           onSelect={onSelect}
         />
       ) : (
@@ -762,6 +864,7 @@ export function BuildTreePanel({
           currentLabel={currentLabel}
           axis={axis}
           fromBuildingId={currentBuildingId}
+          exiting={exiting}
           onSelect={onSelect}
         />
       )}

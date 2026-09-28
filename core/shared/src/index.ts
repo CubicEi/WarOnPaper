@@ -584,6 +584,8 @@ export {
   stepCommWave,
   remainingDuOnMedium,
   isBuildingCommsLinked,
+  undirectedCommEdgeKey,
+  collectCommUsedEdges,
 } from "./buildings/comm.js";
 
 export type { UnitKind, UnitKindDef, UnitState } from "./units/catalog.js";
@@ -686,6 +688,7 @@ export {
   applyEndBlockade,
   applyAssignHome,
   previewUnitMove,
+  previewTrainingDeliveryPath,
   isAirKind,
 } from "./units/orders.js";
 export type {

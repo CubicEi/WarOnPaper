@@ -22,6 +22,7 @@ import {
 import { attackOrganizationCost } from "./combat.js";
 import { applyAirHitAndRunStrike, findHoldCoordOutside, isBuildingHeld } from "./fight.js";
 import {
+  createUnitGroup,
   deployFromBuilding,
   releaseAwayOccupation,
   returnToBuilding,
@@ -1455,6 +1456,8 @@ export function previewUnitMove(
   travelTimeSec: number;
   organizationCost: number;
   energyCost: number;
+  /** Planned polylines for each group that received a path (UI preview). */
+  paths: Array<Array<{ gx: number; gy: number }>>;
 } {
   const result = applyUnitMove(req, ctx);
   // #region agent log
@@ -1496,13 +1499,75 @@ export function previewUnitMove(
     }
   }
   // #endregion
+  const paths: Array<Array<{ gx: number; gy: number }>> = [];
+  if (result.ok) {
+    for (const u of result.units) {
+      if (u.path && u.path.length >= 2) paths.push(u.path.map((p) => ({ ...p })));
+    }
+  }
   return {
     ok: result.ok,
     error: result.error,
     travelTimeSec: result.travelTimeSec,
     organizationCost: result.ok ? result.organizationCost : 0,
     energyCost: result.ok ? result.energyCost : 0,
+    paths,
   };
+}
+
+/**
+ * Dry-run training delivery path from a training ground to a target building.
+ * Uses the same planner flags as server completion (`asTrainingDelivery`).
+ */
+export function previewTrainingDeliveryPath(
+  ownerId: string,
+  kind: UnitKind,
+  fromGx: number,
+  fromGy: number,
+  toGx: number,
+  toGy: number,
+  depositBuildingId: string,
+  ctx: MoveContext,
+): { ok: boolean; error?: string; path: Array<{ gx: number; gy: number }> } {
+  const tempId = "__train_preview__";
+  const unit = createUnitGroup({
+    id: tempId,
+    ownerId,
+    kind,
+    u: 1,
+    gx: fromGx,
+    gy: fromGy,
+    homeBuildingId: depositBuildingId,
+  });
+  const result = applyUnitMove(
+    {
+      ownerId,
+      gx: toGx,
+      gy: toGy,
+      unitIds: [tempId],
+      asTrainingDelivery: true,
+      depositOnArrival: true,
+      depositBuildingId,
+    },
+    {
+      ...ctx,
+      units: [...ctx.units, unit],
+    },
+  );
+  if (!result.ok) {
+    return { ok: false, error: result.error, path: [] };
+  }
+  const moved = result.units.find((u) => u.id === tempId);
+  if (moved?.path && moved.path.length >= 2) {
+    return { ok: true, path: moved.path.map((p) => ({ ...p })) };
+  }
+  // Already at destination (immediate deposit) or path collapsed: show endpoints.
+  const start = snapToUnitCoord(fromGx, fromGy);
+  const end = snapToUnitCoord(toGx, toGy);
+  if (unitCoordKey(start.gx, start.gy) === unitCoordKey(end.gx, end.gy)) {
+    return { ok: true, path: [start] };
+  }
+  return { ok: true, path: [start, end] };
 }
 
 export function isAirKind(kind: UnitKind): boolean {

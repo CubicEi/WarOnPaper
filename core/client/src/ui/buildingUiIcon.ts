@@ -1,8 +1,9 @@
 /**
  * Catalog icons live under `/icons/buildings/...` (own / white).
  * Build-menu UI uses black; enemy buildings on the map use orange.
+ * Comm-status advanced view: online (teal) / offline (red).
  */
-export type BuildingIconVariant = "own" | "enemy" | "ui";
+export type BuildingIconVariant = "own" | "enemy" | "ui" | "online" | "offline";
 
 export function buildingIconSrc(
   catalogIcon: string,
@@ -14,6 +15,12 @@ export function buildingIconSrc(
   }
   if (variant === "ui") {
     return catalogIcon.replace("/icons/buildings/", "/icons/buildings - black/");
+  }
+  if (variant === "online") {
+    return catalogIcon.replace("/icons/buildings/", "/icons/buildings - online/");
+  }
+  if (variant === "offline") {
+    return catalogIcon.replace("/icons/buildings/", "/icons/buildings - offline/");
   }
   return catalogIcon;
 }

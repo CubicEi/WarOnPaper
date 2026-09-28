@@ -1420,6 +1420,10 @@ body,
   pointer-events: auto;
 }
 
+.liaison-panel.is-exiting {
+  pointer-events: none;
+}
+
 .liaison-line-list {
   display: flex;
   flex-direction: column;
@@ -1440,6 +1444,14 @@ body,
   color: #1a1a1a;
   cursor: pointer;
   text-align: left;
+}
+
+.liaison-line-btn.is-entering {
+  animation: liaison-btn-enter 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.liaison-line-btn.is-exiting {
+  animation: liaison-btn-exit 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .liaison-line-btn:hover {
@@ -1491,6 +1503,14 @@ body,
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
 }
 
+.liaison-info-panel.is-entering {
+  animation: liaison-btn-enter 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.liaison-info-panel.is-exiting {
+  animation: liaison-btn-exit 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
 .liaison-info-title {
   font-size: 16px;
   font-weight: 700;
@@ -1526,6 +1546,44 @@ body,
   font-size: 12px;
   line-height: 1.4;
   color: rgba(242, 239, 232, 0.75);
+}
+
+@keyframes liaison-btn-enter {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes liaison-btn-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liaison-line-btn.is-entering,
+  .liaison-line-btn.is-exiting,
+  .liaison-info-panel.is-entering,
+  .liaison-info-panel.is-exiting {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .liaison-line-btn.is-exiting,
+  .liaison-info-panel.is-exiting {
+    opacity: 0;
+  }
 }
 
 .liaison-confirm-bar {
@@ -1636,6 +1694,15 @@ body,
   color: #f2efe8;
   letter-spacing: 0.04em;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.7);
+  animation: build-tree-label-reveal 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.build-tree-root-label.is-hiding {
+  animation: build-tree-label-hide 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.build-tree-panel.is-exiting {
+  pointer-events: none;
 }
 
 .build-tree-empty {
@@ -1678,6 +1745,18 @@ body,
   stroke-linejoin: round;
 }
 
+.spine-wire.spine-reveal {
+  opacity: 0;
+  animation: spine-wire-reveal 0.32s ease-out both;
+  animation-delay: var(--reveal-delay, 0ms);
+}
+
+.spine-wire.spine-hide {
+  opacity: 1;
+  animation: spine-wire-hide 0.32s ease-in both;
+  animation-delay: var(--reveal-delay, 0ms);
+}
+
 .spine-node {
   position: absolute;
   display: flex;
@@ -1688,8 +1767,101 @@ body,
   padding: 2px;
 }
 
+.spine-node.spine-reveal {
+  opacity: 0;
+  animation: spine-node-reveal 0.36s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--reveal-delay, 0ms);
+}
+
+.spine-node.spine-hide {
+  opacity: 1;
+  animation: spine-node-hide 0.36s cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: var(--reveal-delay, 0ms);
+}
+
 .spine-node.is-selected {
   z-index: 5;
+}
+
+@keyframes build-tree-label-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes build-tree-label-hide {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+@keyframes spine-node-reveal {
+  from {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes spine-node-hide {
+  from {
+    opacity: 1;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.72);
+  }
+}
+
+@keyframes spine-wire-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes spine-wire-hide {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .build-tree-root-label,
+  .build-tree-root-label.is-hiding,
+  .spine-node.spine-reveal,
+  .spine-node.spine-hide,
+  .spine-wire.spine-reveal,
+  .spine-wire.spine-hide {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+
+  .build-tree-root-label.is-hiding,
+  .spine-node.spine-hide,
+  .spine-wire.spine-hide {
+    opacity: 0;
+  }
 }
 
 .build-tree-card-wrap {

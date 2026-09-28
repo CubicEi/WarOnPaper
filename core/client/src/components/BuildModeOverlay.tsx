@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   getBuildTree,
   BUILDING_BY_ID,
@@ -8,9 +8,12 @@ import {
   type LiaisonKind,
 } from "@wop/shared";
 import { buildingUiIcon } from "../ui/buildingUiIcon";
-import { BuildTreePanel } from "./BuildTreePanel";
+import { BuildTreePanel, BUILD_TREE_REVEAL_MS } from "./BuildTreePanel";
 
 const BUILD_ICON = "/icons/symbol/operation/build.png";
+
+/** Liaison button enter/exit — keep in sync with `.liaison-line-btn` anim in styles.css. */
+const LIAISON_BTN_ANIM_MS = 300;
 
 const LIAISON_ICONS: Record<LiaisonKind, string> = {
   fiber: buildingUiIcon("/icons/buildings/transport/fiber.png"),
@@ -46,6 +49,13 @@ interface Props {
   onLiaisonEditActiveChange?: (active: boolean) => void;
 }
 
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window !== "undefined" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
 /**
  * Build mode: dim fullscreen, fly build icon to top-left with label, X to exit,
  * and show upgrade tree from current building / empty land.
@@ -68,6 +78,14 @@ export function BuildModeOverlay({
   const [docked, setDocked] = useState(false);
   const [mode, setMode] = useState<BuildOverlayMode>(initialMode);
   const [selectedLiaison, setSelectedLiaison] = useState<LiaisonKind | null>(null);
+  /** Reverse-hide build tree, then call onClose. */
+  const [treeExiting, setTreeExiting] = useState(false);
+  /** Keep liaison chrome mounted through exit fade. */
+  const [liaisonMounted, setLiaisonMounted] = useState(initialMode === "liaison");
+  const [liaisonExiting, setLiaisonExiting] = useState(false);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const liaisonTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closingRef = useRef(false);
 
   // Building on an artificial island: same layout as empty land, but limited to
   // small/medium buildings and excluding sea-only structures.
@@ -92,6 +110,20 @@ export function BuildModeOverlay({
     [selectedLiaison],
   );
 
+  const clearCloseTimer = useCallback(() => {
+    if (closeTimerRef.current != null) {
+      clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+  }, []);
+
+  const clearLiaisonTimer = useCallback(() => {
+    if (liaisonTimerRef.current != null) {
+      clearTimeout(liaisonTimerRef.current);
+      liaisonTimerRef.current = null;
+    }
+  }, []);
+
   useEffect(() => {
     const id = requestAnimationFrame(() => {
       requestAnimationFrame(() => setDocked(true));
@@ -111,14 +143,70 @@ export function BuildModeOverlay({
     return () => {
       onLiaisonKindChange?.(null);
       onLiaisonEditActiveChange?.(false);
+      clearCloseTimer();
+      clearLiaisonTimer();
     };
-  }, [onLiaisonKindChange, onLiaisonEditActiveChange]);
+  }, [onLiaisonKindChange, onLiaisonEditActiveChange, clearCloseTimer, clearLiaisonTimer]);
+
+  const enterLiaisonMode = useCallback(() => {
+    clearLiaisonTimer();
+    setMode("liaison");
+    setSelectedLiaison(null);
+    setLiaisonExiting(false);
+    setLiaisonMounted(true);
+  }, [clearLiaisonTimer]);
+
+  const leaveLiaisonMode = useCallback(() => {
+    if (liaisonExiting || !liaisonMounted) {
+      setMode("buildings");
+      setSelectedLiaison(null);
+      setLiaisonMounted(false);
+      setLiaisonExiting(false);
+      return;
+    }
+    const ms = prefersReducedMotion() ? 0 : LIAISON_BTN_ANIM_MS;
+    setLiaisonExiting(true);
+    // Stay in liaison mode until chrome finishes fading so map edit stays active.
+    clearLiaisonTimer();
+    liaisonTimerRef.current = setTimeout(() => {
+      liaisonTimerRef.current = null;
+      setMode("buildings");
+      setSelectedLiaison(null);
+      setLiaisonMounted(false);
+      setLiaisonExiting(false);
+    }, ms);
+  }, [clearLiaisonTimer, liaisonExiting, liaisonMounted]);
 
   useEffect(() => {
     if (!enterLiaisonNonce) return;
-    setMode("liaison");
-    setSelectedLiaison(null);
-  }, [enterLiaisonNonce]);
+    enterLiaisonMode();
+  }, [enterLiaisonNonce, enterLiaisonMode]);
+
+  const requestClose = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    clearCloseTimer();
+    clearLiaisonTimer();
+
+    const reduced = prefersReducedMotion();
+
+    if (mode === "liaison" || liaisonMounted) {
+      setLiaisonExiting(true);
+      const ms = reduced ? 0 : LIAISON_BTN_ANIM_MS;
+      closeTimerRef.current = setTimeout(() => {
+        closeTimerRef.current = null;
+        onClose();
+      }, ms);
+      return;
+    }
+
+    setTreeExiting(true);
+    const ms = reduced ? 0 : BUILD_TREE_REVEAL_MS;
+    closeTimerRef.current = setTimeout(() => {
+      closeTimerRef.current = null;
+      onClose();
+    }, ms);
+  }, [clearCloseTimer, clearLiaisonTimer, mode, liaisonMounted, onClose]);
 
   useEffect(() => {
     const typing = (target: EventTarget | null) => {
@@ -140,15 +228,28 @@ export function BuildModeOverlay({
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (mode === "liaison") {
-          setMode("buildings");
-          setSelectedLiaison(null);
+        if (mode === "liaison" && !closingRef.current) {
+          leaveLiaisonMode();
           return;
         }
-        onClose();
+        requestClose();
         return;
       }
-      if (mode !== "liaison") return;
+      if (
+        e.code === "KeyE" &&
+        mode === "liaison" &&
+        !e.repeat &&
+        !e.ctrlKey &&
+        !e.altKey &&
+        !e.metaKey &&
+        !e.shiftKey &&
+        !typing(e.target)
+      ) {
+        e.preventDefault();
+        requestClose();
+        return;
+      }
+      if (mode !== "liaison" || liaisonExiting) return;
       if (e.repeat || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
       if (typing(e.target)) return;
       const kind = LIAISON_HOTKEYS[e.code];
@@ -158,22 +259,22 @@ export function BuildModeOverlay({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, mode]);
-
-  const enterLiaison = () => {
-    setMode("liaison");
-    setSelectedLiaison(null);
-  };
+  }, [requestClose, leaveLiaisonMode, mode, liaisonExiting]);
 
   const pickLiaison = (id: LiaisonKind) => {
+    if (liaisonExiting) return;
     setSelectedLiaison((prev) => (prev === id ? null : id));
   };
+
+  const showBuildTree = docked && mode === "buildings" && !liaisonMounted;
+  const showLiaisonPanel = docked && liaisonMounted;
+  const liaisonBtnPhase = liaisonExiting ? "is-exiting" : "is-entering";
 
   return (
     <div
       className={`build-mode${mode === "liaison" ? " is-liaison" : ""}${
         mode === "liaison" && selectedLiaison ? " has-liaison-pick" : ""
-      }`}
+      }${treeExiting || liaisonExiting ? " is-closing" : ""}`}
       role="dialog"
       aria-label={mode === "liaison" ? "编辑联络线" : "建造"}
     >
@@ -197,13 +298,14 @@ export function BuildModeOverlay({
         </span>
       </div>
       <div className="build-mode-top-actions">
-        {mode === "buildings" ? (
+        {mode === "buildings" && !liaisonMounted ? (
           <button
             type="button"
             className="build-mode-liaison-btn"
             aria-label="编辑联络线"
             title="编辑联络线"
-            onClick={enterLiaison}
+            disabled={treeExiting}
+            onClick={enterLiaisonMode}
           >
             编辑联络线
           </button>
@@ -213,10 +315,8 @@ export function BuildModeOverlay({
             className="build-mode-liaison-btn"
             aria-label="返回建筑建造"
             title="返回建筑建造"
-            onClick={() => {
-              setMode("buildings");
-              setSelectedLiaison(null);
-            }}
+            disabled={liaisonExiting || treeExiting}
+            onClick={leaveLiaisonMode}
           >
             返回建造
           </button>
@@ -226,7 +326,8 @@ export function BuildModeOverlay({
           className="build-mode-close"
           aria-label="退出建造"
           title="退出建造"
-          onClick={onClose}
+          disabled={treeExiting || liaisonExiting}
+          onClick={requestClose}
         >
           ×
         </button>
@@ -236,17 +337,18 @@ export function BuildModeOverlay({
           {errorMessage}
         </div>
       )}
-      {docked && mode === "buildings" && (
+      {showBuildTree && (
         <BuildTreePanel
           roots={roots}
           currentLabel={currentLabel}
           // Island is a platform, not an upgrade base — cost/duration as from empty land.
           currentBuildingId={onIsland ? null : currentBuildingId}
+          exiting={treeExiting}
           onSelect={onPickBuilding}
         />
       )}
-      {docked && mode === "liaison" && (
-        <div className="liaison-panel">
+      {showLiaisonPanel && (
+        <div className={`liaison-panel${liaisonExiting ? " is-exiting" : ""}`}>
           <div className="liaison-line-list" role="list" aria-label="联络线类型">
             {LIAISON_LINES.map((line) => {
               const selected = selectedLiaison === line.id;
@@ -255,9 +357,10 @@ export function BuildModeOverlay({
                   key={line.id}
                   type="button"
                   role="listitem"
-                  className={`liaison-line-btn${selected ? " is-selected" : ""}`}
+                  className={`liaison-line-btn ${liaisonBtnPhase}${selected ? " is-selected" : ""}`}
                   aria-pressed={selected}
                   aria-label={line.name}
+                  disabled={liaisonExiting}
                   onClick={() => pickLiaison(line.id)}
                 >
                   <span className="liaison-line-icon" aria-hidden>
@@ -269,7 +372,11 @@ export function BuildModeOverlay({
             })}
           </div>
           {selectedDef && (
-            <div className="liaison-info-panel" role="dialog" aria-label={`${selectedDef.name} 信息`}>
+            <div
+              className={`liaison-info-panel ${liaisonBtnPhase}`}
+              role="dialog"
+              aria-label={`${selectedDef.name} 信息`}
+            >
               <div className="liaison-info-title">{selectedDef.name}</div>
               <div className="liaison-info-rows">
                 <div className="liaison-info-row">
@@ -326,7 +433,7 @@ export function BuildModeOverlay({
             </div>
           )}
           {!selectedDef && (
-            <div className="liaison-info-panel" role="status">
+            <div className={`liaison-info-panel ${liaisonBtnPhase}`} role="status">
               <div className="liaison-info-title">编辑联络线</div>
               <div className="liaison-info-note">选择类型后拖动绘制；或点击已有联络线拆除</div>
             </div>

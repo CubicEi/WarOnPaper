@@ -48,6 +48,17 @@ export interface CommEdge {
   kind: "fiber" | "road" | "railway" | "radio";
 }
 
+/** Undirected grid-edge key for liaison segments that carried signal. */
+export function undirectedCommEdgeKey(
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number,
+): string {
+  if (ax < bx || (ax === bx && ay <= by)) return `${ax},${ay}|${bx},${by}`;
+  return `${bx},${by}|${ax},${ay}`;
+}
+
 export interface CommWaveState {
   ownerId: string;
   /** Max-remaining priority queue (unsorted; we pick best each step). */
@@ -56,6 +67,11 @@ export interface CommWaveState {
   bestRem: Map<string, number>;
   /** Building instance ids reached this wave. */
   connected: Set<string>;
+  /**
+   * Undirected liaison grid edges traversed with rem after attenuation ≥ 0
+   * (strictly positive remainder, or exactly decayed to 0 on that segment).
+   */
+  usedEdges: Set<string>;
   /** Adjacency built at wave start. */
   adj: Map<string, CommEdge[]>;
   /** Building lookup by node key (may be multiple). */
@@ -245,6 +261,7 @@ export function startCommWave(
     queue: [],
     bestRem: new Map(),
     connected: new Set(),
+    usedEdges: new Set(),
     adj: buildLiaisonAdjacency(liaisons, ownerId),
     buildingsAt: indexBuildingsByNode(buildings, ownerId),
     allOwned: buildings.filter((b) => b.ownerId === ownerId),
@@ -311,11 +328,36 @@ export function stepCommWave(wave: CommWaveState, maxSteps = COMM_STEPS_PER_TICK
     if (!edges) continue;
     for (const e of edges) {
       const cost = e.lengthDu / e.maxRangeDu;
+      const nextRem = remOut - cost;
+      // Segment participates when remainder after attenuation is >0 or exactly 0.
+      if (nextRem >= -EPS) {
+        wave.usedEdges.add(
+          undirectedCommEdgeKey(cur.gx, cur.gy, e.toGx, e.toGy),
+        );
+      }
       const nextVia: CommArrival = e.kind === "railway" ? "railway" : "comms";
-      pushBetter(wave, e.toGx, e.toGy, remOut - cost, nextVia);
+      pushBetter(wave, e.toGx, e.toGy, nextRem, nextVia);
     }
   }
   return false;
+}
+
+/**
+ * Run a full diffusion wave and return undirected liaison edges that carried
+ * signal (remainder > 0 or exactly 0 after the segment).
+ */
+export function collectCommUsedEdges(
+  ownerId: string,
+  buildings: readonly PlacedBuilding[],
+  liaisons: readonly PlacedLiaison[],
+  publishedConnected: ReadonlySet<string> | readonly string[] = [],
+): Set<string> {
+  const wave = startCommWave(ownerId, buildings, liaisons, publishedConnected);
+  if (!wave) return new Set();
+  while (!stepCommWave(wave, 10_000)) {
+    /* drain */
+  }
+  return wave.usedEdges;
 }
 
 /** Consume remaining budget as Du on a given medium (for UI/debug). */
