@@ -167,6 +167,7 @@ interface Props {
   onEndHold?: (unitIds: string[]) => void;
   onAssignHome?: (args: { buildingId: string; unitIds: string[] }) => void;
   onMutualDefense?: (buildingId: string, partnerBuildingId: string) => void;
+  onEndMutualDefense?: (buildingId: string) => void;
   /** Local player energy for reload and deploy affordance. */
   energy?: number;
   /** Local organization. Reload and deploy each spend 1 O. */
@@ -202,8 +203,6 @@ const ACTION_ARC_RADIUS = SEL_RING_OUTER + ACTION_BTN_R + 10;
 const UNIT_FOCUS_X_RATIO = 0.38;
 /** Pan/zoom camera tween when focusing a building or fitting fire range. */
 const CAMERA_FOCUS_MS = 500;
-/** Delay before building focus pan + inspect HUD so Shift+双击拆除 can win. */
-const BUILDING_FOCUS_DELAY_MS = 150;
 /** CSS ease-in-out equivalent: accelerate then decelerate. */
 function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -247,6 +246,7 @@ export function GameCanvas({
   onEndHold,
   onAssignHome,
   onMutualDefense,
+  onEndMutualDefense,
   energy = 0,
   organization = 0,
   tick = 0,
@@ -496,6 +496,11 @@ export function GameCanvas({
     }
   };
 
+  const exitFireAim = () => {
+    setFireAim(null);
+    setFireAimNote("选择目标");
+  };
+
   const clearSelection = () => {
     cancelPendingBuildingFocus();
     cancelCameraAnim();
@@ -503,7 +508,7 @@ export function GameCanvas({
     selectionRef.current = null;
     setSelectionUi(null);
     setInspectHudReady(false);
-    setFireAim(null);
+    // Fire-aim mode exits only via the × cancel chip (exitFireAim).
     setMutualAim(null);
     setEnemyLiaison(null);
   };
@@ -514,6 +519,7 @@ export function GameCanvas({
   // Hide ring / actions when terrain is (re)generated; keep build mode if mid-pick
   useEffect(() => {
     clearSelection();
+    exitFireAim();
     setBuildMode(null);
   }, [terrain?.seed]);
 
@@ -1003,14 +1009,7 @@ export function GameCanvas({
         });
       };
 
-      if (kind === "building") {
-        pendingBuildingFocusRef.current = setTimeout(
-          startFocusAnim,
-          BUILDING_FOCUS_DELAY_MS,
-        );
-      } else {
-        startFocusAnim();
-      }
+      startFocusAnim();
     }
   };
 
@@ -1210,9 +1209,13 @@ export function GameCanvas({
       return { x: clientX - rect.left, y: clientY - rect.top };
     };
 
-    /** Pan / zoom / pinch while mobilize or train panel is open: keep focus + path. */
+    /** Pan / zoom / pinch while mobilize, train, or fire-aim: keep focus + path / aim. */
     const clearSelectionOnMapGesture = () => {
-      if (mobilizeRef.current != null || trainUiRef.current != null) {
+      if (
+        mobilizeRef.current != null ||
+        trainUiRef.current != null ||
+        fireAimRef.current
+      ) {
         cancelPendingBuildingFocus();
         if (cameraAnimRef.current != null) {
           cancelAnimationFrame(cameraAnimRef.current);
@@ -1785,7 +1788,7 @@ export function GameCanvas({
           if (fireAimRef.current && !shiftDown(e)) {
             const source = buildingsRef.current.find((b) => b.id === fireAimRef.current);
             if (!source) {
-              setFireAim(null);
+              exitFireAim();
               return;
             }
             const sourceScreen = gridScreenAt(source.gx, source.gy);
@@ -1793,7 +1796,7 @@ export function GameCanvas({
               sourceScreen &&
               hitFireAimCancel(local.x, local.y, sourceScreen.x, sourceScreen.y)
             ) {
-              setFireAim(null);
+              exitFireAim();
               return;
             }
             const canHitUnits = source.buildingId === "gun";
@@ -2348,6 +2351,14 @@ export function GameCanvas({
     }
   }, [buildings, selectionUi?.buildingId]);
 
+  // Fire-aim exits only via ×; also drop if the launcher itself vanishes.
+  useEffect(() => {
+    if (!fireAim) return;
+    if (!buildings.some((b) => b.id === fireAim)) {
+      exitFireAim();
+    }
+  }, [buildings, fireAim]);
+
   // Keep unit inspect HUD on the moving unit; camera follows while followUnitIdRef is set
   useEffect(() => {
     if (!selectionUi || selectionUi.kind !== "unit" || !selectionUi.unitId) return;
@@ -2513,11 +2524,6 @@ export function GameCanvas({
       if (e.key === "Shift") {
         shiftHeldRef.current = true;
         setShiftDemolishHint(true);
-        return;
-      }
-      if (e.key === "Escape" && fireAimRef.current) {
-        e.preventDefault();
-        setFireAim(null);
         return;
       }
       if (e.key === "Escape" && mutualAimRef.current) {
@@ -2714,6 +2720,10 @@ export function GameCanvas({
                 setMutualAim((cur) => (cur === b.id ? null : b.id));
                 return;
               }
+              if (action === "end_mutual_defense") {
+                onEndMutualDefense?.(b.id);
+                return;
+              }
               if (action === "supply") {
                 const dest = snapToUnitCoord(b.gx, b.gy);
                 setMobilize({
@@ -2755,17 +2765,13 @@ export function GameCanvas({
               }
               if (action === "fire") {
                 setFireAimNote("选择目标");
-                if (fireAim === b.id) {
-                  setFireAim(null);
-                } else {
-                  setFireAim(b.id);
-                  const circles = workRangeCircles(
-                    b,
-                    buildings,
-                    connectedBuildingIds,
-                  );
-                  if (circles.length > 0) fitWorkRangeCircles(circles);
-                }
+                setFireAim(b.id);
+                const circles = workRangeCircles(
+                  b,
+                  buildings,
+                  connectedBuildingIds,
+                );
+                if (circles.length > 0) fitWorkRangeCircles(circles);
                 return;
               }
               if (action === "repair") {

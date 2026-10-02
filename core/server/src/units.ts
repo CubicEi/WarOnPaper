@@ -14,6 +14,7 @@ import {
   applyLiaisonAttack,
   applyUnitHold,
   applyMutualDefense,
+  applyEndMutualDefense,
   applyEndHold,
   applyEndBlockade,
   applyBuildCarrier,
@@ -738,6 +739,33 @@ export function handleMutualDefense(
     a: buildingId.slice(0, 8),
     b: partnerBuildingId.slice(0, 8),
     costO: UNIT_MUTUAL_DEFENSE_O_COST,
+  });
+  broadcast();
+}
+
+export function handleEndMutualDefense(
+  session: UnitSession,
+  world: UnitWorld,
+  buildingId: string,
+  playing: boolean,
+  sendError: (ws: WebSocket, code: string, message: string) => void,
+  broadcast: () => void,
+  log: (scope: string, ...args: unknown[]) => void,
+): void {
+  if (!playing) {
+    sendError(session.ws, "not_playing", "请先选定首都");
+    return;
+  }
+  const result = applyEndMutualDefense(session.id, buildingId, world.buildings);
+  if (!result.ok) {
+    sendError(session.ws, "end_mutual_defense_rejected", result.error ?? "无法解除互防");
+    return;
+  }
+  world.buildings.length = 0;
+  world.buildings.push(...result.buildings);
+  log("end_mutual_defense", "ok", {
+    player: session.id.slice(0, 8),
+    building: buildingId.slice(0, 8),
   });
   broadcast();
 }

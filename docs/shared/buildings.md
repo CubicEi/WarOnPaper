@@ -46,7 +46,7 @@
 | `constructionHalted?` | 建造中受损 → 须「继续建造」 |
 | `repairedAtTick?` / `repairTicks*` / `repairHp*` | 修理状态 |
 | `satelliteBuildingId?` | 升级中卫星门面 |
-| `mutualDefensePartnerId?` | 互防 |
+| `mutualDefensePartnerId?` | 互防；伙伴消失或 `end_mutual_defense` 时清除 |
 | `capturePending?` | 攻陷待拆/修 |
 | `polluted?` | 污染失效 |
 

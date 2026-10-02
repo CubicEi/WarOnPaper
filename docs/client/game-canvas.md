@@ -81,7 +81,7 @@ screen = center + zoom * (layout - center) + pan
 | 滚轮 | 以指针为枢轴 `panAfterZoomAt`，因子 1.08 |
 | 双指 | 距比缩放 + 中点平移；松手不当作点击 |
 
-单位检视：`UNIT_FOCUS_X_RATIO=0.38`（略偏左）或 `focusCenter` 后跟随。建筑检视：延迟 `BUILDING_FOCUS_DELAY_MS` 再居中，避免与 Shift+双击拆除冲突。
+单位检视：`UNIT_FOCUS_X_RATIO=0.38`（略偏左）或 `focusCenter` 后跟随。建筑检视：点击后立即居中并显示信息框；Shift+点击仍跳过焦点（仅用于双击拆除检测）。
 
 ## 5. 选中逻辑（`setSelectionAt` / 点击）
 
@@ -96,7 +96,7 @@ screen = center + zoom * (layout - center) + pan
 
 观战/结束：可检视建筑，不可玩法操作。选都阶段：点菜单仅「定为首都」。
 
-`clearSelection`：取消 pending 焦点、相机动画、follow、开火/互防/敌线选中。
+`clearSelection`：取消 pending 焦点、相机动画、follow、互防/敌线选中；**不**退出开火瞄准（见下）。
 
 `terrain?.seed` 变化时清空选中与 buildMode。
 
@@ -157,8 +157,8 @@ paint → drawMap(ctx, { pan, zoom, selection, buildings, … })
 
 ## 10. 开火与互防
 
-- **开火**：检视「开火」→ `fireAim=buildingId`；相机 fit 射程；点击目标发 `fire`；Esc 或取消钮退出。炮可打单位。  
-- **互防**：`mutualAim`；点击对角/相邻己方建筑发 `mutual_defense`。
+- **开火**：检视「发射」→ `fireAim=buildingId`；相机 fit 射程；点击目标发 `fire`；**仅**建筑旁取消叉号（×）退出瞄准（Esc / 点空白 / 平移缩放 / 再点发射均不退出）。炮可打单位。  
+- **互防**：`mutualAim`；点击对角/相邻己方建筑发 `mutual_defense`。已互防时检视钮为「解除互防」→ `end_mutual_defense`；伙伴消失时服务端自动清 `mutualDefensePartnerId`。
 
 污染或未通信建筑：多数动作 `logLocalReject`；拆除仍允许。
 

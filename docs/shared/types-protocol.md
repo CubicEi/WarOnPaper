@@ -121,6 +121,7 @@
 | `attack_units` | `applyUnitAttack` 或 `applyLiaisonAttack`（联络线段） |
 | `hold_units` / `end_hold` | `applyUnitHold` / `applyEndHold` |
 | `mutual_defense` | `applyMutualDefense` |
+| `end_mutual_defense` | `applyEndMutualDefense` |
 | `build_carrier` / `embark_air` / `disembark_air` | `carrier.ts` |
 
 单位命令共用模式：

@@ -117,7 +117,8 @@ U'_A = \lfloor (U_A \cdot HP_A - dmg_A) / HP_A \rfloor
 
 - 单位战：满 5s 一轮 `resolveCombatRound`；目标消失则 idle  
 - 攻城：满 5s 处理驻军战或建筑 HP/反伤；累计 `siegeDamageDealt`；空军累计伤超阈值可摧毁逻辑见源码分支  
-- 建筑被打可触发 `triggerMutualDefense`：从互防伙伴派出单位赶往守建筑外圈  
+- 建筑被打可触发 `triggerMutualDefense`：从互防伙伴派出单位赶往守建筑外圈；伙伴已不存在则清 `mutualDefensePartnerId`  
+- 本 tick 结束 `reconcileMutualDefensePartners` 再扫一遍孤儿互防链  
 - 占领：`capturePending`、拆除返还 `occupyDemolishRefund`（投入 E × 0.5）  
 
 ### `findHoldCoordOutside` / `isBuildingHeld`

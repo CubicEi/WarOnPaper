@@ -143,6 +143,10 @@ flowchart TD
 
 两座己方已建成、相邻/对角、未互防、未驻守、可出城且有驻军的建筑互设 `mutualDefensePartnerId`，扣 2O。不在本函数里派兵；攻城 tick 里 `triggerMutualDefense` 响应。
 
+### `applyEndMutualDefense`
+
+任一方发起即可清双边 `mutualDefensePartnerId`（不退 O）。伙伴拆除/被毁/离图时由 `clearMutualDefensePair` / `reconcileMutualDefensePartners` 自动解除。
+
 ### `applyEndHold` / `applyEndBlockade`
 
 选中单位退出 holding / blockading → idle。

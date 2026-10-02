@@ -95,6 +95,7 @@ sequenceDiagram
 | `stop_units` | `unitIds, retreat?` | 停止/撤退 |
 | `end_blockade` / `end_hold` | `unitIds` | 结束状态 |
 | `mutual_defense` | `buildingId, partnerBuildingId` | 互防瞄准 |
+| `end_mutual_defense` | `buildingId` | 解除互防 |
 | `build_carrier` / `embark_air` / `disembark_air` | 舰载相关 | 检视 HUD |
 | `chat` | `text` | 聊天输入 |
 

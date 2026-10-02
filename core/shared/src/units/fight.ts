@@ -9,7 +9,9 @@ import type { PlacedBuilding } from "../buildings/actions.js";
 import {
   applyBuildingHpDamage,
   buildingHpZeroShouldDestroy,
+  clearMutualDefensePair,
   isRepairing,
+  reconcileMutualDefensePartners,
 } from "../buildings/actions.js";
 import type { PlacedLiaison } from "../buildings/liaison.js";
 import {
@@ -200,18 +202,6 @@ export function isBuildingHeld(
 export function occupyDemolishRefund(building: PlacedBuilding): number {
   if (!building.capturePending || building.hp > 0) return 0;
   return Math.max(0, building.investedE) * UNIT_OCCUPY_DEMOLISH_REFUND_RATE;
-}
-
-function clearMutualPair(
-  buildings: PlacedBuilding[],
-  aId: string,
-  bId?: string,
-): void {
-  for (const id of [aId, bId].filter(Boolean) as string[]) {
-    const i = buildings.findIndex((b) => b.id === id);
-    if (i < 0) continue;
-    buildings[i] = { ...buildings[i]!, mutualDefensePartnerId: undefined };
-  }
 }
 
 function clearSiegeState(u: UnitGroup): UnitGroup {
@@ -414,10 +404,14 @@ function triggerMutualDefense(
     return;
   }
   const pi = buildings.findIndex((b) => b.id === partnerId);
-  if (pi < 0) return;
+  if (pi < 0) {
+    // Partner demolished / destroyed / gone — drop the orphan link.
+    clearMutualDefensePair(buildings, target.id, partnerId);
+    return;
+  }
   const partner = buildings[pi]!;
   if (partner.ownerId !== target.ownerId) {
-    clearMutualPair(buildings, target.id, partnerId);
+    clearMutualDefensePair(buildings, target.id, partnerId);
     return;
   }
   const present = partner.u ?? 0;
@@ -473,7 +467,7 @@ function returnMutualResponders(
 ): void {
   const bi = buildings.findIndex((b) => b.id === buildingId);
   const partnerId = bi >= 0 ? buildings[bi]!.mutualDefensePartnerId : undefined;
-  clearMutualPair(buildings, buildingId, partnerId);
+  clearMutualDefensePair(buildings, buildingId, partnerId);
 
   for (let i = 0; i < units.length; i++) {
     const u = units[i]!;
@@ -884,7 +878,7 @@ export function advanceFightsAndSieges(
 
       if (forceDestroy) {
         destroyed.add(buildingId);
-        clearMutualPair(buildings, buildingId, b.mutualDefensePartnerId);
+        clearMutualDefensePair(buildings, buildingId, b.mutualDefensePartnerId);
         for (let i = 0; i < units.length; i++) {
           if (units[i]!.siegeBuildingId === buildingId && !removed.has(units[i]!.id)) {
             units[i] = clearSiegeState(units[i]!);
@@ -892,7 +886,7 @@ export function advanceFightsAndSieges(
         }
         returnMutualResponders(buildingId, units, buildings, ctx, removed);
       } else {
-        clearMutualPair(buildings, buildingId, b.mutualDefensePartnerId);
+        clearMutualDefensePair(buildings, buildingId, b.mutualDefensePartnerId);
         buildings[bi] = {
           ...buildings[bi]!,
           ownerId: capturer,
@@ -933,6 +927,7 @@ export function advanceFightsAndSieges(
   const surviving = units.filter((u) => !removed.has(u.id) && u.u > 0);
   let nextBuildings = releaseAwayForUnitDiff(keptBuildings, before, surviving);
   nextBuildings = releaseEmbarkedAirForCarrierDiff(nextBuildings, before, surviving);
+  nextBuildings = reconcileMutualDefensePartners(nextBuildings);
   return {
     units: surviving,
     buildings: nextBuildings,

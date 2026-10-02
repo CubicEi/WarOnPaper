@@ -21,6 +21,7 @@ import {
   constructionHp,
   depleteResourcesForMiners,
   demolishEnergyRefund,
+  clearMutualDefensePair,
   energyIncomePerSecond,
   nukeReloadRejectReason,
   findBuildingAt,
@@ -130,6 +131,7 @@ import {
   handleHoldUnits,
   handleEndHold,
   handleMutualDefense,
+  handleEndMutualDefense,
   handleBuildCarrier,
   handleEmbarkAir,
   handleDisembarkAir,
@@ -1076,7 +1078,11 @@ function handleDemolish(session: PlayerSession, buildingInstanceId: string): voi
   const refund = demolishEnergyRefund(target);
   session.hud.organization -= DEMOLISH_O_COST;
   session.hud.energy += refund;
+  const partnerId = target.mutualDefensePartnerId;
   buildings.splice(idx, 1);
+  if (partnerId) {
+    clearMutualDefensePair(buildings, target.id, partnerId);
+  }
 
   slog("demolish", "ok", {
     player: session.id.slice(0, 8),
@@ -2345,6 +2351,22 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
       msg.buildingId,
       msg.partnerBuildingId,
+      phaseFor(session) === "playing",
+      sendError,
+      broadcastState,
+      slog,
+    );
+    return;
+  }
+
+  if (msg.type === "end_mutual_defense") {
+    slog("msg", "end_mutual_defense", msg);
+    const target = buildings.find((b) => b.id === msg.buildingId);
+    if (target && rejectIfPolluted(session, target)) return;
+    handleEndMutualDefense(
+      session,
+      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      msg.buildingId,
       phaseFor(session) === "playing",
       sendError,
       broadcastState,

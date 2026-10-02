@@ -449,3 +449,39 @@ export function applyCapitalRelocateInPlace(
   capital.repairHpRestore = undefined;
   clampGarrisonToBuildingId(capital, "metropolis");
 }
+
+/** Drop mutualDefensePartnerId on both ends of a pair (no O refund). */
+export function clearMutualDefensePair(
+  buildings: PlacedBuilding[],
+  aId: string,
+  bId?: string,
+): void {
+  for (const id of [aId, bId].filter(Boolean) as string[]) {
+    const i = buildings.findIndex((b) => b.id === id);
+    if (i < 0) continue;
+    if (buildings[i]!.mutualDefensePartnerId == null) continue;
+    buildings[i] = { ...buildings[i]!, mutualDefensePartnerId: undefined };
+  }
+}
+
+/**
+ * Clear mutualDefensePartnerId when the partner is gone or the link is one-sided.
+ * Returns a new array only when something changed.
+ */
+export function reconcileMutualDefensePartners(
+  buildingsIn: readonly PlacedBuilding[],
+): PlacedBuilding[] {
+  const byId = new Map(buildingsIn.map((b) => [b.id, b]));
+  let changed = false;
+  const out = buildingsIn.map((b) => {
+    const pid = b.mutualDefensePartnerId;
+    if (!pid) return b;
+    const partner = byId.get(pid);
+    if (!partner || partner.mutualDefensePartnerId !== b.id) {
+      changed = true;
+      return { ...b, mutualDefensePartnerId: undefined };
+    }
+    return b;
+  });
+  return changed ? out : (buildingsIn as PlacedBuilding[]);
+}

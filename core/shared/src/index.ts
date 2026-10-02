@@ -81,6 +81,8 @@ export {
   demolishLockTicksAfterRepair,
   isDemolishLockedByRepair,
   applyCapitalRelocateInPlace,
+  clearMutualDefensePair,
+  reconcileMutualDefensePartners,
 } from "./buildings/actions.js";
 
 export interface GameStateSnapshot {
@@ -290,6 +292,10 @@ export type ClientToServer =
       type: "mutual_defense";
       buildingId: string;
       partnerBuildingId: string;
+    }
+  | {
+      type: "end_mutual_defense";
+      buildingId: string;
     }
   | {
       type: "build_carrier";
@@ -685,6 +691,7 @@ export {
   applyUnitAttack,
   applyUnitHold,
   applyMutualDefense,
+  applyEndMutualDefense,
   applyEndHold,
   applyEndBlockade,
   applyAssignHome,

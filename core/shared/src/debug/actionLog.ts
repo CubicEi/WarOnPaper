@@ -202,6 +202,7 @@ export function categoryForAction(type: string): PlayerActionCategory {
     case "fire":
     case "attack_units":
     case "mutual_defense":
+    case "end_mutual_defense":
       return "combat";
     case "move_units":
     case "assign_home":
@@ -377,6 +378,9 @@ export function summarizeClientAction(msg: { readonly type: string }): {
       break;
     case "mutual_defense":
       summary = `互防 ${shortId(m.buildingId)} ↔ ${shortId(m.partnerBuildingId)}`;
+      break;
+    case "end_mutual_defense":
+      summary = `解除互防 ${shortId(m.buildingId)}`;
       break;
     case "embark_air":
       summary = `空军上舰 ${shortId(m.airUnitId)} → ${shortId(m.carrierId)}`;

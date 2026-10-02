@@ -34,6 +34,7 @@ export type BuildingInspectAction =
   | "build_carrier"
   | "garrison"
   | "mutual_defense"
+  | "end_mutual_defense"
   | "supply"
   | "fire"
   | "attack";
@@ -45,6 +46,7 @@ export type BuildingInspectActionDetail = {
 
 const OP_DEFENSE = "/icons/symbol/operation/defense.png";
 const OP_MUTUAL = "/icons/symbol/operation/mutual_defense.png";
+const OP_STOP = "/icons/symbol/operation/stop.png";
 const OP_ATTACK = "/icons/symbol/operation/attack.png";
 const SUPPLY_ICON = "/icons/buildings%20-%20black/energy/supply_station.png";
 
@@ -393,40 +395,10 @@ export function BuildingInspectHud({
     onAction?.(action, building, detail);
   };
 
-  const showLaunchOp = mine && (isLauncher || isAntiAir);
+  const inMutualDefense = mine && !!building.mutualDefensePartnerId;
 
   return (
     <div className="building-inspect" aria-label={`${name} 信息`}>
-      {/* Launch / AA control sits on the upper half of the building icon so it
-          does not cover the HP / ammo bars drawn on the lower half. */}
-      {showLaunchOp && (
-        <div
-          className="building-inspect-launch"
-          style={{ left: screenX, top: screenY }}
-        >
-          {isLauncher ? (
-            <OpButton
-              label={onCooldown ? `冷却 ${cooldownRemSec}s` : "发射"}
-              icon={def?.icon ?? OP_MUTUAL}
-              disabled={launchDisabled}
-              title={launchTitle}
-              onFire={() => fire("fire")}
-            />
-          ) : (
-            <OpButton
-              label={onCooldown ? `冷却 ${cooldownRemSec}s` : "防空"}
-              icon={def?.icon ?? OP_MUTUAL}
-              disabled
-              title={
-                onCooldown
-                  ? cooldownLabel ?? "发射冷却中"
-                  : "自动拦截导弹 / 接敌交战"
-              }
-              onFire={() => {}}
-            />
-          )}
-        </div>
-      )}
       <div
         className="building-inspect-row"
         style={{ left: screenX + offset, top: screenY }}
@@ -480,14 +452,16 @@ export function BuildingInspectHud({
                   ? trainActive
                     ? `训练 ${Math.round(trainProgress * 100)}%`
                     : "训练 —"
-                  : uMax > 0
-                    ? uAway > 0
-                      ? `驻军 ${uCur}/${uMax}（外出 ${uAway}）`
-                      : `驻军 ${uCur}/${uMax}`
-                    : "驻军 —"}
+                  : inMutualDefense
+                    ? "正在驻防"
+                    : uMax > 0
+                      ? uAway > 0
+                        ? `驻军 ${uCur}/${uMax}（外出 ${uAway}）`
+                        : `驻军 ${uCur}/${uMax}`
+                      : "驻军 —"}
               </div>
               <div
-                className={`building-inspect-bar-track${trainActive ? " is-training" : ""}`}
+                className={`building-inspect-bar-track${trainActive ? " is-training" : ""}${inMutualDefense ? " is-mutual-defense" : ""}`}
               >
                 {isTrainingGround ? (
                   <>
@@ -613,7 +587,35 @@ export function BuildingInspectHud({
                   title={polluted ? "污染区内建筑已失效" : undefined}
                   onFire={() => fire("supply")}
                 />
-              ) : !showLaunchOp ? (
+              ) : isLauncher ? (
+                <OpButton
+                  label={onCooldown ? `冷却 ${cooldownRemSec}s` : "发射"}
+                  icon={def?.icon ?? OP_MUTUAL}
+                  disabled={launchDisabled}
+                  title={launchTitle}
+                  onFire={() => fire("fire")}
+                />
+              ) : isAntiAir ? (
+                <OpButton
+                  label={onCooldown ? `冷却 ${cooldownRemSec}s` : "防空"}
+                  icon={def?.icon ?? OP_MUTUAL}
+                  disabled
+                  title={
+                    onCooldown
+                      ? cooldownLabel ?? "发射冷却中"
+                      : "自动拦截导弹 / 接敌交战"
+                  }
+                  onFire={() => {}}
+                />
+              ) : inMutualDefense ? (
+                <OpButton
+                  label="解除互防"
+                  icon={OP_STOP}
+                  disabled={polluted || !commsLinked}
+                  title={polluted ? "污染区内建筑已失效" : "解除互防"}
+                  onFire={() => fire("end_mutual_defense")}
+                />
+              ) : (
                 <OpButton
                   label="互防"
                   icon={OP_MUTUAL}
@@ -621,7 +623,7 @@ export function BuildingInspectHud({
                   title={polluted ? "污染区内建筑已失效" : undefined}
                   onFire={() => fire("mutual_defense")}
                 />
-              ) : null}
+              )}
             </>
           ) : (
             <OpButton label="进攻" icon={OP_ATTACK} onFire={() => fire("attack")} />

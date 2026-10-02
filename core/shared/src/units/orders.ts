@@ -1,7 +1,10 @@
 import type { MapConfig } from "../map.js";
 import type { TerrainMap } from "../terrain/types.js";
 import type { PlacedBuilding } from "../buildings/actions.js";
-import { isBuildingComplete } from "../buildings/actions.js";
+import {
+  clearMutualDefensePair,
+  isBuildingComplete,
+} from "../buildings/actions.js";
 import type { PlacedLiaison } from "../buildings/liaison.js";
 import { isAdjacentGridNode } from "../buildings/liaison.js";
 import {
@@ -975,6 +978,29 @@ export function applyMutualDefense(
     organizationCost: UNIT_MUTUAL_DEFENSE_O_COST,
     buildings,
   };
+}
+
+/** 主动解除互防（任一方发起即可清双边）. */
+export function applyEndMutualDefense(
+  ownerId: string,
+  buildingId: string,
+  buildingsIn: readonly PlacedBuilding[],
+): MutualDefenseResult {
+  const buildings = buildingsIn.map((b) => ({ ...b }));
+  const ai = buildings.findIndex((b) => b.id === buildingId);
+  if (ai < 0) {
+    return { ok: false, error: "建筑不存在", organizationCost: 0, buildings };
+  }
+  const a = buildings[ai]!;
+  if (a.ownerId !== ownerId) {
+    return { ok: false, error: "只能解除己方建筑的互防", organizationCost: 0, buildings };
+  }
+  const partnerId = a.mutualDefensePartnerId;
+  if (!partnerId) {
+    return { ok: false, error: "该建筑未在互防中", organizationCost: 0, buildings };
+  }
+  clearMutualDefensePair(buildings, a.id, partnerId);
+  return { ok: true, organizationCost: 0, buildings };
 }
 
 export interface EndHoldResult {

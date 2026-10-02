@@ -59,7 +59,7 @@ flowchart TB
 
 ## 5. `BuildingInspectHud`
 
-**动作类型** `BuildingInspectAction`：`demolish`、`upgrade`、`level_upgrade`、`relocate_capital`、`repair`、`deploy`、`reload`、`train`、`build_carrier`、`garrison`、`mutual_defense`、`supply`、`fire`、`attack`。
+**动作类型** `BuildingInspectAction`：`demolish`、`upgrade`、`level_upgrade`、`relocate_capital`、`repair`、`deploy`、`reload`、`train`、`build_carrier`、`garrison`、`mutual_defense`、`end_mutual_defense`、`supply`、`fire`、`attack`。
 
 显示规则：
 
@@ -67,7 +67,8 @@ flowchart TB
 - 敌方卫星级：仅类型；直接视野：类型+HP（注释 §4.5）。  
 - `readOnly`（观战/结束）隐藏操作钮。  
 - 装填：纵向滑条决定 `count`；核武可显示 `nukeReloadBlockReason`。  
-- 部署：有 count 立即 `deploy`；否则打开归属（assign）动员面板。
+- 部署：有 count 立即 `deploy`；否则打开归属（assign）动员面板。  
+- 操作行：驻守右侧为补给 / 发射（火箭军）/ 防空 / 互防；已互防时为「解除互防」（停止图标），驻军标签「正在驻防」且驻军条呼吸灯。
 
 实际发令在 `GameCanvas` 的 `onAction` 分支（含通信/污染门闩）。
 

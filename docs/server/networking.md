@@ -83,6 +83,7 @@ Manager 路径类似，但 `hello` / `create_room` / `join_room` 等在进入 `G
 | `attack_units` | 单位/建筑目标，或联络线段 `targetLiaisonId`+四端点 |
 | `hold_units` / `end_hold` | 驻守 |
 | `mutual_defense` | 两建筑互防 |
+| `end_mutual_defense` | 解除互防 |
 | `build_carrier` | 港口 `id` |
 | `embark_air` / `disembark_air` | 航母上下飞机 |
 

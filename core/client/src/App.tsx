@@ -388,6 +388,14 @@ export function App() {
     [send],
   );
 
+  const onEndMutualDefense = useCallback(
+    (buildingId: string) => {
+      log.info("app", "end_mutual_defense", buildingId);
+      send({ type: "end_mutual_defense", buildingId });
+    },
+    [send],
+  );
+
   const onSupplyUnits = useCallback(
     (args: {
       supplyBuildingId: string;
@@ -540,6 +548,7 @@ export function App() {
         onHoldUnits={onHoldUnits}
         onEndHold={onEndHold}
         onMutualDefense={onMutualDefense}
+        onEndMutualDefense={onEndMutualDefense}
         // Affordance only — balances come from server state.you, never local math.
         energy={state?.you.energy ?? 0}
         organization={state?.you.organization ?? 0}

@@ -988,6 +988,21 @@ body,
   background: #7a6a1a;
 }
 
+.building-inspect-bar-track.is-mutual-defense .building-inspect-bar-fill.is-u,
+.building-inspect-bar-track.is-mutual-defense .building-inspect-bar-fill.is-u-away {
+  animation: garrison-mutual-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes garrison-mutual-pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .building-inspect-bar-fill.is-train-progress {
   background: #c9a227;
 }
@@ -1199,16 +1214,7 @@ body,
   opacity: 0.85;
 }
 
-/* Rocket-force / AA fire control: anchored on building center, sitting in the
-   upper half of the icon (entirely above the vertical midline). */
-.building-inspect-launch {
-  position: absolute;
-  transform: translate(-50%, -100%);
-  margin-top: -2px;
-  pointer-events: auto;
-  z-index: 4;
-}
-
+/* Ops row holds garrison / mutual / launch / supply actions. */
 .building-inspect-ops {
   grid-column: 1;
   grid-row: 2;

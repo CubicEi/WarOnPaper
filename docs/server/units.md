@@ -72,6 +72,7 @@
 | `handleHoldUnits` | `hold_units` | O + E（`UNIT_HOLD_O_COST`） |
 | `handleEndHold` | `end_hold` | 无 |
 | `handleMutualDefense` | `mutual_defense` | O（`UNIT_MUTUAL_DEFENSE_O_COST`） |
+| `handleEndMutualDefense` | `end_mutual_defense` | 无 |
 | `handleBuildCarrier` | `build_carrier` | E（`CARRIER_BUILD_E`） |
 | `handleEmbarkAir` / `handleDisembarkAir` | `embark_air` / `disembark_air` | 通常无 HUD 费 |
 | `handleStopUnits` | `stop_units` | 可能 O/E（含撤退） |
