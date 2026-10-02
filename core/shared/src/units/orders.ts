@@ -29,10 +29,12 @@ import {
   snapToUnitCoord,
   unitCoordKey,
   awayOccupiedU,
+  shouldReleaseAwayOnDeposit,
 } from "./garrison.js";
 import {
   estimatePathTimeSec,
   findFreeUnitCoord,
+  findNearestAllowedCoord,
   planAirPath,
   planLandOrNavyPath,
   terrainAllowsKind,
@@ -112,6 +114,12 @@ function isPortCell(
 interface PlanOpts {
   ignoreCoverage?: boolean;
   ignoreTerrain?: boolean;
+  /**
+   * Attack: treat the target tile as a legal path goal even when the unit cannot
+   * stand there (navy vs coastal buildings). Caller then nudges to an adjacent
+   * standable cell.
+   */
+  allowImpassableGoal?: boolean;
 }
 
 function planFor(
@@ -133,7 +141,8 @@ function planFor(
   const allowImpassableStart =
     isNavyKind(unit.kind) && isPortCell(unit.gx, unit.gy, ctx.buildings);
   const allowImpassableGoal =
-    isNavyKind(unit.kind) && isPortCell(dest.gx, dest.gy, ctx.buildings);
+    !!opts?.allowImpassableGoal ||
+    (isNavyKind(unit.kind) && isPortCell(dest.gx, dest.gy, ctx.buildings));
   if (unit.kind === "air") {
     const planned = planAirPath(unit.gx, unit.gy, toGx, toGy, coverage, {
       ignoreCoverage,
@@ -563,9 +572,50 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
     }
     const planOpts: PlanOpts = {
       ignoreCoverage: !!req.asTrainingDelivery || unitDeposit,
-      ignoreTerrain: !!req.asTrainingDelivery && unit.kind === "navy",
+      // Navy training embarks onto ocean (below) and paths with normal navy rules.
+      ignoreTerrain: false,
+      // Land/navy attack: destination may be impassable (coastal building). Path to
+      // the target tile, then nudge onto an adjacent standable cell below.
+      allowImpassableGoal: isAttack && unit.kind !== "air",
     };
-    const planned = planFor(unit, dest.gx, dest.gy, ctx, planOpts);
+    // Training navy spawns on land (training ground). Embark nearest ocean, then
+    // sail around coastline to a standable dock cell (port or adjacent ocean).
+    let planUnit = unit;
+    let planToGx = dest.gx;
+    let planToGy = dest.gy;
+    if (req.asTrainingDelivery && isNavyKind(unit.kind)) {
+      const embark = findNearestAllowedCoord(
+        unit.kind,
+        ctx.map,
+        ctx.terrain,
+        unit.gx,
+        unit.gy,
+        { liaisons: ctx.liaisons, ownerId: unit.ownerId },
+      );
+      if (!embark) {
+        return fail("附近没有可出航水域，无法送达海军", buildings, units);
+      }
+      const ui = nextUnits.findIndex((x) => x.id === unit.id);
+      if (ui >= 0) {
+        nextUnits[ui] = { ...nextUnits[ui]!, gx: embark.gx, gy: embark.gy };
+        planUnit = nextUnits[ui]!;
+      } else {
+        planUnit = { ...unit, gx: embark.gx, gy: embark.gy };
+      }
+      const dockOccupied = occupiedUnitKeys(nextUnits, ignore, unit);
+      for (const k of reservedEnds) dockOccupied.add(k);
+      for (const k of centers) dockOccupied.add(k);
+      const dock = findFreeUnitCoord(
+        dest.gx,
+        dest.gy,
+        dockOccupied,
+        2,
+        standAllow(unit, ctx, false),
+      );
+      planToGx = dock.gx;
+      planToGy = dock.gy;
+    }
+    const planned = planFor(planUnit, planToGx, planToGy, ctx, planOpts);
     if (planned.error || planned.path.length === 0) {
       // #region agent log
       fetch("http://127.0.0.1:7277/ingest/6741dc77-72e2-46ba-9a2a-c7dd9d84b7e9", {
@@ -582,9 +632,9 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
           message: "unit plan failed",
           data: {
             kind: unit.kind,
-            unitGx: unit.gx,
-            unitGy: unit.gy,
-            dest,
+            unitGx: planUnit.gx,
+            unitGy: planUnit.gy,
+            dest: { gx: planToGx, gy: planToGy },
             error: planned.error ?? "empty_path",
             pathLen: planned.path.length,
             homeBuildingId: unit.homeBuildingId ?? null,
@@ -597,7 +647,12 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
     }
     let path = planned.path;
     // Hold / deposit / air strike keep the planned cell (air lands on the target).
-    const skipNudge = asHold || unitDeposit || (isAttack && unit.kind === "air");
+    // Navy training already resolved a standable dock above — skip re-nudge.
+    const skipNudge =
+      asHold ||
+      unitDeposit ||
+      (isAttack && unit.kind === "air") ||
+      (!!req.asTrainingDelivery && isNavyKind(unit.kind));
     if (!skipNudge && path.length >= 1) {
       const end = path[path.length - 1]!;
       const occupied = occupiedUnitKeys(nextUnits, ignore, unit);
@@ -611,7 +666,7 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
         standAllow(unit, ctx, !!planOpts.ignoreTerrain),
       );
       if (free.gx !== end.gx || free.gy !== end.gy) {
-        const replanned = planFor(unit, free.gx, free.gy, ctx, planOpts);
+        const replanned = planFor(planUnit, free.gx, free.gy, ctx, planOpts);
         if (!replanned.error && replanned.path.length > 0) {
           path = replanned.path;
         } else {
@@ -657,7 +712,9 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
             unitCoordKey(b.gx, b.gy) === unitCoordKey(next.gx, next.gy),
         );
       if (target) {
-        const releaseAway = target.id === next.homeBuildingId;
+        const releaseAway = shouldReleaseAwayOnDeposit(target.id, next, {
+          asTrainingDelivery: !!req.asTrainingDelivery,
+        });
         const result = returnToBuilding(target, next.u, { releaseAway });
         const bi = buildings.findIndex((b) => b.id === target.id);
         if (bi >= 0) buildings[bi] = result.building;

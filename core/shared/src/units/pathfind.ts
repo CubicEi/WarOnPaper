@@ -280,7 +280,7 @@ export type ActivityRangeLabel = "radio" | "port";
 /**
  * Minimum-time path on the 0.2 grid.
  * `ignoreCoverage` skips radio/port range checks (training delivery, retreat, reassignment).
- * `ignoreTerrain` skips walkability (navy training delivery to a port, retreat).
+ * `ignoreTerrain` skips walkability (retreat). Navy training embarks onto ocean then paths normally.
  * `allowImpassableStart` / `allowImpassableGoal` let navy use a coastline port cell.
  * Goals outside an active range are rejected (not clamped).
  */
@@ -297,7 +297,7 @@ export function planLandOrNavyPath(args: {
   coverage: readonly WorkRangeCircle[];
   /** Training delivery / retreat: skip radio or port range checks. */
   ignoreCoverage?: boolean;
-  /** Navy training delivery and retreat: path across any terrain. */
+  /** Retreat: path across any terrain. */
   ignoreTerrain?: boolean;
   /** Port cell is a legal navy departure even when it is not pure ocean. */
   allowImpassableStart?: boolean;
@@ -588,4 +588,45 @@ export function findFreeUnitCoord(
     }
   }
   return start;
+}
+
+/**
+ * Nearest 0.2-grid cell where `terrainAllowsKind` (optional extra allow) holds.
+ * Used to embark training navy from an inland training ground onto ocean.
+ */
+export function findNearestAllowedCoord(
+  kind: UnitKind,
+  mapCfg: MapConfig,
+  terrain: TerrainMap,
+  fromGx: number,
+  fromGy: number,
+  opts?: TerrainAllowOpts & {
+    maxRadiusDu?: number;
+    allowExtra?: (gx: number, gy: number) => boolean;
+  },
+): { gx: number; gy: number } | null {
+  const start = snapToUnitCoord(fromGx, fromGy);
+  const maxR = opts?.maxRadiusDu ?? Math.max(mapCfg.linesX, mapCfg.linesY) + 1;
+  const step = UNIT_COORD_STEP;
+  const maxX = mapCfg.linesX - 1;
+  const maxY = mapCfg.linesY - 1;
+  const ok = (gx: number, gy: number) =>
+    terrainAllowsKind(kind, terrain, gx, gy, opts) ||
+    !!opts?.allowExtra?.(gx, gy);
+  if (ok(start.gx, start.gy)) return start;
+
+  const maxRing = Math.ceil(maxR / step);
+  for (let ring = 1; ring <= maxRing; ring++) {
+    for (let dx = -ring; dx <= ring; dx++) {
+      for (let dy = -ring; dy <= ring; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+        const p = snapToUnitCoord(start.gx + dx * step, start.gy + dy * step);
+        if (p.gx < -1e-9 || p.gy < -1e-9 || p.gx > maxX + 1e-9 || p.gy > maxY + 1e-9) {
+          continue;
+        }
+        if (ok(p.gx, p.gy)) return p;
+      }
+    }
+  }
+  return null;
 }

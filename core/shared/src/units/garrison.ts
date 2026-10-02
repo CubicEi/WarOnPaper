@@ -71,17 +71,25 @@ export function releaseAwayOccupation(
 /**
  * After units lose U or despawn, release matching awayOccupied on home buildings.
  * `before` = groups prior to the change; `after` = surviving groups (may omit destroyed).
+ *
+ * `ignoreDepositedU`: U already入库 via returnToBuilding this tick — those are not
+ * combat losses and must not release away again (and training never occupied away).
  */
 export function releaseAwayForUnitDiff(
   buildings: readonly PlacedBuilding[],
   before: readonly UnitGroup[],
   after: readonly UnitGroup[],
+  ignoreDepositedU?: ReadonlyMap<string, number>,
 ): PlacedBuilding[] {
   const afterById = new Map(after.map((u) => [u.id, u] as const));
   const lossByHome = new Map<string, number>();
   for (const prev of before) {
     const cur = afterById.get(prev.id);
-    const lost = cur ? Math.max(0, prev.u - cur.u) : Math.max(0, prev.u);
+    const deposited = Math.max(0, ignoreDepositedU?.get(prev.id) ?? 0);
+    const effectivePrevU = Math.max(0, prev.u - deposited);
+    const lost = cur
+      ? Math.max(0, effectivePrevU - cur.u)
+      : Math.max(0, effectivePrevU);
     if (lost <= 0 || !prev.homeBuildingId) continue;
     lossByHome.set(
       prev.homeBuildingId,
@@ -134,6 +142,19 @@ export function deployFromBuilding(
       awayOccupiedU: away > 0 ? away : undefined,
     },
   };
+}
+
+/**
+ * Whether depositing into `targetId` should free `awayOccupiedU`.
+ * Returning fielded units already occupy via away; training deliveries never did.
+ */
+export function shouldReleaseAwayOnDeposit(
+  targetId: string,
+  unit: { homeBuildingId: string; state?: string },
+  opts?: { asTrainingDelivery?: boolean },
+): boolean {
+  if (opts?.asTrainingDelivery || unit.state === "training") return false;
+  return targetId === unit.homeBuildingId;
 }
 
 /** Add U back into a building (capped by effective Umax, counting away occupation). */

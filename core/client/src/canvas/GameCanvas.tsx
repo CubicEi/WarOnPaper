@@ -1742,7 +1742,7 @@ export function GameCanvas({
           }
           if (phaseRef.current !== "playing") {
             const near = findBuildingNear(buildingsRef.current, hit.gx, hit.gy, 0.2);
-            if (near) {
+            if (near && !shiftDown(e)) {
               setSelectionAt(near.gx, near.gy, {
                 kind: "building",
                 buildingId: near.id,
@@ -1895,7 +1895,8 @@ export function GameCanvas({
           if (near) {
             const mine =
               myPlayerIdRef.current != null && near.ownerId === myPlayerIdRef.current;
-            if (mine && e.shiftKey) {
+            const withShift = shiftDown(e);
+            if (mine && withShift) {
               const now = performance.now();
               if (shiftDbl && shiftDbl.id === near.id && now - shiftDbl.at < SHIFT_DBL_MS) {
                 shiftDbl = null;
@@ -1906,6 +1907,11 @@ export function GameCanvas({
                 return;
               }
               shiftDbl = { id: near.id, at: now };
+            }
+            // Shift+click: keep demolish dbl detection only — no focus pan / inspect HUD.
+            if (withShift) {
+              cancelPendingBuildingFocus();
+              return;
             }
             if (near.buildingId === "artificial_island") {
               log.info("select", "artificial_island → point menu", near.gx, near.gy);

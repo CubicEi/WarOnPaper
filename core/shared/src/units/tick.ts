@@ -4,7 +4,13 @@ import type { PlacedLiaison } from "../buildings/liaison.js";
 import { UNIT_BY_KIND } from "./catalog.js";
 import type { UnitGroup } from "./types.js";
 import { speedAt, terrainAllowsKind, findFreeUnitCoord, planAirPath } from "./pathfind.js";
-import { unitCoordKey, snapToUnitCoord, returnToBuilding, releaseAwayForUnitDiff } from "./garrison.js";
+import {
+  unitCoordKey,
+  snapToUnitCoord,
+  returnToBuilding,
+  releaseAwayForUnitDiff,
+  shouldReleaseAwayOnDeposit,
+} from "./garrison.js";
 import { buildingCenterKeys, occupiedUnitKeys } from "./occupy.js";
 import { collectMovingUnitCoverage, isInsideAnyCircle } from "./radio.js";
 import {
@@ -44,6 +50,24 @@ export function advanceUnits(
   const units = unitsIn.map((u) => ({ ...u, path: u.path?.map((p) => ({ ...p })) }));
   const removed = new Set<string>();
   const settleReserved = new Set<string>();
+  /** U deposited via returnToBuilding this tick — exclude from away-release-on-loss. */
+  const depositedU = new Map<string, number>();
+
+  const settle = (
+    unit: UnitGroup,
+    arrived: boolean,
+  ) =>
+    settleIdle(
+      unit,
+      buildings,
+      removed,
+      { arrived },
+      units,
+      settleReserved,
+      terrain,
+      liaisons,
+      depositedU,
+    );
 
   for (const unit of units) {
     if (
@@ -53,7 +77,7 @@ export function advanceUnits(
       unit.returnGx != null &&
       unit.returnGy != null
     ) {
-      tryStartAirReturn(unit, buildings, removed, units, settleReserved);
+      tryStartAirReturn(unit, buildings, removed, units, settleReserved, depositedU);
       continue;
     }
     if (unit.state !== "moving" && unit.state !== "training") continue;
@@ -67,11 +91,11 @@ export function advanceUnits(
       if (
         !unit.depositOnArrival &&
         !pendingAttack &&
-        tryStartAirReturn(unit, buildings, removed, units, settleReserved)
+        tryStartAirReturn(unit, buildings, removed, units, settleReserved, depositedU)
       ) {
         continue;
       }
-      settleIdle(unit, buildings, removed, { arrived: true }, units, settleReserved, terrain, liaisons);
+      settle(unit, true);
       continue;
     }
 
@@ -101,7 +125,7 @@ export function advanceUnits(
       }
 
       if (!skipFuel && usesCarriedSupply(unit.kind) && unit.carriedE <= EPS) {
-        stopForSupply(unit, buildings, removed, units, settleReserved, terrain, liaisons);
+        stopForSupply(unit, buildings, removed, units, settleReserved, terrain, liaisons, depositedU);
         budget = 0;
         break;
       }
@@ -114,7 +138,7 @@ export function advanceUnits(
         const fuel = consumeCarriedForStep(unit.kind, unit.carriedE, step);
         step = fuel.stepDu;
         if (step <= EPS) {
-          stopForSupply(unit, buildings, removed, units, settleReserved, terrain, liaisons);
+          stopForSupply(unit, buildings, removed, units, settleReserved, terrain, liaisons, depositedU);
           budget = 0;
           break;
         }
@@ -155,7 +179,7 @@ export function advanceUnits(
         step = charged.stepDu;
         exhausted = charged.exhausted;
         if (step <= EPS) {
-          stopForSupply(unit, buildings, removed, units, settleReserved, terrain, liaisons);
+          stopForSupply(unit, buildings, removed, units, settleReserved, terrain, liaisons, depositedU);
           budget = 0;
           break;
         }
@@ -184,9 +208,9 @@ export function advanceUnits(
         unit.gx = snapped.gx;
         unit.gy = snapped.gy;
         if (exhausted && usesCarriedSupply(unit.kind)) {
-          stopForSupply(unit, buildings, removed, units, settleReserved, terrain, liaisons);
+          stopForSupply(unit, buildings, removed, units, settleReserved, terrain, liaisons, depositedU);
         } else {
-          settleIdle(unit, buildings, removed, { arrived: false }, units, settleReserved, terrain, liaisons);
+          settle(unit, false);
         }
         budget = 0;
         break;
@@ -202,11 +226,11 @@ export function advanceUnits(
       if (
         !unit.depositOnArrival &&
         !pendingAttack &&
-        tryStartAirReturn(unit, buildings, removed, units, settleReserved)
+        tryStartAirReturn(unit, buildings, removed, units, settleReserved, depositedU)
       ) {
         continue;
       }
-      settleIdle(unit, buildings, removed, { arrived: true }, units, settleReserved, terrain, liaisons);
+      settle(unit, true);
     } else {
       unit.pathIndex = idx;
     }
@@ -216,7 +240,8 @@ export function advanceUnits(
 
   const surviving = units.filter((u) => !removed.has(u.id) && u.u > 0);
   // Release awayOccupiedU for combat losses / deaths during movement (air strike).
-  const afterAway = releaseAwayForUnitDiff(buildings, unitsIn, surviving);
+  // Skip U already入库 this tick — those are not losses (and training never occupied away).
+  const afterAway = releaseAwayForUnitDiff(buildings, unitsIn, surviving, depositedU);
 
   return {
     units: autoEmbarkCoLocatedAir(surviving),
@@ -233,6 +258,7 @@ function stopForSupply(
   reserved: Set<string>,
   terrain: TerrainMap | null,
   liaisons: readonly PlacedLiaison[],
+  depositedU?: Map<string, number>,
 ): void {
   const snapped = snapToUnitCoord(unit.gx, unit.gy);
   unit.gx = snapped.gx;
@@ -241,7 +267,17 @@ function stopForSupply(
     unit.carriedE = Math.max(0, unit.carriedE);
     if (unit.carriedE <= EPS) unit.carriedE = 0;
   }
-  settleIdle(unit, buildings, removed, { arrived: false }, allUnits, reserved, terrain, liaisons);
+  settleIdle(
+    unit,
+    buildings,
+    removed,
+    { arrived: false },
+    allUnits,
+    reserved,
+    terrain,
+    liaisons,
+    depositedU,
+  );
 }
 
 function settleIdle(
@@ -253,6 +289,7 @@ function settleIdle(
   reserved: Set<string>,
   terrain: TerrainMap | null,
   liaisons: readonly PlacedLiaison[],
+  depositedU?: Map<string, number>,
 ): void {
   const enterBlockade = opts.arrived && !!unit.pendingBlockade;
   const enterHold = opts.arrived && !!unit.pendingHoldBuildingId;
@@ -262,6 +299,8 @@ function settleIdle(
   const enterAttack = opts.arrived && !!(attackUnitId || attackBuildingId);
   const doSupply = opts.arrived && !!unit.pendingSupply;
   const supplyBuildingId = unit.supplyBuildingId;
+  // Capture before state→idle: training delivery must not release awayOccupiedU.
+  const fromTrainingDelivery = unit.state === "training";
   unit.path = undefined;
   unit.pathIndex = undefined;
   unit.pendingBlockade = undefined;
@@ -303,7 +342,7 @@ function settleIdle(
         removed,
       );
       if (removed.has(unit.id)) return;
-      if (!tryStartAirReturn(unit, buildings, removed, liveUnits, reserved)) {
+      if (!tryStartAirReturn(unit, buildings, removed, liveUnits, reserved, depositedU)) {
         nudgeOffBuildingCenters(unit, buildings, allUnits, removed, reserved, terrain, liaisons);
       }
       return;
@@ -380,10 +419,18 @@ function settleIdle(
         ? home
         : undefined);
     if (target) {
-      const releaseAway = target.id === unit.homeBuildingId;
+      const releaseAway = shouldReleaseAwayOnDeposit(target.id, unit, {
+        asTrainingDelivery: fromTrainingDelivery,
+      });
       const result = returnToBuilding(target, unit.u, { releaseAway });
       const bi = buildings.findIndex((b) => b.id === target.id);
       if (bi >= 0) buildings[bi] = result.building;
+      if (result.deposited > 0 && depositedU) {
+        depositedU.set(
+          unit.id,
+          (depositedU.get(unit.id) ?? 0) + result.deposited,
+        );
+      }
       if (result.leftover <= 0) {
         reserved.delete(unitCoordKey(unit.gx, unit.gy));
         removed.add(unit.id);
@@ -452,6 +499,7 @@ function tryStartAirReturn(
   removed: Set<string>,
   allUnits: readonly UnitGroup[],
   reserved: Set<string>,
+  depositedU?: Map<string, number>,
 ): boolean {
   if (unit.kind !== "air" || unit.retreating) return false;
   if (unit.returnGx == null || unit.returnGy == null) return false;
@@ -471,7 +519,17 @@ function tryStartAirReturn(
   unit.depositBuildingId = home?.id ?? unit.homeBuildingId;
   const end = snapToUnitCoord(gx, gy);
   if (unitCoordKey(unit.gx, unit.gy) === unitCoordKey(end.gx, end.gy)) {
-    settleIdle(unit, buildings, removed, { arrived: true }, allUnits, reserved, null, []);
+    settleIdle(
+      unit,
+      buildings,
+      removed,
+      { arrived: true },
+      allUnits,
+      reserved,
+      null,
+      [],
+      depositedU,
+    );
     return true;
   }
   const back = planAirPath(unit.gx, unit.gy, end.gx, end.gy, [], { ignoreCoverage: true });

@@ -634,6 +634,7 @@ export {
   occupiedGarrisonU,
   releaseAwayOccupation,
   releaseAwayForUnitDiff,
+  shouldReleaseAwayOnDeposit,
 } from "./units/garrison.js";
 export {
   collectRadioCoverage,

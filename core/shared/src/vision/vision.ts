@@ -236,6 +236,12 @@ export function filterBuildingForViewer(
   liaisons: readonly PlacedLiaison[] = [],
   allBuildings: readonly PlacedBuilding[] = [],
   connectedIds: ReadonlySet<string> | readonly string[] = [],
+  units: readonly {
+    ownerId: string;
+    gx: number;
+    gy: number;
+    kind: string;
+  }[] = [],
 ): PlacedBuilding | null {
   const level = buildingVisionLevel(b, viewerId, sources);
   if (level === "none") return null;
@@ -252,6 +258,7 @@ export function filterBuildingForViewer(
           liaisons,
           viewerId,
           connectedIds,
+          units,
         );
     }
     return copy;
@@ -365,6 +372,7 @@ export function filterBuildingsForViewer(
       liaisons,
       buildings,
       connectedIds,
+      units,
     );
     if (filtered) out.push(filtered);
   }
@@ -434,8 +442,9 @@ export function buildRoadRailAdjacency(
 }
 
 /**
- * Construction may run when the site is in direct vision, or when it sits on a
- * completed road/railway that reaches a node inside direct vision.
+ * Construction may run when the site is in direct vision (owned buildings or
+ * non-air units), or when it sits on a completed road/railway that reaches a
+ * node inside that direct vision.
  */
 export function isConstructionAllowedAt(
   gx: number,
@@ -444,8 +453,19 @@ export function isConstructionAllowedAt(
   liaisons: readonly PlacedLiaison[],
   ownerId: string,
   connectedIds: ReadonlySet<string> | readonly string[] = [],
+  units: readonly {
+    ownerId: string;
+    gx: number;
+    gy: number;
+    kind: string;
+  }[] = [],
 ): boolean {
-  const sources = collectDirectVisionSources(buildings, ownerId, connectedIds);
+  const sources = collectAllDirectVisionSources(
+    buildings,
+    units,
+    ownerId,
+    connectedIds,
+  );
   if (isInDirectVision(gx, gy, sources)) return true;
 
   const adj = buildRoadRailAdjacency(liaisons, ownerId);
@@ -483,8 +503,24 @@ export function constructionRejectReason(
   liaisons: readonly PlacedLiaison[],
   ownerId: string,
   connectedIds: ReadonlySet<string> | readonly string[] = [],
+  units: readonly {
+    ownerId: string;
+    gx: number;
+    gy: number;
+    kind: string;
+  }[] = [],
 ): string | null {
-  if (isConstructionAllowedAt(gx, gy, buildings, liaisons, ownerId, connectedIds)) {
+  if (
+    isConstructionAllowedAt(
+      gx,
+      gy,
+      buildings,
+      liaisons,
+      ownerId,
+      connectedIds,
+      units,
+    )
+  ) {
     return null;
   }
   return "须在直接视野内，或经公路/铁路连入视野后才能建造";

@@ -508,9 +508,10 @@ function advanceConstruction(): void {
         liaisons,
         b.ownerId,
         publishedLinks(b.ownerId),
+        units,
       )
     ) {
-      continue; // 出直接视野且未由公路/铁路连入视野 → 暂停建造
+      continue; // 出直接视野（建筑/单位）且未由公路/铁路连入视野 → 暂停建造
     }
     b.buildTicksRemaining -= 1;
     const def = BUILDING_BY_ID[b.buildingId];
@@ -1908,6 +1909,7 @@ function tryBuild(
     liaisons,
     session.id,
     publishedLinks(session.id),
+    units,
   );
   // 视野外可规划：立即完成的建筑也先挂起，连入视野后再完工。
   const ticks = !allowed && cost.durationTicks <= 0 ? 1 : cost.durationTicks;
