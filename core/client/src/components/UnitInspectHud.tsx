@@ -42,6 +42,9 @@ interface Props {
   /** Friendly ports used to detect berthed units. */
   buildings?: readonly PlacedBuilding[];
   onAction?: (action: UnitInspectAction, unit: UnitGroup, detail?: { airUnitId?: string }) => void;
+  /** Teammate unit: full info, no ops. */
+  isAlly?: boolean;
+  readOnly?: boolean;
 }
 
 const STATE_LABEL: Record<UnitState, string> = {
@@ -88,11 +91,14 @@ export function UnitInspectHud({
   units = [],
   buildings = [],
   onAction,
+  isAlly = false,
+  readOnly = false,
 }: Props) {
-  const mine = myPlayerId != null && unit.ownerId === myPlayerId;
+  const owned = myPlayerId != null && unit.ownerId === myPlayerId;
+  const mine = !readOnly && !isAlly && owned;
   const def = UNIT_BY_KIND[unit.kind];
   const name = def.name;
-  const showStrength = mine && !unit.strengthHidden;
+  const showStrength = (owned || isAlly) && !unit.strengthHidden;
   const hpPerU = unitHp(unit.kind);
   const moving = isMovingState(unit.state);
   const blockading = unit.state === "blockading";

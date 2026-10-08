@@ -26,6 +26,26 @@ export type GamePhase =
 
 export type SnapshotRole = "player" | "spectator";
 
+export type {
+  TeamFormat,
+  TeamRoster,
+  AllyGarrisonRequest,
+  TeamInvitePending,
+} from "./teams.js";
+export {
+  TEAM_FORMATS,
+  isTeamFormat,
+  formatTeamSizes,
+  formatSeatCount,
+  teamIdOf,
+  sameTeam,
+  isFriendly,
+  alliesOf,
+  teamMemberSet,
+  hasMultiPlayerTeam,
+  assignRandomTeams,
+} from "./teams.js";
+
 /**
  * Per-player HUD in `GameStateSnapshot.you`.
  * `energy` / `organization` are server-authoritative balances — clients must
@@ -198,6 +218,28 @@ export interface GameStateSnapshot {
    */
   winnerId?: string | null;
   winnerName?: string | null;
+  /** Winning team (team mode); wire like winnerId. */
+  winnerTeamId?: string | null;
+  /** All winning player ids (team mode). */
+  winnerPlayerIds?: string[] | null;
+  /** Display names matching winnerPlayerIds. */
+  winnerNames?: string[] | null;
+  /**
+   * playerId → teamId. Wire: bootstrap + when changed; omit when unchanged
+   * (client caches). Empty / omit = FFA solos.
+   */
+  teams?: import("./teams.js").TeamRoster;
+  /**
+   * Match uses team win / no capital re-pick. Wire: bootstrap + when changed.
+   */
+  teamMode?: boolean;
+  /** Pending team invites visible to this viewer (custom room). */
+  teamInvites?: import("./teams.js").TeamInvitePending[];
+  /**
+   * Ally garrison requests targeting buildings owned by this viewer.
+   * Wire: full list when changed; omit when unchanged (client caches).
+   */
+  allyGarrisonRequests?: import("./teams.js").AllyGarrisonRequest[];
 }
 
 function mergeEntityListField<T extends { id: string }>(
@@ -248,6 +290,22 @@ export function mergeGameStateSnapshot(
     winnerId: next.winnerId !== undefined ? next.winnerId : prev?.winnerId,
     winnerName:
       next.winnerName !== undefined ? next.winnerName : prev?.winnerName,
+    winnerTeamId:
+      next.winnerTeamId !== undefined ? next.winnerTeamId : prev?.winnerTeamId,
+    winnerPlayerIds:
+      next.winnerPlayerIds !== undefined
+        ? next.winnerPlayerIds
+        : prev?.winnerPlayerIds,
+    winnerNames:
+      next.winnerNames !== undefined ? next.winnerNames : prev?.winnerNames,
+    teams: next.teams !== undefined ? next.teams : prev?.teams,
+    teamMode: next.teamMode !== undefined ? next.teamMode : prev?.teamMode,
+    teamInvites:
+      next.teamInvites !== undefined ? next.teamInvites : prev?.teamInvites,
+    allyGarrisonRequests:
+      next.allyGarrisonRequests !== undefined
+        ? next.allyGarrisonRequests
+        : prev?.allyGarrisonRequests,
     pollutionZones:
       next.pollutionZones !== undefined
         ? next.pollutionZones
@@ -278,11 +336,24 @@ export type ClientToServer =
   | { type: "join_room"; roomId: string }
   | {
       type: "queue_match";
-      /** Target lobby size 2–5 */
-      playerCount: number;
+      /** Target lobby size 2–5 (FFA); ignored when teamFormat set. */
+      playerCount?: number;
+      /** Team matchmaking format; implies seat count and random teams. */
+      teamFormat?: import("./teams.js").TeamFormat;
     }
   | { type: "cancel_queue" }
   | { type: "leave_room" }
+  | { type: "team_invite"; toPlayerId: string }
+  | { type: "team_invite_accept"; fromPlayerId: string }
+  | { type: "team_invite_reject"; fromPlayerId: string }
+  | { type: "team_leave" }
+  | {
+      type: "ally_garrison_request";
+      unitId: string;
+      buildingId: string;
+    }
+  | { type: "ally_garrison_accept"; requestId: string }
+  | { type: "ally_garrison_reject"; requestId: string }
   | {
       type: "init";
       mapSize?: import("./map.js").MapSizeId;
@@ -500,6 +571,15 @@ export type ServerToClient =
       roomId: string;
       winnerId: string;
       winnerName: string;
+      winnerTeamId?: string;
+      winnerPlayerIds?: string[];
+      winnerNames?: string[];
+    }
+  | {
+      type: "team_invite_pending";
+      fromPlayerId: string;
+      fromName: string;
+      toPlayerId: string;
     }
   | {
       type: "room_closed";
@@ -840,6 +920,7 @@ export {
   applyEndHold,
   applyEndBlockade,
   applyAssignHome,
+  applyAllyGarrisonDeposit,
   previewUnitMove,
   previewTrainingDeliveryPath,
   isAirKind,

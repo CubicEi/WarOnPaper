@@ -87,7 +87,9 @@
 | `ping` | 延迟探测，带 `t` |
 | `create_room` | `mapSize`、`seed?`、`allowRespawn`、`maxPlayers` 2–10 |
 | `join_room` | `roomId` |
-| `queue_match` | 匹配大厅人数 2–5 |
+| `queue_match` | FFA：`playerCount` 2–5；或 `teamFormat` 组队匹配 |
+| `team_invite` / `accept` / `reject` / `team_leave` | 自定义房组队 |
+| `ally_garrison_request` / `accept` / `reject` | 友方进驻审批 |
 | `cancel_queue` / `leave_room` | 取消匹配 / 离开 |
 | `init` | 遗留单房：地图与种子 |
 | `chat` | 明文，服务端截断 |
@@ -145,7 +147,8 @@
 | `error` | `code` + `message` |
 | `tip` | 提示文案 |
 | `room_ready` / `room_status` / `match_status` | 房间与匹配 |
-| `game_over` / `room_closed` | 终局与关房（`idle` \| `game_over` \| `destroyed`） |
+| `game_over` / `room_closed` | 终局与关房；`game_over` 可带 `winnerTeamId` / `winnerPlayerIds` / `winnerNames` |
+| `team_invite_pending` | 自定义房邀请推送 |
 | `chat` | 广播聊天 |
 | `action_result` | 见 `debug/actionLog.ts` 的 `PlayerActionResultMsg` |
 

@@ -14,7 +14,7 @@
 | `ping` | `t: number` | 延迟探测 |
 | `create_room` | `mapSize`, `seed?`, `allowRespawn`, `maxPlayers` | 自定义建房 |
 | `join_room` | `roomId` | 按房间码加入 |
-| `queue_match` | `playerCount` | 进入 2–5 人匹配队列 |
+| `queue_match` | `playerCount?`, `teamFormat?` | FFA：`playerCount` 2–5；组队：`teamFormat`（`2v2`…）隐含座位数 |
 | `cancel_queue` | — | 取消匹配 |
 | `leave_room` | — | 离房回大厅 |
 
@@ -29,11 +29,15 @@
 | `pong` | `t` |
 | `error` | `code`, `message` |
 | `room_ready` | `roomId` |
-| `room_status` | `roomId`, `players`, `maxPlayers`, `mapSize`, `allowRespawn` |
+| `room_status` | `roomId`, `players`, `maxPlayers`, `mapSize`, `allowRespawn`, `teamMode?` |
 | `room_closed` | `roomId`, `reason` |
-| `queued` | `playerCount` |
-| `match_status` | `playerCount`, `queued`, `needed` |
+| `queued` | `playerCount`, `teamFormat?` |
+| `match_status` | `playerCount`, `queued`, `needed`, `teamFormat?` |
 | `queue_cancelled` | — |
+
+### 1.3 匹配队列键
+
+`MatchQueues` 按 `ffa:{2|3|4|5}` 或 `team:{format}` 分队；成房时 `allowRespawn=false`，人数 ≥4 用 `119x79`。组队局写入随机 `teams` 并 `teamMode=true`。
 
 `send` / `sendError` 在 `index.ts`：仅当 `ws.readyState === OPEN` 时 `JSON.stringify`。
 

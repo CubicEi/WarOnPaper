@@ -59,6 +59,7 @@ import {
   usesCarriedSupply,
 } from "./supply.js";
 import type { UnitGroup, UnitMoveRequest, UnitMoveSource } from "./types.js";
+import { isFriendly, sameTeam, type TeamRoster } from "../teams.js";
 
 export interface MoveContext {
   map: MapConfig;
@@ -68,6 +69,8 @@ export interface MoveContext {
   units: readonly UnitGroup[];
   connectedIds: ReadonlySet<string> | readonly string[];
   nextId: () => string;
+  /** Optional team roster — allies share cells / cannot be attacked. */
+  teams?: TeamRoster | null;
 }
 
 export interface MoveApplyResult {
@@ -139,7 +142,7 @@ function planFor(
   const rangeLabel: ActivityRangeLabel = portNavy ? "port" : "radio";
   const coverage = ignoreCoverage
     ? []
-    : collectMovingUnitCoverage(unit, ctx.buildings, ctx.connectedIds);
+    : collectMovingUnitCoverage(unit, ctx.buildings, ctx.connectedIds, ctx.teams);
   const dest = snapToUnitCoord(toGx, toGy);
   const allowImpassableStart =
     isNavyKind(unit.kind) && isPortCell(unit.gx, unit.gy, ctx.buildings);
@@ -438,11 +441,17 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
     : undefined;
   if (isAttack) {
     if (attackUnitId) {
-      if (!attackUnit || attackUnit.ownerId === req.ownerId) {
+      if (
+        !attackUnit ||
+        isFriendly(ctx.teams, attackUnit.ownerId, req.ownerId)
+      ) {
         return fail("进攻单位目标无效", buildings, units);
       }
     } else if (attackBuildingId) {
-      if (!attackBuilding || attackBuilding.ownerId === req.ownerId) {
+      if (
+        !attackBuilding ||
+        isFriendly(ctx.teams, attackBuilding.ownerId, req.ownerId)
+      ) {
         return fail("进攻建筑目标无效", buildings, units);
       }
       if (attackBuilding.buildingId === "artificial_island") {
@@ -458,7 +467,7 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
         ? findHoldCoordOutside(
             holdTarget.gx,
             holdTarget.gy,
-            occupiedUnitKeys(units, new Set()),
+            occupiedUnitKeys(units, new Set(), undefined, ctx.teams),
           )
         : attackUnit
           ? snapToUnitCoord(attackUnit.gx, attackUnit.gy)
@@ -489,6 +498,7 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
         deployed.unit,
         buildings,
         ctx.connectedIds,
+        ctx.teams,
       );
       if (!isInsideAnyCircle(dest.gx, dest.gy, coverage)) {
         return fail("目标不在所属机场工作范围内（含关联雷达）", buildings, units);
@@ -517,7 +527,12 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
       return fail("空军无需携行补给", buildings, units);
     }
     if (u.kind === "air" && isAttack) {
-      const coverage = collectMovingUnitCoverage(u, buildings, ctx.connectedIds);
+      const coverage = collectMovingUnitCoverage(
+        u,
+        buildings,
+        ctx.connectedIds,
+        ctx.teams,
+      );
       if (!isInsideAnyCircle(dest.gx, dest.gy, coverage)) {
         return fail("目标不在所属机场工作范围内（含关联雷达）", buildings, units);
       }
@@ -605,7 +620,7 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
       } else {
         planUnit = { ...unit, gx: embark.gx, gy: embark.gy };
       }
-      const dockOccupied = occupiedUnitKeys(nextUnits, ignore, unit);
+      const dockOccupied = occupiedUnitKeys(nextUnits, ignore, unit, ctx.teams);
       for (const k of reservedEnds) dockOccupied.add(k);
       for (const k of centers) dockOccupied.add(k);
       const dock = findFreeUnitCoord(
@@ -658,7 +673,7 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
       (!!req.asTrainingDelivery && isNavyKind(unit.kind));
     if (!skipNudge && path.length >= 1) {
       const end = path[path.length - 1]!;
-      const occupied = occupiedUnitKeys(nextUnits, ignore, unit);
+      const occupied = occupiedUnitKeys(nextUnits, ignore, unit, ctx.teams);
       for (const k of reservedEnds) occupied.add(k);
       for (const k of centers) occupied.add(k);
       const free = findFreeUnitCoord(
@@ -1439,7 +1454,7 @@ export function applyAssignHome(
 
   for (const unit of picked) {
     const deposit = unit.kind === "air";
-    const occupied = occupiedUnitKeys(units, ignore, unit);
+    const occupied = occupiedUnitKeys(units, ignore, unit, ctx.teams);
     for (const k of reserved) occupied.add(k);
     for (const k of centers) occupied.add(k);
     const stand = deposit
@@ -1655,6 +1670,80 @@ export function previewTrainingDeliveryPath(
 
 export function isAirKind(kind: UnitKind): boolean {
   return kind === "air";
+}
+
+/**
+ * Merge a fielded ally unit into a teammate building's present U (approval path).
+ * Removes the unit, adds U to the building, releases away on the unit's home.
+ */
+export function applyAllyGarrisonDeposit(
+  fromPlayerId: string,
+  buildingOwnerId: string,
+  unitId: string,
+  buildingId: string,
+  buildingsIn: readonly PlacedBuilding[],
+  unitsIn: readonly UnitGroup[],
+  teams?: TeamRoster | null,
+): {
+  ok: boolean;
+  error?: string;
+  buildings: PlacedBuilding[];
+  units: UnitGroup[];
+} {
+  const buildings = buildingsIn.map((b) => ({ ...b }));
+  const units = unitsIn.map((u) => ({
+    ...u,
+    path: u.path?.map((p) => ({ ...p })),
+  }));
+  if (!sameTeam(teams, fromPlayerId, buildingOwnerId)) {
+    return { ok: false, error: "仅可进驻友方建筑", buildings, units };
+  }
+  const ui = units.findIndex((u) => u.id === unitId);
+  if (ui < 0) return { ok: false, error: "单位不存在", buildings, units };
+  const unit = units[ui]!;
+  if (unit.ownerId !== fromPlayerId) {
+    return { ok: false, error: "单位不属于申请人", buildings, units };
+  }
+  if (unit.u < 1) return { ok: false, error: "单位没有编制", buildings, units };
+  if (unit.state === "training") {
+    return { ok: false, error: "训练送达中的单位不能进驻", buildings, units };
+  }
+  if (unit.retreating) {
+    return { ok: false, error: RETREAT_LOCK, buildings, units };
+  }
+  const bi = buildings.findIndex((b) => b.id === buildingId);
+  if (bi < 0) return { ok: false, error: "建筑不存在", buildings, units };
+  const building = buildings[bi]!;
+  if (building.ownerId !== buildingOwnerId) {
+    return { ok: false, error: "建筑不属于审批方", buildings, units };
+  }
+  if (!isBuildingComplete(building) && building.buildingId !== "capital") {
+    return { ok: false, error: "建筑尚未建成", buildings, units };
+  }
+  const kind = unitKindFromBuilding(building.buildingId);
+  if (!kind || kind !== unit.kind) {
+    return { ok: false, error: "兵种与目标建筑不匹配", buildings, units };
+  }
+  const room = garrisonRoom(building);
+  if (unit.u > room) {
+    return {
+      ok: false,
+      error: `空位不足（剩余 ${room} U，需要 ${unit.u} U）`,
+      buildings,
+      units,
+    };
+  }
+  const deposited = returnToBuilding(building, unit.u, { releaseAway: false });
+  if (deposited.deposited < unit.u) {
+    return { ok: false, error: "空位不足", buildings, units };
+  }
+  buildings[bi] = deposited.building;
+  const homeI = buildings.findIndex((b) => b.id === unit.homeBuildingId);
+  if (homeI >= 0 && buildings[homeI]!.ownerId === fromPlayerId) {
+    buildings[homeI] = releaseAwayOccupation(buildings[homeI]!, unit.u);
+  }
+  units.splice(ui, 1);
+  return { ok: true, buildings, units };
 }
 
 export { isInsideAnyCircle };

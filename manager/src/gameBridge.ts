@@ -13,6 +13,8 @@ export interface GameRoomCreateOptions {
   mapSize: MapSizeId;
   seed?: number | string;
   idleMs?: number;
+  teams?: Record<string, string>;
+  teamMode?: boolean;
 }
 
 export type RoomSend = (msg: unknown) => void;
@@ -23,6 +25,9 @@ export type GameRoomEvent =
       roomId: string;
       winnerId: string;
       winnerName: string;
+      winnerTeamId?: string;
+      winnerPlayerIds?: string[];
+      winnerNames?: string[];
     }
   | {
       type: "room_closed";

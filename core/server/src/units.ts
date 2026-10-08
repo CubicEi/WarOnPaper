@@ -54,6 +54,7 @@ export interface UnitWorld {
   liaisons: PlacedLiaison[];
   units: UnitGroup[];
   connectedByOwner: Map<string, Set<string>>;
+  teams?: import("@wop/shared").TeamRoster | null;
 }
 
 export function advanceUnitMovement(world: UnitWorld): void {
@@ -65,6 +66,7 @@ export function advanceUnitMovement(world: UnitWorld): void {
     world.terrain,
     world.connectedByOwner,
     TICK_MS / 1000,
+    world.teams,
   );
   world.units.length = 0;
   world.units.push(...result.units);
@@ -84,6 +86,7 @@ export function advanceUnitBlockades(
     world.buildings,
     energyByOwner,
     TICK_MS / 1000,
+    world.teams,
   );
   world.units.length = 0;
   world.units.push(...result.units);
@@ -123,7 +126,9 @@ export function advanceUnitCombat(
       liaisons: world.liaisons,
       connectedByOwner: world.connectedByOwner,
       nextId: () => randomUUID(),
+      teams: world.teams,
     },
+    world.teams,
   );
   world.units.length = 0;
   world.units.push(...fight.units);
@@ -159,7 +164,7 @@ export function advanceUnitTraining(world: UnitWorld): void {
       u: done.job.u,
       gx: done.sourceGx,
       gy: done.sourceGy,
-      // Prefer the delivery target as home so leftover / return / retreat入库正确。
+      // Prefer the delivery target as home so leftover / return / retreatå¥åºæ­£ç¡®ã
       homeBuildingId: done.job.targetBuildingId || done.sourceBuildingId,
     });
     const target = world.buildings.find((b) => b.id === done.job.targetBuildingId);
@@ -184,6 +189,7 @@ export function advanceUnitTraining(world: UnitWorld): void {
         liaisons: world.liaisons,
         units: [...world.units, unit],
         connectedIds: world.connectedByOwner.get(done.ownerId) ?? new Set(),
+        teams: world.teams,
         nextId: () => randomUUID(),
       },
     );
@@ -211,11 +217,11 @@ export function handleMoveUnits(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   if (!world.terrain) {
-    sendError(session.ws, "no_terrain", "尚未生成地形");
+    sendError(session.ws, "no_terrain", "å°æªçæå°å½¢");
     return;
   }
   const result = applyUnitMove(
@@ -227,15 +233,16 @@ export function handleMoveUnits(
       liaisons: world.liaisons,
       units: world.units,
       connectedIds: world.connectedByOwner.get(session.id) ?? new Set(),
+      teams: world.teams,
       nextId: () => randomUUID(),
     },
   );
   if (!result.ok) {
-    sendError(session.ws, "move_rejected", result.error ?? "无法调动");
+    sendError(session.ws, "move_rejected", result.error ?? "æ æ³è°å¨");
     return;
   }
   if (session.hud.organization < result.organizationCost) {
-    sendError(session.ws, "not_enough_org", `组织度不足（需要 ${result.organizationCost} O）`);
+    sendError(session.ws, "not_enough_org", `ç»ç»åº¦ä¸è¶³ï¼éè¦ ${result.organizationCost} Oï¼`);
     return;
   }
   session.hud.organization -= result.organizationCost;
@@ -264,11 +271,11 @@ export function handleAssignHome(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   if (!world.terrain) {
-    sendError(session.ws, "no_terrain", "尚未生成地形");
+    sendError(session.ws, "no_terrain", "å°æªçæå°å½¢");
     return;
   }
   const result = applyAssignHome(session.id, buildingId, unitIds, {
@@ -278,14 +285,15 @@ export function handleAssignHome(
     liaisons: world.liaisons,
     units: world.units,
     connectedIds: world.connectedByOwner.get(session.id) ?? new Set(),
+    teams: world.teams,
     nextId: () => randomUUID(),
   });
   if (!result.ok) {
-    sendError(session.ws, "assign_rejected", result.error ?? "无法归属");
+    sendError(session.ws, "assign_rejected", result.error ?? "æ æ³å½å±");
     return;
   }
   if (session.hud.organization < result.organizationCost) {
-    sendError(session.ws, "not_enough_org", `组织度不足（需要 ${result.organizationCost} O）`);
+    sendError(session.ws, "not_enough_org", `ç»ç»åº¦ä¸è¶³ï¼éè¦ ${result.organizationCost} Oï¼`);
     return;
   }
   session.hud.organization -= result.organizationCost;
@@ -316,11 +324,11 @@ export function handleTrainUnits(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   if (!commsLinked) {
-    sendError(session.ws, "not_linked", "训练场未连通通讯");
+    sendError(session.ws, "not_linked", "è®­ç»åºæªè¿ééè®¯");
     return;
   }
   const ids =
@@ -330,7 +338,7 @@ export function handleTrainUnits(
         ? [targetId]
         : [];
   if (ids.length === 0) {
-    sendError(session.ws, "train_rejected", "请选择至少一个目标建筑");
+    sendError(session.ws, "train_rejected", "è¯·éæ©è³å°ä¸ä¸ªç®æ å»ºç­");
     return;
   }
   const result = enqueueTraining(
@@ -346,11 +354,11 @@ export function handleTrainUnits(
     world.units,
   );
   if (!result.ok) {
-    sendError(session.ws, "train_rejected", result.error ?? "无法训练");
+    sendError(session.ws, "train_rejected", result.error ?? "æ æ³è®­ç»");
     return;
   }
   if (session.hud.energy < result.energyCost) {
-    sendError(session.ws, "not_enough_energy", `能源不足（需要 ${result.energyCost} E）`);
+    sendError(session.ws, "not_enough_energy", `è½æºä¸è¶³ï¼éè¦ ${result.energyCost} Eï¼`);
     return;
   }
   session.hud.energy -= result.energyCost;
@@ -380,11 +388,11 @@ export function handleBlockadeUnits(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   if (!world.terrain) {
-    sendError(session.ws, "no_terrain", "尚未生成地形");
+    sendError(session.ws, "no_terrain", "å°æªçæå°å½¢");
     return;
   }
   const result = applyUnitBlockade(
@@ -396,19 +404,20 @@ export function handleBlockadeUnits(
       liaisons: world.liaisons,
       units: world.units,
       connectedIds: world.connectedByOwner.get(session.id) ?? new Set(),
+      teams: world.teams,
       nextId: () => randomUUID(),
     },
   );
   if (!result.ok) {
-    sendError(session.ws, "blockade_rejected", result.error ?? "无法封锁");
+    sendError(session.ws, "blockade_rejected", result.error ?? "æ æ³å°é");
     return;
   }
   if (session.hud.organization < result.organizationCost) {
-    sendError(session.ws, "not_enough_org", `组织度不足（需要 ${result.organizationCost} O）`);
+    sendError(session.ws, "not_enough_org", `ç»ç»åº¦ä¸è¶³ï¼éè¦ ${result.organizationCost} Oï¼`);
     return;
   }
   if (session.hud.energy < result.energyCost) {
-    sendError(session.ws, "not_enough_energy", `能源不足（需要 ${result.energyCost} E）`);
+    sendError(session.ws, "not_enough_energy", `è½æºä¸è¶³ï¼éè¦ ${result.energyCost} Eï¼`);
     return;
   }
   session.hud.organization -= result.organizationCost;
@@ -438,12 +447,12 @@ export function handleEndBlockade(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   const result = applyEndBlockade(session.id, unitIds, world.units);
   if (!result.ok) {
-    sendError(session.ws, "end_blockade_rejected", result.error ?? "无法结束封锁");
+    sendError(session.ws, "end_blockade_rejected", result.error ?? "æ æ³ç»æå°é");
     return;
   }
   world.units.length = 0;
@@ -466,11 +475,11 @@ export function handleSupplyUnits(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   if (!world.terrain) {
-    sendError(session.ws, "no_terrain", "尚未生成地形");
+    sendError(session.ws, "no_terrain", "å°æªçæå°å½¢");
     return;
   }
   const result = applyUnitSupply(
@@ -489,15 +498,16 @@ export function handleSupplyUnits(
       liaisons: world.liaisons,
       units: world.units,
       connectedIds: world.connectedByOwner.get(session.id) ?? new Set(),
+      teams: world.teams,
       nextId: () => randomUUID(),
     },
   );
   if (!result.ok) {
-    sendError(session.ws, "supply_rejected", result.error ?? "无法补给");
+    sendError(session.ws, "supply_rejected", result.error ?? "æ æ³è¡¥ç»");
     return;
   }
   if (session.hud.organization < result.organizationCost) {
-    sendError(session.ws, "not_enough_org", `组织度不足（需要 ${result.organizationCost} O）`);
+    sendError(session.ws, "not_enough_org", `ç»ç»åº¦ä¸è¶³ï¼éè¦ ${result.organizationCost} Oï¼`);
     return;
   }
   session.hud.organization -= result.organizationCost;
@@ -535,11 +545,11 @@ export function handleAttackUnits(
   },
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   if (!world.terrain) {
-    sendError(session.ws, "no_terrain", "尚未生成地形");
+    sendError(session.ws, "no_terrain", "å°æªçæå°å½¢");
     return;
   }
   const ctx = {
@@ -549,6 +559,7 @@ export function handleAttackUnits(
     liaisons: world.liaisons,
     units: world.units,
     connectedIds: world.connectedByOwner.get(session.id) ?? new Set(),
+    teams: world.teams,
     nextId: () => randomUUID(),
   };
   const attackTarget = targetUnitId
@@ -587,11 +598,11 @@ export function handleAttackUnits(
         ctx,
       );
   if (!result.ok) {
-    sendError(session.ws, "attack_rejected", result.error ?? "无法进攻");
+    sendError(session.ws, "attack_rejected", result.error ?? "æ æ³è¿æ»");
     return;
   }
   if (session.hud.organization < result.organizationCost) {
-    sendError(session.ws, "not_enough_org", `组织度不足（需要 ${result.organizationCost} O）`);
+    sendError(session.ws, "not_enough_org", `ç»ç»åº¦ä¸è¶³ï¼éè¦ ${result.organizationCost} Oï¼`);
     return;
   }
   session.hud.organization -= result.organizationCost;
@@ -622,11 +633,11 @@ export function handleHoldUnits(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   if (!world.terrain) {
-    sendError(session.ws, "no_terrain", "尚未生成地形");
+    sendError(session.ws, "no_terrain", "å°æªçæå°å½¢");
     return;
   }
   const b = world.buildings.find((x) => x.id === holdBuildingId);
@@ -646,19 +657,20 @@ export function handleHoldUnits(
       liaisons: world.liaisons,
       units: world.units,
       connectedIds: world.connectedByOwner.get(session.id) ?? new Set(),
+      teams: world.teams,
       nextId: () => randomUUID(),
     },
   );
   if (!result.ok) {
-    sendError(session.ws, "hold_rejected", result.error ?? "无法驻守");
+    sendError(session.ws, "hold_rejected", result.error ?? "æ æ³é©»å®");
     return;
   }
   if (session.hud.organization < result.organizationCost) {
-    sendError(session.ws, "not_enough_org", `组织度不足（需要 ${result.organizationCost} O）`);
+    sendError(session.ws, "not_enough_org", `ç»ç»åº¦ä¸è¶³ï¼éè¦ ${result.organizationCost} Oï¼`);
     return;
   }
   if (session.hud.energy < result.energyCost) {
-    sendError(session.ws, "not_enough_energy", `能源不足（需要 ${result.energyCost} E）`);
+    sendError(session.ws, "not_enough_energy", `è½æºä¸è¶³ï¼éè¦ ${result.energyCost} Eï¼`);
     return;
   }
   session.hud.organization -= result.organizationCost;
@@ -688,12 +700,12 @@ export function handleEndHold(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   const result = applyEndHold(session.id, unitIds, world.units);
   if (!result.ok) {
-    sendError(session.ws, "end_hold_rejected", result.error ?? "无法结束驻守");
+    sendError(session.ws, "end_hold_rejected", result.error ?? "æ æ³ç»æé©»å®");
     return;
   }
   world.units.length = 0;
@@ -713,7 +725,7 @@ export function handleMutualDefense(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   const result = applyMutualDefense(
@@ -724,11 +736,11 @@ export function handleMutualDefense(
     world.units,
   );
   if (!result.ok) {
-    sendError(session.ws, "mutual_defense_rejected", result.error ?? "无法互防");
+    sendError(session.ws, "mutual_defense_rejected", result.error ?? "æ æ³äºé²");
     return;
   }
   if (session.hud.organization < result.organizationCost) {
-    sendError(session.ws, "not_enough_org", `组织度不足（需要 ${result.organizationCost} O）`);
+    sendError(session.ws, "not_enough_org", `ç»ç»åº¦ä¸è¶³ï¼éè¦ ${result.organizationCost} Oï¼`);
     return;
   }
   session.hud.organization -= result.organizationCost;
@@ -753,12 +765,12 @@ export function handleEndMutualDefense(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   const result = applyEndMutualDefense(session.id, buildingId, world.buildings);
   if (!result.ok) {
-    sendError(session.ws, "end_mutual_defense_rejected", result.error ?? "无法解除互防");
+    sendError(session.ws, "end_mutual_defense_rejected", result.error ?? "æ æ³è§£é¤äºé²");
     return;
   }
   world.buildings.length = 0;
@@ -800,11 +812,11 @@ export function handleBuildCarrier(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   if (!commsLinked) {
-    sendError(session.ws, "not_linked", "港口未连通通讯");
+    sendError(session.ws, "not_linked", "æ¸¯å£æªè¿ééè®¯");
     return;
   }
   const result = applyBuildCarrier(
@@ -815,11 +827,11 @@ export function handleBuildCarrier(
     () => randomUUID(),
   );
   if (!result.ok) {
-    sendError(session.ws, "carrier_rejected", result.error ?? "无法建造航母");
+    sendError(session.ws, "carrier_rejected", result.error ?? "æ æ³å»ºé èªæ¯");
     return;
   }
   if (session.hud.energy < result.energyCost) {
-    sendError(session.ws, "not_enough_energy", `能源不足（需要 ${result.energyCost} E）`);
+    sendError(session.ws, "not_enough_energy", `è½æºä¸è¶³ï¼éè¦ ${result.energyCost} Eï¼`);
     return;
   }
   session.hud.energy -= result.energyCost;
@@ -848,7 +860,7 @@ export function handleEmbarkAir(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   const result = applyEmbarkAir(
@@ -860,7 +872,7 @@ export function handleEmbarkAir(
     world.buildings,
   );
   if (!result.ok) {
-    sendError(session.ws, "embark_rejected", result.error ?? "无法上舰");
+    sendError(session.ws, "embark_rejected", result.error ?? "æ æ³ä¸è°");
     return;
   }
   world.buildings.length = 0;
@@ -886,7 +898,7 @@ export function handleDisembarkAir(
   log: (scope: string, ...args: unknown[]) => void,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   const result = applyDisembarkAir(
@@ -898,7 +910,7 @@ export function handleDisembarkAir(
     () => randomUUID(),
   );
   if (!result.ok) {
-    sendError(session.ws, "disembark_rejected", result.error ?? "无法放飞");
+    sendError(session.ws, "disembark_rejected", result.error ?? "æ æ³æ¾é£");
     return;
   }
   world.units.length = 0;
@@ -921,11 +933,11 @@ export function handleStopUnits(
   retreat = false,
 ): void {
   if (!playing) {
-    sendError(session.ws, "not_playing", "请先选定首都");
+    sendError(session.ws, "not_playing", "è¯·åéå®é¦é½");
     return;
   }
   if (!world.terrain) {
-    sendError(session.ws, "no_terrain", "尚未生成地形");
+    sendError(session.ws, "no_terrain", "å°æªçæå°å½¢");
     return;
   }
   const result = applyUnitStop(
@@ -942,15 +954,15 @@ export function handleStopUnits(
     { retreat },
   );
   if (!result.ok) {
-    sendError(session.ws, "stop_rejected", result.error ?? "无法停止");
+    sendError(session.ws, "stop_rejected", result.error ?? "æ æ³åæ­¢");
     return;
   }
   if (session.hud.organization < result.organizationCost) {
-    sendError(session.ws, "not_enough_org", `组织度不足（需要 ${result.organizationCost} O）`);
+    sendError(session.ws, "not_enough_org", `ç»ç»åº¦ä¸è¶³ï¼éè¦ ${result.organizationCost} Oï¼`);
     return;
   }
   if (session.hud.energy < result.energyCost) {
-    sendError(session.ws, "not_enough_energy", `能源不足（需要 ${result.energyCost} E）`);
+    sendError(session.ws, "not_enough_energy", `è½æºä¸è¶³ï¼éè¦ ${result.energyCost} Eï¼`);
     return;
   }
   session.hud.organization -= result.organizationCost;

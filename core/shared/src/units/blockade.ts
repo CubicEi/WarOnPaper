@@ -9,6 +9,7 @@ import { resolveCombatRound } from "./combat.js";
 import { releaseAwayForUnitDiff } from "./garrison.js";
 import type { UnitGroup } from "./types.js";
 import type { PlacedBuilding } from "../buildings/actions.js";
+import { isFriendly, type TeamRoster } from "../teams.js";
 
 export interface BlockadeTickResult {
   units: UnitGroup[];
@@ -34,6 +35,7 @@ export function advanceBlockades(
   buildingsIn: readonly PlacedBuilding[],
   energyAvailable: ReadonlyMap<string, number>,
   dtSec: number,
+  teams?: TeamRoster | null,
 ): BlockadeTickResult {
   const before = unitsIn.map((u) => ({ ...u, path: u.path?.map((p) => ({ ...p })) }));
   const units = before.map((u) => ({ ...u, path: u.path?.map((p) => ({ ...p })) }));
@@ -85,7 +87,7 @@ export function advanceBlockades(
           ({ e }) =>
             !removed.has(e.id) &&
             e.id !== blocker.id &&
-            e.ownerId !== blocker.ownerId &&
+            !isFriendly(teams, e.ownerId, blocker.ownerId) &&
             e.u > 0 &&
             visionDistDu(units[bi]!.gx, units[bi]!.gy, e.gx, e.gy) <=
               UNIT_BLOCKADE_RADIUS + 1e-9,

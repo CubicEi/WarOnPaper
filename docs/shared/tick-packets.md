@@ -85,7 +85,14 @@ sequenceDiagram
 | `roomId?` | `string` | 托管对局房间 id | 每帧（可选字段，现实现仍带） |
 | `allowRespawn?` | `boolean` | 首都陷落后再选都 vs 观战 | **仅开局 / 再入房** |
 | `role?` | `SnapshotRole` | `"player"` \| `"spectator"` | **bootstrap / 再入房，或相对该连接上次已发送值变化时** |
-| `winnerId?` / `winnerName?` | `string \| null` | 终局信息 | **bootstrap / 再入房，或相对该连接上次已发送值变化时**（成对） |
+| `winnerId?` / `winnerName?` | `string \| null` | 终局信息（主胜者） | **bootstrap / 再入房，或相对该连接上次已发送值变化时**（成对） |
+| `winnerTeamId?` / `winnerPlayerIds?` / `winnerNames?` | 队胜扩展 | 组队终局全队名单 | 同 winner* |
+| `teams?` | `Record<playerId, teamId>` | 队伍花名册 | 每帧（现实现） |
+| `teamMode?` | `boolean` | 队胜 / 无再选都 | 每帧（现实现） |
+| `teamInvites?` | `{ fromPlayerId, toPlayerId }[]` | 与本观众相关的待处理邀请 | 每帧 |
+| `allyGarrisonRequests?` | `AllyGarrisonRequest[]` | 指向本观众建筑的友方进驻申请 | 每帧 |
+
+> 组队时 `connectedBuildingIds` 为同队已发布连通建筑 id 的并集；视野过滤传入 `teams`。
 
 ### 3.0 字段发送与客户端合并
 

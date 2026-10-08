@@ -17,6 +17,8 @@ flowchart TB
   GameCanvas --> MobilizePanel
   GameCanvas --> TrainPanel
   GameCanvas --> ChatPanel
+  GameCanvas --> AllyRequestStack
+  GameCanvas --> TeamPanel
   BuildModeOverlay --> BuildTreePanel
   HudOverlay --> CapitalHpRing
 ```
@@ -26,14 +28,16 @@ flowchart TB
 | `HudOverlay` | 左上角能源/组织 + 首都 HP 环 |
 | `CapitalHpRing` | SVG/canvas 环显示首都生命 |
 | `PointActionMenu` | 点选半环动作钮 |
-| `RadialPickMenu` | 多目标圆形点选（坐标 / 建筑 / 单位） |
+| `RadialPickMenu` | 多目标圆形点选（坐标 / 建筑 / 单位）；友军用蓝图标 |
 | `BuildModeOverlay` | 全屏建造/联络线编辑壳 |
 | `BuildTreePanel` | 升级树节点点击 |
-| `BuildingInspectHud` | 建筑信息与操作 |
-| `UnitInspectHud` | 单位信息与停止/撤退等 |
-| `MobilizePanel` | 勾选驻军/野外部队并发令 |
+| `BuildingInspectHud` | 建筑信息与操作；友军 `isAlly` 只读全信息 |
+| `UnitInspectHud` | 单位信息与停止/撤退等；友军只读 |
+| `MobilizePanel` | 勾选驻军/野外部队并发令；友方建筑部署 → 进驻申请 |
 | `TrainPanel` | 训练种类、U、多目标 |
 | `ChatPanel` | 小地图上方聊天 |
+| `AllyRequestStack` | 叠在 `ChatPanel` **上方**的友方进驻申请条/详情 |
+| `TeamPanel` | 选都阶段自定义房组队邀请面板（`/ui/team.png`） |
 | `ErrorToast` | 短暂错误/提示 |
 | `DebugOverlay` | F2 状态与操作日志 |
 
@@ -57,7 +61,7 @@ flowchart TB
 - 项：`coord` / `building` / `unit`（顺序：坐标 → 建筑 → 单位）。  
 - **布局**：左右侧环位（正上/正下不排建筑/单位）；`coord`（「坐标（x，y）」）固定在圆环正下方居中，不占环位。建筑/单位角度表 **−45° / 0° / 45°（右）→ 135° / 180° / 225°（左）**，右侧优先、少量不拉开均分；左侧项 `is-left` 标签在图标左侧。环上建筑+单位 &gt;6 时最多 6 +「更多」列表（列表在坐标/更多下方）。  
 - 点 `building` / `unit` → 与直接点选相同的居中焦点 + 检视 HUD；点 `coord` → 半环点菜单。  
-- 环上/列表图标一律用黑版资源（建筑 `buildingUiIcon`、单位 `units - black`）。  
+- 环上/列表图标按阵营：我方（`ownerId === myPlayerId`）用黑版（建筑 `buildingIconSrc(..., "ui")`、单位 `units - black`）；敌方（非我方，与地图 `drawMap` 一致）用橙版（`buildings - orange` / `units - orange`）。  
 - 复用 `.point-action-btn` 视觉；坐标钮为 `.radial-pick-coord`。
 
 ## 4. `BuildModeOverlay` + `BuildTreePanel`

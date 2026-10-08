@@ -6,6 +6,7 @@ import {
   unitInDirectVision,
 } from "../vision/vision.js";
 import type { PlacedBuilding } from "../buildings/actions.js";
+import { isFriendly, type TeamRoster } from "../teams.js";
 
 function stripOwnServerOnly(u: UnitGroup): UnitGroup {
   const copy: UnitGroup = { ...u, visionLevel: "direct" };
@@ -15,7 +16,7 @@ function stripOwnServerOnly(u: UnitGroup): UnitGroup {
 
 /**
  * Viewer snapshot for units (§4.5).
- * - Own: full (position, kind, u, state, path + pathIndex, …) so client can
+ * - Own / ally: full (position, kind, u, state, path + pathIndex, …) so client can
  *   preview remaining march route when selected
  * - Enemy satellite: omitted
  * - Enemy direct: position + kind + state; hide u (strengthHidden); no path
@@ -25,8 +26,9 @@ export function filterUnitForViewer(
   unit: UnitGroup,
   viewerId: string,
   sources: ReturnType<typeof collectAllDirectVisionSources>,
+  teams?: TeamRoster | null,
 ): UnitGroup | null {
-  if (unit.ownerId === viewerId) return stripOwnServerOnly(unit);
+  if (isFriendly(teams, unit.ownerId, viewerId)) return stripOwnServerOnly(unit);
   if (!unitInDirectVision(unit, sources)) return null;
   const moving = unit.state === "moving" || unit.state === "training";
   return {
@@ -56,16 +58,18 @@ export function filterUnitsForViewer(
   viewerId: string,
   buildings: readonly PlacedBuilding[],
   connectedIds: ReadonlySet<string> | readonly string[] = [],
+  teams?: TeamRoster | null,
 ): UnitGroup[] {
   const sources = collectAllDirectVisionSources(
     buildings,
     units,
     viewerId,
     connectedIds,
+    teams,
   );
   const out: UnitGroup[] = [];
   for (const u of units) {
-    const filtered = filterUnitForViewer(u, viewerId, sources);
+    const filtered = filterUnitForViewer(u, viewerId, sources, teams);
     if (filtered) out.push(filtered);
   }
   return out;

@@ -114,10 +114,10 @@ export const BUILDINGS: BuildingDef[] = [
 
   // 7.3 兵力
   { id: "port", name: "港口", category: "military", prereq: "camp", upgradeLevels: 9, hp: 12, u: 4, size: "large", workR: 8, notes: "须建在海岸线；U 4，R 8；可建造航母（容纳 3U 空军，500E）", icon: "/icons/buildings/military/port.png" },
-  { id: "gun", name: "臼炮", category: "military", prereq: "camp", upgradeLevels: 4, hp: 8, size: "medium", workR: 5, ammoMax: 10, reloadE: 75, h: 4, unitH: 3, notes: "H 4 / 对单位 3，R 5，75E装填1发", icon: "/icons/buildings/military/gun.png" },
+  { id: "gun", name: "臼炮", category: "military", prereq: "camp", upgradeLevels: 4, hp: 8, size: "medium", workR: 5, ammoMax: 10, reloadE: 80, h: 2, unitH: 2, notes: "H 2 / 对单位 2，R 5，80E装填1发", icon: "/icons/buildings/military/gun.png" },
   { id: "anti-air_gun", name: "防空炮", category: "military", prereq: "gun", upgradeLevels: 5, hp: 12, size: "medium", workR: 5, ammoMax: 8, reloadE: 100, notes: "R 5；装填 100E。拦截导弹（不含臼炮）；对空军造成持续减 U", icon: "/icons/buildings/military/anti-air_gun.png" },
-  { id: "missile", name: "导弹", category: "military", prereq: "gun", upgradeLevels: 5, hp: 10, size: "medium", workR: 8, ammoMax: 5, reloadE: 200, h: 8, notes: "H 8，R 8，200E装填1发", icon: "/icons/buildings/military/missile.png" },
-  { id: "advenced_missile", name: "远程导弹", category: "military", prereq: "missile", upgradeLevels: 10, hp: 15, size: "medium", workR: 10, ammoMax: 5, reloadE: 600, h: 12, notes: "H 12，R 10，600E装填1发", icon: "/icons/buildings/military/advanced_missile.png" },
+  { id: "missile", name: "导弹", category: "military", prereq: "gun", upgradeLevels: 5, hp: 10, size: "medium", workR: 8, ammoMax: 5, reloadE: 200, h: 5, notes: "H 5，R 8，200E装填1发", icon: "/icons/buildings/military/missile.png" },
+  { id: "advenced_missile", name: "远程导弹", category: "military", prereq: "missile", upgradeLevels: 10, hp: 15, size: "medium", workR: 10, ammoMax: 5, reloadE: 600, h: 10, notes: "H 10，R 10，600E装填1发", icon: "/icons/buildings/military/advanced_missile.png" },
   { id: "nuke_missile", name: "核导弹", category: "military", prereq: "advenced_missile", upgradeLevels: 20, hp: 25, size: "large", workR: 15, ammoMax: 2, reloadE: 5000, h: Number.POSITIVE_INFINITY, notes: "H ∞，R 15；污染 R = 2；5000E装填1发；装填须已接入通信且正在开采的铀矿机与正在工作的铀工厂", icon: "/icons/buildings/military/nuke_missile.png" },
   { id: "barracks", name: "兵营", category: "military", prereq: "stronghold", upgradeLevels: 3, hp: 12, u: 8, size: "medium", notes: "Umax 8", icon: "/icons/buildings/military/barracks.png" },
   { id: "armor_barracks", name: "装甲营", category: "military", prereq: "base", upgradeLevels: 8, hp: 25, u: 12, size: "medium", notes: "Umax 12，容纳装甲单位", icon: "/icons/buildings/military/armor-barracks.png" },
@@ -302,12 +302,12 @@ export function extractSettlementSpine(roots: BuildTreeNode[]): SettlementSpine 
 const LAUNCH_TICKS_PER_SEC = 15;
 
 /**
- * 发射冷却（秒）= 装填单发 E 成本 / 50。
+ * 发射冷却（秒）= 装填单发 E 成本 / 30。
  * 用于火箭军建筑与防空炮。
  */
 export function launchCooldownSec(reloadE: number): number {
   if (!(reloadE > 0)) return 0;
-  return reloadE / 50;
+  return reloadE / 30;
 }
 
 /** 发射冷却 tick 数（至少 1，当 reloadE > 0）。 */

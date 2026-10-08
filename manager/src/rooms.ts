@@ -16,6 +16,8 @@ export interface RoomMeta {
   allowRespawn: boolean;
   mapSize: MapSizeId;
   seed?: number | string;
+  teamMode: boolean;
+  teams?: Record<string, string>;
   /** playerId → connection currently bound to this room */
   occupants: Map<string, WebSocket>;
   game: GameRoomHandle;
@@ -104,6 +106,8 @@ export class RoomRegistry {
     mapSize: MapSizeId;
     seed?: number | string;
     preferredId?: string;
+    teams?: Record<string, string>;
+    teamMode?: boolean;
   }): Promise<RoomMeta> {
     const maxPlayers = clampInt(opts.maxPlayers, 2, 10);
     let roomId = opts.preferredId
@@ -118,12 +122,15 @@ export class RoomRegistry {
       throw new Error("ROOM_CODE_EXHAUSTED");
     }
 
+    const teamMode = !!opts.teamMode;
     const game = await createGameRoom({
       roomId,
       maxPlayers,
       allowRespawn: opts.allowRespawn,
       mapSize: opts.mapSize,
       seed: opts.seed,
+      teams: opts.teams,
+      teamMode,
     });
 
     const meta: RoomMeta = {
@@ -132,6 +139,8 @@ export class RoomRegistry {
       allowRespawn: opts.allowRespawn,
       mapSize: opts.mapSize,
       seed: opts.seed,
+      teamMode,
+      teams: opts.teams,
       occupants: new Map(),
       game,
       createdAt: Date.now(),

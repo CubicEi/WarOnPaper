@@ -1,6 +1,7 @@
 import type { TerrainMap } from "../terrain/types.js";
 import type { PlacedBuilding } from "../buildings/actions.js";
 import type { PlacedLiaison } from "../buildings/liaison.js";
+import type { TeamRoster } from "../teams.js";
 import { UNIT_BY_KIND } from "./catalog.js";
 import type { UnitGroup } from "./types.js";
 import { speedAt, terrainAllowsKind, findFreeUnitCoord, planAirPath } from "./pathfind.js";
@@ -45,6 +46,7 @@ export function advanceUnits(
   terrain: TerrainMap | null,
   connectedByOwner: ReadonlyMap<string, ReadonlySet<string> | readonly string[]>,
   dtSec: number,
+  teams?: TeamRoster | null,
 ): TickMoveResult {
   const buildings = buildingsIn.map((b) => ({ ...b }));
   const units = unitsIn.map((u) => ({ ...u, path: u.path?.map((p) => ({ ...p })) }));
@@ -107,6 +109,7 @@ export function advanceUnits(
           unit,
           buildings,
           connectedByOwner.get(unit.ownerId) ?? [],
+          teams,
         );
     // Retreat / training deposit does not consume carried E en route.
     const skipFuel = !!unit.depositOnArrival || unit.state === "training";

@@ -84,6 +84,8 @@ interface Props {
   ) => void;
   /** Spectator / ended: show info, hide action buttons. */
   readOnly?: boolean;
+  /** Teammate building: full info, no ops. */
+  isAlly?: boolean;
 }
 
 /**
@@ -105,12 +107,15 @@ export function BuildingInspectHud({
   nukeReloadBlockReason = null,
   onAction,
   readOnly = false,
+  isAlly = false,
 }: Props) {
-  const mine = !readOnly && myPlayerId != null && building.ownerId === myPlayerId;
+  const owned = myPlayerId != null && building.ownerId === myPlayerId;
+  const mine = !readOnly && !isAlly && owned;
   const polluted = !!building.polluted;
-  const vision = building.visionLevel ?? (mine ? "direct" : "satellite");
-  const enemySatellite = !mine && vision === "satellite";
-  const enemyDirect = !mine && vision === "direct";
+  const vision =
+    building.visionLevel ?? (owned || isAlly ? "direct" : "satellite");
+  const enemySatellite = !owned && !isAlly && vision === "satellite";
+  const enemyDirect = !owned && !isAlly && vision === "direct";
   const ownerNick = playerNames.find((p) => p.id === building.ownerId)?.name;
   const ownerName =
     ownerNick && ownerNick.trim()

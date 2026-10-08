@@ -1,14 +1,29 @@
 import type { WebSocket } from "ws";
 import type { MapSizeId } from "./protocol.js";
 import type { RoomRegistry } from "./rooms.js";
+import {
+  assignRandomTeams,
+  formatSeatCount,
+  isTeamFormat,
+  type TeamFormat,
+  type TeamRoster,
+} from "./teams.js";
 
 export type MatchPlayerCount = 2 | 3 | 4 | 5;
+
+/** Queue key: FFA by seat count or team format. */
+export type MatchQueueKey =
+  | `ffa:${MatchPlayerCount}`
+  | `team:${TeamFormat}`;
 
 export interface QueuedPlayer {
   playerId: string;
   name: string;
   ws: WebSocket;
-  playerCount: MatchPlayerCount;
+  queueKey: MatchQueueKey;
+  /** Seat count needed to form. */
+  needed: number;
+  teamFormat?: TeamFormat;
   enqueuedAt: number;
 }
 
@@ -16,8 +31,16 @@ export function isMatchPlayerCount(n: unknown): n is MatchPlayerCount {
   return n === 2 || n === 3 || n === 4 || n === 5;
 }
 
-/** Matchmaking: 2–3 → small map, 4–5 → large; allowRespawn=false. */
-export function mapSizeForMatch(playerCount: MatchPlayerCount): MapSizeId {
+export function ffaQueueKey(count: MatchPlayerCount): MatchQueueKey {
+  return `ffa:${count}`;
+}
+
+export function teamQueueKey(format: TeamFormat): MatchQueueKey {
+  return `team:${format}`;
+}
+
+/** Matchmaking: 2–3 → small map, ≥4 → large; allowRespawn=false. */
+export function mapSizeForMatch(playerCount: number): MapSizeId {
   return playerCount <= 3 ? "89x59" : "119x79";
 }
 
@@ -25,21 +48,18 @@ export type MatchLobbyHooks = {
   send: (ws: WebSocket, msg: unknown) => void;
   onMatchFormed: (info: {
     roomId: string;
-    playerCount: MatchPlayerCount;
+    playerCount: number;
     players: QueuedPlayer[];
+    teams?: TeamRoster;
+    teamMode: boolean;
   }) => void;
 };
 
 /**
- * Separate FIFO queues keyed by target party size (2 / 3 / 4 / 5).
+ * Separate FIFO queues keyed by `ffa:{2|3|4|5}` or `team:{format}`.
  */
 export class MatchQueues {
-  private readonly queues = new Map<MatchPlayerCount, QueuedPlayer[]>([
-    [2, []],
-    [3, []],
-    [4, []],
-    [5, []],
-  ]);
+  private readonly queues = new Map<MatchQueueKey, QueuedPlayer[]>();
   private hooks: MatchLobbyHooks | null = null;
   private rooms: RoomRegistry | null = null;
 
@@ -50,27 +70,28 @@ export class MatchQueues {
 
   enqueue(player: QueuedPlayer): void {
     this.remove(player.playerId);
-    const q = this.queues.get(player.playerCount)!;
+    const q = this.queues.get(player.queueKey) ?? [];
     q.push(player);
-    this.broadcastStatus(player.playerCount);
-    void this.tryForm(player.playerCount);
+    this.queues.set(player.queueKey, q);
+    this.broadcastStatus(player.queueKey);
+    void this.tryForm(player.queueKey);
   }
 
   cancel(playerId: string): boolean {
     const found = this.find(playerId);
     if (!found) return false;
     this.remove(playerId);
-    this.broadcastStatus(found.playerCount);
+    this.broadcastStatus(found.queueKey);
     return true;
   }
 
   /** Drop from any queue (disconnect / enter room). */
   remove(playerId: string): void {
-    for (const [count, q] of this.queues) {
+    for (const [key, q] of this.queues) {
       const idx = q.findIndex((p) => p.playerId === playerId);
       if (idx >= 0) {
         q.splice(idx, 1);
-        this.broadcastStatus(count);
+        this.broadcastStatus(key);
         return;
       }
     }
@@ -80,47 +101,64 @@ export class MatchQueues {
     return this.find(playerId) != null;
   }
 
-  status(playerCount: MatchPlayerCount): { queued: number; needed: number } {
-    const queued = this.queues.get(playerCount)?.length ?? 0;
-    return { queued, needed: playerCount };
+  status(queueKey: MatchQueueKey): { queued: number; needed: number } {
+    const q = this.queues.get(queueKey) ?? [];
+    const needed = q[0]?.needed ?? parseNeeded(queueKey);
+    return { queued: q.length, needed };
   }
 
   private find(
     playerId: string,
-  ): { playerCount: MatchPlayerCount; entry: QueuedPlayer } | null {
-    for (const [count, q] of this.queues) {
+  ): { queueKey: MatchQueueKey; entry: QueuedPlayer } | null {
+    for (const [queueKey, q] of this.queues) {
       const entry = q.find((p) => p.playerId === playerId);
-      if (entry) return { playerCount: count, entry };
+      if (entry) return { queueKey, entry };
     }
     return null;
   }
 
-  private broadcastStatus(playerCount: MatchPlayerCount): void {
-    const q = this.queues.get(playerCount) ?? [];
+  private broadcastStatus(queueKey: MatchQueueKey): void {
+    const q = this.queues.get(queueKey) ?? [];
+    const needed = q[0]?.needed ?? parseNeeded(queueKey);
     const payload = {
       type: "match_status" as const,
-      playerCount,
+      playerCount: needed,
       queued: q.length,
-      needed: playerCount,
+      needed,
+      teamFormat: q[0]?.teamFormat,
     };
     for (const p of q) {
       this.hooks?.send(p.ws, payload);
     }
   }
 
-  private async tryForm(playerCount: MatchPlayerCount): Promise<void> {
+  private async tryForm(queueKey: MatchQueueKey): Promise<void> {
     const rooms = this.rooms;
     const hooks = this.hooks;
     if (!rooms || !hooks) return;
 
-    const q = this.queues.get(playerCount)!;
-    while (q.length >= playerCount) {
-      const batch = q.splice(0, playerCount);
+    const q = this.queues.get(queueKey);
+    if (!q) return;
+    const needed = q[0]?.needed ?? parseNeeded(queueKey);
+    const teamFormat = q[0]?.teamFormat;
+
+    while (q.length >= needed) {
+      const batch = q.splice(0, needed);
       try {
+        let teams: TeamRoster | undefined;
+        const teamMode = !!teamFormat;
+        if (teamFormat) {
+          teams = assignRandomTeams(
+            batch.map((p) => p.playerId),
+            teamFormat,
+          );
+        }
         const meta = await rooms.createRoom({
-          maxPlayers: playerCount,
+          maxPlayers: needed,
           allowRespawn: false,
-          mapSize: mapSizeForMatch(playerCount),
+          mapSize: mapSizeForMatch(needed),
+          teams,
+          teamMode,
         });
         for (const p of batch) {
           const result = rooms.join(meta.roomId, p.ws, p.playerId, p.name);
@@ -143,12 +181,15 @@ export class MatchQueues {
             maxPlayers: meta.maxPlayers,
             mapSize: meta.mapSize,
             allowRespawn: meta.allowRespawn,
+            teamMode: meta.teamMode,
           });
         }
         hooks.onMatchFormed({
           roomId: meta.roomId,
-          playerCount,
+          playerCount: needed,
           players: batch,
+          teams,
+          teamMode,
         });
       } catch (err) {
         console.error("[manager] match form failed", err);
@@ -160,7 +201,18 @@ export class MatchQueues {
           });
         }
       }
-      this.broadcastStatus(playerCount);
+      this.broadcastStatus(queueKey);
     }
   }
 }
+
+function parseNeeded(key: MatchQueueKey): number {
+  if (key.startsWith("ffa:")) {
+    return Number(key.slice(4)) || 2;
+  }
+  const format = key.slice(5);
+  if (isTeamFormat(format)) return formatSeatCount(format);
+  return 2;
+}
+
+export { isTeamFormat, formatSeatCount };

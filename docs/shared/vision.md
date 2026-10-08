@@ -31,11 +31,15 @@
 
 ## 采集源
 
+可选参数 `teams?: TeamRoster`：同队友军按己方计入（`isFriendly`）。
+
 | 函数 | 条件 |
 |------|------|
-| `collectDirectVisionSources` | 己方、`connectedIds` 连通、未污染；首都或已建成 |
-| `collectUnitVisionSources` | 己方野外单位；空军标 `airOnly` |
+| `collectDirectVisionSources` | 己方/友军、`connectedIds` 连通、未污染；首都或已建成 |
+| `collectUnitVisionSources` | 己方/友军野外单位；空军标 `airOnly` |
 | `collectAllDirectVisionSources` | 上两者拼接 |
+
+快照过滤：友军建筑/单位发**完整**数据（与己方相同）；敌方规则不变。房间侧 `connectedBuildingIds` 为同队已发布连通集合的并集。高级视图「敌方视野」须排除同队。
 
 `isInDirectVision`：**忽略** `airOnly` 源（用于建筑/资源等）。  
 `unitInDirectVision`：一般源可见任意单位；仅 airOnly 命中时仅 `kind === "air"` 可见。

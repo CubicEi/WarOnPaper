@@ -70,7 +70,7 @@ export interface PlacedBuilding {
   ammo: number;
   /**
    * 火箭军 / 防空等发射冷却截止 tick（不含）。
-   * 冷却时长 = reloadE / 50 秒（见 launchCooldownSec）。
+   * 冷却时长 = reloadE / 30 秒（见 launchCooldownSec）。
    */
   fireCooldownUntilTick?: number;
   /**

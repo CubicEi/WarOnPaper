@@ -57,7 +57,15 @@ export function readLastRoomId(): string | null {
 export type GameError = { message: string; raw: string };
 
 export type RoomLifecycleEvent =
-  | { type: "game_over"; roomId: string; winnerId: string; winnerName: string }
+  | {
+      type: "game_over";
+      roomId: string;
+      winnerId: string;
+      winnerName: string;
+      winnerTeamId?: string;
+      winnerPlayerIds?: string[];
+      winnerNames?: string[];
+    }
   | { type: "room_closed"; roomId: string; reason: "idle" | "game_over" | "destroyed" };
 
 export function useGameSocket(
@@ -245,6 +253,9 @@ export function useGameSocket(
             roomId: msg.roomId,
             winnerId: msg.winnerId,
             winnerName: msg.winnerName,
+            winnerTeamId: msg.winnerTeamId,
+            winnerPlayerIds: msg.winnerPlayerIds,
+            winnerNames: msg.winnerNames,
           });
         } else if (msg.type === "room_closed") {
           log.info("net", "← room_closed", msg);

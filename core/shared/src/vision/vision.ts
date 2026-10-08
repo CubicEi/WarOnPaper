@@ -16,6 +16,7 @@ import {
   type LiaisonKind,
   type PlacedLiaison,
 } from "../buildings/liaison.js";
+import { isFriendly, type TeamRoster } from "../teams.js";
 
 /** Direct vision radius by building size (Du). */
 export const DIRECT_VISION_R_BY_SIZE: Record<BuildingSize, number> = {
@@ -66,16 +67,17 @@ export function directVisionRadiusForBuilding(buildingId: string): number {
   return DIRECT_VISION_R_BY_SIZE.small;
 }
 
-/** Completed, comms-linked owned buildings that emit direct vision. */
+/** Completed, comms-linked friendly buildings that emit direct vision. */
 export function collectDirectVisionSources(
   buildings: readonly PlacedBuilding[],
   viewerId: string,
   connectedIds: ReadonlySet<string> | readonly string[] = [],
+  teams?: TeamRoster | null,
 ): VisionSource[] {
   const linked = connectedIds instanceof Set ? connectedIds : new Set(connectedIds);
   const out: VisionSource[] = [];
   for (const b of buildings) {
-    if (b.ownerId !== viewerId) continue;
+    if (!isFriendly(teams, b.ownerId, viewerId)) continue;
     if (!linked.has(b.id)) continue;
     if (b.polluted) continue;
     if (b.buildingId !== "capital" && !isBuildingComplete(b)) continue;
@@ -89,7 +91,7 @@ export function collectDirectVisionSources(
 }
 
 /**
- * Owned fielded units that emit direct vision (§4.5.2).
+ * Friendly fielded units that emit direct vision (§4.5.2).
  * Air sources are `airOnly` (see other air / flying missiles only).
  */
 export function collectUnitVisionSources(
@@ -100,10 +102,11 @@ export function collectUnitVisionSources(
     kind: string;
   }[],
   viewerId: string,
+  teams?: TeamRoster | null,
 ): VisionSource[] {
   const out: VisionSource[] = [];
   for (const u of units) {
-    if (u.ownerId !== viewerId) continue;
+    if (!isFriendly(teams, u.ownerId, viewerId)) continue;
     let radiusDu: number;
     let airOnly = false;
     if (u.kind === "infantry") radiusDu = DIRECT_VISION_R_INFANTRY;
@@ -129,10 +132,11 @@ export function collectAllDirectVisionSources(
   }[],
   viewerId: string,
   connectedIds: ReadonlySet<string> | readonly string[] = [],
+  teams?: TeamRoster | null,
 ): VisionSource[] {
   return [
-    ...collectDirectVisionSources(buildings, viewerId, connectedIds),
-    ...collectUnitVisionSources(units, viewerId),
+    ...collectDirectVisionSources(buildings, viewerId, connectedIds, teams),
+    ...collectUnitVisionSources(units, viewerId, teams),
   ];
 }
 
@@ -202,8 +206,9 @@ export function buildingVisionLevel(
   b: PlacedBuilding,
   viewerId: string,
   sources: readonly VisionSource[],
+  teams?: TeamRoster | null,
 ): VisionLevel {
-  if (b.ownerId === viewerId) return "direct";
+  if (isFriendly(teams, b.ownerId, viewerId)) return "direct";
   if (isInDirectVision(b.gx, b.gy, sources)) return "direct";
   if (satelliteSeesBuilding(b)) return "satellite";
   return "none";
@@ -214,8 +219,9 @@ export function liaisonVisionLevel(
   line: PlacedLiaison,
   viewerId: string,
   sources: readonly VisionSource[],
+  teams?: TeamRoster | null,
 ): VisionLevel {
-  if (line.ownerId === viewerId) return "direct";
+  if (isFriendly(teams, line.ownerId, viewerId)) return "direct";
   for (const n of line.nodes) {
     if (isInDirectVision(n.gx, n.gy, sources)) return "direct";
   }
@@ -242,11 +248,12 @@ export function filterBuildingForViewer(
     gy: number;
     kind: string;
   }[] = [],
+  teams?: TeamRoster | null,
 ): PlacedBuilding | null {
-  const level = buildingVisionLevel(b, viewerId, sources);
+  const level = buildingVisionLevel(b, viewerId, sources, teams);
   if (level === "none") return null;
 
-  if (b.ownerId === viewerId) {
+  if (isFriendly(teams, b.ownerId, viewerId)) {
     const copy: PlacedBuilding = { ...b };
     if (b.buildTicksRemaining > 0) {
       copy.buildPaused =
@@ -259,6 +266,7 @@ export function filterBuildingForViewer(
           viewerId,
           connectedIds,
           units,
+          teams,
         );
     }
     return copy;
@@ -307,11 +315,12 @@ export function filterLiaisonForViewer(
   line: PlacedLiaison,
   viewerId: string,
   sources: readonly VisionSource[],
+  teams?: TeamRoster | null,
 ): PlacedLiaison | null {
-  const level = liaisonVisionLevel(line, viewerId, sources);
+  const level = liaisonVisionLevel(line, viewerId, sources, teams);
   if (level === "none") return null;
 
-  if (line.ownerId === viewerId) {
+  if (isFriendly(teams, line.ownerId, viewerId)) {
     return {
       ...line,
       nodes: line.nodes.map((n) => ({ ...n })),
@@ -356,12 +365,14 @@ export function filterBuildingsForViewer(
     gy: number;
     kind: string;
   }[] = [],
+  teams?: TeamRoster | null,
 ): PlacedBuilding[] {
   const sources = collectAllDirectVisionSources(
     buildings,
     units,
     viewerId,
     connectedIds,
+    teams,
   );
   const out: PlacedBuilding[] = [];
   for (const b of buildings) {
@@ -373,6 +384,7 @@ export function filterBuildingsForViewer(
       buildings,
       connectedIds,
       units,
+      teams,
     );
     if (filtered) out.push(filtered);
   }
@@ -390,16 +402,18 @@ export function filterLiaisonsForViewer(
     gy: number;
     kind: string;
   }[] = [],
+  teams?: TeamRoster | null,
 ): PlacedLiaison[] {
   const sources = collectAllDirectVisionSources(
     buildings,
     units,
     viewerId,
     connectedIds,
+    teams,
   );
   const out: PlacedLiaison[] = [];
   for (const line of liaisons) {
-    const filtered = filterLiaisonForViewer(line, viewerId, sources);
+    const filtered = filterLiaisonForViewer(line, viewerId, sources, teams);
     if (filtered) out.push(filtered);
   }
   return out;
@@ -417,6 +431,7 @@ export function shouldMaskUpgradeOnSatellite(toBuildingId: string): boolean {
 export function buildRoadRailAdjacency(
   liaisons: readonly PlacedLiaison[],
   ownerId: string,
+  teams?: TeamRoster | null,
 ): Map<string, string[]> {
   const adj = new Map<string, string[]>();
   const link = (a: string, b: string) => {
@@ -425,7 +440,7 @@ export function buildRoadRailAdjacency(
     adj.set(a, list);
   };
   for (const line of liaisons) {
-    if (line.ownerId !== ownerId) continue;
+    if (!isFriendly(teams, line.ownerId, ownerId)) continue;
     if (line.buildTicksRemaining > 0) continue;
     if (line.kind !== "road" && line.kind !== "railway") continue;
     if (line.nodes.length < 2) continue;
@@ -459,16 +474,18 @@ export function isConstructionAllowedAt(
     gy: number;
     kind: string;
   }[] = [],
+  teams?: TeamRoster | null,
 ): boolean {
   const sources = collectAllDirectVisionSources(
     buildings,
     units,
     ownerId,
     connectedIds,
+    teams,
   );
   if (isInDirectVision(gx, gy, sources)) return true;
 
-  const adj = buildRoadRailAdjacency(liaisons, ownerId);
+  const adj = buildRoadRailAdjacency(liaisons, ownerId, teams);
   const site = nodeKey({ gx, gy });
   if (!adj.has(site)) return false;
 
@@ -509,6 +526,7 @@ export function constructionRejectReason(
     gy: number;
     kind: string;
   }[] = [],
+  teams?: TeamRoster | null,
 ): string | null {
   if (
     isConstructionAllowedAt(
@@ -519,6 +537,7 @@ export function constructionRejectReason(
       ownerId,
       connectedIds,
       units,
+      teams,
     )
   ) {
     return null;
@@ -555,12 +574,14 @@ export function filterResourceSightForViewer(
     kind: string;
   }[] = [],
   connectedIds: ReadonlySet<string> | readonly string[] = [],
+  teams?: TeamRoster | null,
 ): import("../terrain/types.js").ResourceSightCell[] {
   const sources = collectAllDirectVisionSources(
     buildings,
     units,
     viewerId,
     connectedIds,
+    teams,
   ).filter((s) => !s.airOnly);
   return cells.filter((c) => {
     const { gx, gy } = resourceSightSamplePoint(c);

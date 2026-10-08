@@ -8,6 +8,7 @@ import type {
   LiaisonKind,
   UnitGroup,
   PollutionZone,
+  TeamRoster,
 } from "@wop/shared";
 import {
   BUILDING_BY_ID,
@@ -25,6 +26,7 @@ import {
   filterResourceSightForViewer,
   isBuildingComplete,
   isBuildingCommsLinked,
+  isFriendly,
   isLaunchCoolingDown,
   isMovingState,
   launchCooldownTicks,
@@ -54,6 +56,8 @@ const RESERVE_RING_FILL = "rgba(255, 255, 255, 0.28)";
 const RESERVE_RING_TRACK = "rgba(255, 255, 255, 0.1)";
 /** Own liaison stroke (white). */
 const LIAISON_OWN = "#ffffff";
+/** Ally liaison — same blue as `buildings - blue` map icons. */
+const LIAISON_ALLY = "#006eeb";
 /** Enemy liaison — same orange as `buildings - orange` map icons. */
 const LIAISON_ENEMY = "#eb6040";
 /** Comm-status overlay: linked building / liaison / radio range (teal). */
@@ -165,6 +169,8 @@ export interface DrawMapArgs {
   resourceSight?: readonly ResourceSightCell[] | null;
   /** Local player id — non-matching owners render orange enemy icons. */
   myPlayerId?: string | null;
+  /** Team roster for blue ally icons / enemy-vision exclusion. */
+  teams?: TeamRoster | null;
   /** Own buildings with active capital comms link. */
   connectedBuildingIds?: readonly string[] | null;
   /** While picking a capital, ring other capitals at R=10. */
@@ -496,6 +502,17 @@ function drawUnitPathPreview(
   ctx.restore();
 }
 
+function ownerRelation(
+  ownerId: string,
+  myPlayerId: string | null,
+  teams?: TeamRoster | null,
+): "own" | "ally" | "enemy" {
+  if (myPlayerId == null) return "own";
+  if (ownerId === myPlayerId) return "own";
+  if (isFriendly(teams, ownerId, myPlayerId)) return "ally";
+  return "enemy";
+}
+
 function drawUnitIconAt(
   ctx: CanvasRenderingContext2D,
   u: UnitGroup,
@@ -503,13 +520,14 @@ function drawUnitIconAt(
   originY: number,
   cell: number,
   myPlayerId: string | null,
+  teams?: TeamRoster | null,
 ): void {
   const x = originX + u.gx * cell;
   const y = originY + u.gy * cell;
   const size = cell * UNIT_ICON_CELL;
   const half = size / 2;
-  const mine = myPlayerId != null && u.ownerId === myPlayerId;
-  const img = getUnitIcon(u.kind, u.state, !mine);
+  const relation = ownerRelation(u.ownerId, myPlayerId, teams);
+  const img = getUnitIcon(u.kind, u.state, relation);
   const angle = unitFacingAngle(u);
   ctx.save();
   ctx.translate(x, y);
@@ -517,7 +535,8 @@ function drawUnitIconAt(
   if (img) {
     ctx.drawImage(img, -half, -half, size, size);
   } else {
-    ctx.fillStyle = mine ? "#ffffff" : "#eb6040";
+    ctx.fillStyle =
+      relation === "own" ? "#ffffff" : relation === "ally" ? "#006eeb" : "#eb6040";
     ctx.beginPath();
     ctx.arc(0, 0, half * 0.45, 0, Math.PI * 2);
     ctx.fill();
@@ -534,10 +553,14 @@ function drawUnits(
   zoom: number,
   myPlayerId: string | null,
   selectedUnitId: string | null,
+  teams?: TeamRoster | null,
 ): void {
   if (selectedUnitId) {
     const selected = units.find((u) => u.id === selectedUnitId);
-    if (selected && (myPlayerId == null || selected.ownerId === myPlayerId)) {
+    if (
+      selected &&
+      (myPlayerId == null || isFriendly(teams, selected.ownerId, myPlayerId))
+    ) {
       const rem = remainingUnitPath(selected);
       if (rem.length >= 2) {
         drawUnitPathPreview(ctx, rem, originX, originY, cell, zoom);
@@ -546,7 +569,7 @@ function drawUnits(
   }
 
   for (const u of units) {
-    drawUnitIconAt(ctx, u, originX, originY, cell, myPlayerId);
+    drawUnitIconAt(ctx, u, originX, originY, cell, myPlayerId, teams);
   }
 }
 
@@ -560,15 +583,18 @@ function drawBuildingIconAt(
   myPlayerId: string | null,
   connectedIds: ReadonlySet<string> | null,
   showCommStatus: boolean,
+  teams?: TeamRoster | null,
 ): void {
   const x = originX + b.gx * cell;
   const y = originY + b.gy * cell;
   const size = cell * 0.85;
   const half = size / 2;
-  const mine = myPlayerId != null && b.ownerId === myPlayerId;
+  const relation = ownerRelation(b.ownerId, myPlayerId, teams);
+  const mine = relation === "own";
   const incomplete = b.buildTicksRemaining > 0;
   const linked = !!connectedIds && isBuildingCommsLinked(b.id, connectedIds);
-  let iconVariant: "own" | "enemy" | "online" | "offline" = mine ? "own" : "enemy";
+  let iconVariant: "own" | "ally" | "enemy" | "online" | "offline" =
+    relation === "own" ? "own" : relation === "ally" ? "ally" : "enemy";
   if (showCommStatus && mine && !incomplete) {
     iconVariant = linked ? "online" : "offline";
   }
@@ -582,9 +608,11 @@ function drawBuildingIconAt(
         ? linked
           ? COMM_STATUS_LINKED
           : COMM_STATUS_UNLINKED
-        : mine
+        : relation === "own"
           ? "#8a8a8a"
-          : "#eb6040";
+          : relation === "ally"
+            ? "#006eeb"
+            : "#eb6040";
     ctx.fillStyle = fallback;
     ctx.beginPath();
     ctx.arc(x, y, half * 0.55, 0, Math.PI * 2);
@@ -610,6 +638,7 @@ function drawInspectFocusHighlight(
   myPlayerId: string | null,
   connectedIds: ReadonlySet<string> | null,
   showCommStatus: boolean,
+  teams?: TeamRoster | null,
 ): void {
   ctx.save();
   ctx.fillStyle = INSPECT_FOCUS_DIM;
@@ -628,13 +657,14 @@ function drawInspectFocusHighlight(
         myPlayerId,
         connectedIds,
         showCommStatus,
+        teams,
       );
     }
     return;
   }
 
   const u = units?.find((x) => x.id === focus.id);
-  if (u) drawUnitIconAt(ctx, u, originX, originY, cell, myPlayerId);
+  if (u) drawUnitIconAt(ctx, u, originX, originY, cell, myPlayerId, teams);
 }
 
 /** Gray fill for remaining launch-cooldown pie sector. */
@@ -678,6 +708,7 @@ function drawBuildings(
   connectedIds?: ReadonlySet<string> | null,
   showCommStatus = false,
   tick = 0,
+  teams?: TeamRoster | null,
 ): void {
   const sig = buildings
     .map((b) => `${b.id}:${b.buildingId}@${b.gx},${b.gy}:own=${b.ownerId === myPlayerId}`)
@@ -691,15 +722,15 @@ function drawBuildings(
     const y = originY + b.gy * cell;
     const size = cell * 0.85;
     const half = size / 2;
-    const mine = myPlayerId != null && b.ownerId === myPlayerId;
+    const relation = ownerRelation(b.ownerId, myPlayerId, teams);
+    const mine = relation === "own";
     const incomplete = b.buildTicksRemaining > 0;
     const linked =
       !!connectedIds && isBuildingCommsLinked(b.id, connectedIds);
     // Comm advanced view: teal online / red offline icons for own buildings.
     // Incomplete keeps own (white) icon — no gray status ring.
-    let iconVariant: "own" | "enemy" | "online" | "offline" = mine
-      ? "own"
-      : "enemy";
+    let iconVariant: "own" | "ally" | "enemy" | "online" | "offline" =
+      relation === "own" ? "own" : relation === "ally" ? "ally" : "enemy";
     if (showCommStatus && mine && !incomplete) {
       iconVariant = linked ? "online" : "offline";
     }
@@ -732,9 +763,11 @@ function drawBuildings(
           ? linked
             ? COMM_STATUS_LINKED
             : COMM_STATUS_UNLINKED
-          : mine
+          : relation === "own"
             ? "#8a8a8a"
-            : "#eb6040";
+            : relation === "ally"
+              ? "#006eeb"
+              : "#eb6040";
       ctx.fillStyle = fallback;
       ctx.beginPath();
       ctx.arc(x, y, half * 0.55, 0, Math.PI * 2);
@@ -778,9 +811,12 @@ function drawBuildings(
       ctx.restore();
     }
 
-    // HP only for own or direct vision; U / other data only for own (§4.5).
-    const showHp = mine || (b.visionLevel === "direct" && b.hpMax > 0);
-    const showU = mine;
+    // HP for own/ally or enemy direct; U for own/ally (§4.5 + team mode).
+    const showHp =
+      mine ||
+      relation === "ally" ||
+      (b.visionLevel === "direct" && b.hpMax > 0);
+    const showU = mine || relation === "ally";
     if (!showHp && !showU) continue;
 
     const def = BUILDING_BY_ID[b.buildingId];
@@ -903,7 +939,9 @@ function drawLiaisonPolyline(
     incomplete?: boolean;
     preview?: boolean;
     selected?: boolean;
-    /** Own (white) vs enemy (orange #eb6040). Default own. */
+    /** Own (white) / ally (blue) / enemy (orange). Default own. */
+    relation?: "own" | "ally" | "enemy";
+    /** Legacy: true→own, false→enemy; ignored when `relation` is set. */
     mine?: boolean;
     /** Override stroke when showing comm status (own lines only). */
     strokeColor?: string;
@@ -918,8 +956,15 @@ function drawLiaisonPolyline(
   const incomplete = opts?.incomplete ?? false;
   const preview = opts?.preview ?? false;
   const selected = opts?.selected ?? false;
-  const mine = opts?.mine ?? true;
-  const defaultColor = opts?.strokeColor ?? (mine ? LIAISON_OWN : LIAISON_ENEMY);
+  const relation =
+    opts?.relation ?? (opts?.mine === false ? "enemy" : "own");
+  const defaultColor =
+    opts?.strokeColor ??
+    (relation === "own"
+      ? LIAISON_OWN
+      : relation === "ally"
+        ? LIAISON_ALLY
+        : LIAISON_ENEMY);
   const style = liaisonLineStyle(kind, cell, zoom);
   const segmentColor = opts?.segmentColor;
 
@@ -948,7 +993,12 @@ function drawLiaisonPolyline(
   ctx.lineJoin = "round";
 
   if (selected) {
-    ctx.strokeStyle = mine ? "rgba(255,255,255,0.35)" : "rgba(235,96,64,0.45)";
+    ctx.strokeStyle =
+      relation === "own"
+        ? "rgba(255,255,255,0.35)"
+        : relation === "ally"
+          ? "rgba(0,110,235,0.45)"
+          : "rgba(235,96,64,0.45)";
     ctx.lineWidth = style.lineWidth + 2.4 / zoom;
     ctx.lineCap = style.lineCap;
     ctx.setLineDash(style.dash);
@@ -1023,6 +1073,7 @@ function drawLiaisons(
   buildings?: readonly PlacedBuilding[] | null,
   connectedIds?: ReadonlySet<string> | null,
   showCommStatus = false,
+  teams?: TeamRoster | null,
 ): void {
   const usedEdges =
     showCommStatus &&
@@ -1033,7 +1084,8 @@ function drawLiaisons(
       : null;
 
   for (const line of lines) {
-    const mine = myPlayerId == null || line.ownerId === myPlayerId;
+    const relation = ownerRelation(line.ownerId, myPlayerId, teams);
+    const mine = relation === "own";
     let segmentColor:
       | ((ax: number, ay: number, bx: number, by: number) => string | undefined)
       | undefined;
@@ -1046,7 +1098,7 @@ function drawLiaisons(
     drawLiaisonPolyline(ctx, line.nodes, line.kind, originX, originY, cell, zoom, {
       incomplete: line.buildTicksRemaining > 0,
       selected: selectedId != null && line.id === selectedId,
-      mine,
+      relation,
       segmentColor,
     });
   }
@@ -1226,10 +1278,11 @@ function collectKnownEnemyVisionSources(
   buildings: readonly PlacedBuilding[],
   units: readonly UnitGroup[],
   myPlayerId: string,
+  teams?: TeamRoster | null,
 ): VisionSource[] {
   const out: VisionSource[] = [];
   for (const b of buildings) {
-    if (b.ownerId === myPlayerId) continue;
+    if (isFriendly(teams, b.ownerId, myPlayerId)) continue;
     out.push({
       gx: b.gx,
       gy: b.gy,
@@ -1237,7 +1290,7 @@ function collectKnownEnemyVisionSources(
     });
   }
   for (const u of units) {
-    if (u.ownerId === myPlayerId) continue;
+    if (isFriendly(teams, u.ownerId, myPlayerId)) continue;
     let radiusDu: number;
     if (u.kind === "infantry") radiusDu = DIRECT_VISION_R_INFANTRY;
     else if (u.kind === "air") radiusDu = DIRECT_VISION_R_AIR;
@@ -1294,6 +1347,7 @@ export function drawMap(
     selectedLiaisonId,
     resourceSight,
     myPlayerId,
+    teams,
     connectedBuildingIds,
     showCapitalExclusion,
     workRanges,
@@ -1375,6 +1429,7 @@ export function drawMap(
       buildings,
       linked,
       !!showCommStatus,
+      teams,
     );
   }
 
@@ -1407,6 +1462,7 @@ export function drawMap(
       linked,
       !!showCommStatus,
       tick,
+      teams,
     );
   }
 
@@ -1420,6 +1476,7 @@ export function drawMap(
       zoom,
       myPlayerId ?? null,
       selectedUnitId ?? null,
+      teams,
     );
   }
 
@@ -1457,6 +1514,7 @@ export function drawMap(
         units ?? [],
         myPlayerId,
         connectedBuildingIds ?? [],
+        teams,
       ).filter((s) => !s.airOnly)
     : [];
   if (myPlayerId) {
@@ -1471,6 +1529,7 @@ export function drawMap(
       buildings ?? [],
       units ?? [],
       connectedBuildingIds ?? [],
+      teams,
     );
     if (visibleSight.length > 0) {
       drawResourceReserveRings(ctx, visibleSight, originX, originY, cell);
@@ -1483,7 +1542,12 @@ export function drawMap(
   if (showEnemyVision && myPlayerId) {
     drawEnemyVisionRanges(
       ctx,
-      collectKnownEnemyVisionSources(buildings ?? [], units ?? [], myPlayerId),
+      collectKnownEnemyVisionSources(
+        buildings ?? [],
+        units ?? [],
+        myPlayerId,
+        teams,
+      ),
       originX,
       originY,
       cell,
@@ -1505,6 +1569,7 @@ export function drawMap(
       myPlayerId ?? null,
       linked,
       !!showCommStatus,
+      teams,
     );
   }
 

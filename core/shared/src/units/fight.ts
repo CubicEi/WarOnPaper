@@ -39,6 +39,7 @@ import { occupiedUnitKeys } from "./occupy.js";
 import { findFreeUnitCoord, planAirPath, planLandOrNavyPath } from "./pathfind.js";
 import { collectUnitActivityCoverage } from "./radio.js";
 import type { UnitGroup } from "./types.js";
+import { isFriendly, type TeamRoster } from "../teams.js";
 
 export interface FightTickResult {
   units: UnitGroup[];
@@ -54,6 +55,7 @@ export interface FightMoveContext {
   liaisons: readonly PlacedLiaison[];
   connectedByOwner: ReadonlyMap<string, ReadonlySet<string> | readonly string[]>;
   nextId: () => string;
+  teams?: TeamRoster | null;
 }
 
 /**
@@ -68,6 +70,7 @@ export function applyAirHitAndRunStrike(
   units: UnitGroup[],
   buildings: PlacedBuilding[],
   removed: Set<string>,
+  teams?: TeamRoster | null,
 ): UnitGroup {
   const ai = units.findIndex((u) => u.id === airIn.id);
   let air: UnitGroup = { ...airIn };
@@ -80,7 +83,7 @@ export function applyAirHitAndRunStrike(
       ti >= 0 &&
       !removed.has(unitId) &&
       units[ti]!.u > 0 &&
-      units[ti]!.ownerId !== air.ownerId
+      !isFriendly(teams, units[ti]!.ownerId, air.ownerId)
     ) {
       const round = resolveCombatRound(air.u, "air", units[ti]!.u, units[ti]!.kind);
       if (round.ua1 <= 0) {
@@ -110,7 +113,11 @@ export function applyAirHitAndRunStrike(
     }
   } else if (buildingId) {
     const bi = buildings.findIndex((b) => b.id === buildingId);
-    if (bi >= 0 && buildings[bi]!.ownerId !== air.ownerId && air.u > 0) {
+    if (
+      bi >= 0 &&
+      !isFriendly(teams, buildings[bi]!.ownerId, air.ownerId) &&
+      air.u > 0
+    ) {
       let b0 = buildings[bi]!;
       const garrisonU = b0.u ?? 0;
       // Hit-and-run air raid: clear/fight garrison then always apply one HP pulse
@@ -278,6 +285,7 @@ function planMoveTo(
     unit.homeBuildingId,
     buildings,
     ctx.connectedByOwner.get(unit.ownerId) ?? [],
+    ctx.teams,
   );
   if (unit.kind === "air") {
     const planned = planAirPath(unit.gx, unit.gy, toGx, toGy, coverage);
@@ -534,6 +542,7 @@ export function advanceFightsAndSieges(
   buildingsIn: readonly PlacedBuilding[],
   dtSec: number,
   ctx: FightMoveContext,
+  teams?: TeamRoster | null,
 ): FightTickResult {
   const before = cloneUnits(unitsIn);
   const units = cloneUnits(unitsIn);
@@ -567,7 +576,7 @@ export function advanceFightsAndSieges(
       };
       continue;
     }
-    if (units[ti]!.ownerId === units[i]!.ownerId) {
+    if (isFriendly(teams, units[ti]!.ownerId, units[i]!.ownerId)) {
       units[i] = {
         ...units[i]!,
         state: "idle",
@@ -626,6 +635,7 @@ export function advanceFightsAndSieges(
         units,
         buildings,
         removed,
+        teams,
       );
       if (!removed.has(struck.id)) units[i] = struck;
       continue;
@@ -712,7 +722,11 @@ export function advanceFightsAndSieges(
             u.state === "fighting" &&
             u.siegeBuildingId === buildingId &&
             u.u > 0 &&
-            u.ownerId !== (buildings.find((b) => b.id === buildingId)?.ownerId ?? ""),
+            !isFriendly(
+              teams,
+              u.ownerId,
+              buildings.find((b) => b.id === buildingId)?.ownerId ?? "",
+            ),
         );
       for (const { i } of airAtk) {
         applyAirHitAndRunStrike(
@@ -722,6 +736,7 @@ export function advanceFightsAndSieges(
           units,
           buildings,
           removed,
+          teams,
         );
       }
       if (destroyed.has(buildingId) || buildings.findIndex((b) => b.id === buildingId) < 0) {
@@ -738,7 +753,7 @@ export function advanceFightsAndSieges(
             u.state === "fighting" &&
             u.siegeBuildingId === buildingId &&
             u.u > 0 &&
-            u.ownerId !== buildings[bi]!.ownerId,
+            !isFriendly(teams, u.ownerId, buildings[bi]!.ownerId),
         )
         .sort((a, b) => a.u.id.localeCompare(b.u.id));
 

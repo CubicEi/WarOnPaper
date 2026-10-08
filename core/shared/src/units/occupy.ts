@@ -11,6 +11,7 @@ import {
 import { unitCoordKey } from "./garrison.js";
 import { findFreeUnitCoord } from "./pathfind.js";
 import type { UnitGroup } from "./types.js";
+import { isFriendly, type TeamRoster } from "../teams.js";
 
 export type OccupyPlacer = Pick<UnitGroup, "id" | "kind" | "ownerId" | "embarkedAirU">;
 
@@ -89,14 +90,16 @@ export function buildingCenterKeys(
 
 /**
  * Whether `occupant` blocks `placer` from sharing a cell.
- * Friendly carrier↔air with hangar room may colocate for embark.
+ * Friendly / ally carrier↔air with hangar room may colocate for embark.
+ * Allies do not block each other (incl. passing ally blockades).
  */
 export function blocksUnitCell(
   occupant: UnitGroup,
   placer: OccupyPlacer | undefined,
+  teams?: TeamRoster | null,
 ): boolean {
   if (!placer) return true;
-  if (occupant.ownerId !== placer.ownerId) return true;
+  if (!isFriendly(teams, occupant.ownerId, placer.ownerId)) return true;
   if (placer.kind === "air" && isCarrierKind(occupant.kind) && hangarRoom(occupant) > 0) {
     return false;
   }
@@ -119,13 +122,14 @@ export function occupiedUnitKeys(
   units: readonly UnitGroup[],
   ignoreIds: ReadonlySet<string> = new Set(),
   placer?: OccupyPlacer,
+  teams?: TeamRoster | null,
 ): Set<string> {
   const set = new Set<string>();
   for (const u of units) {
     if (ignoreIds.has(u.id)) continue;
     if (u.state === "moving" || u.state === "training") continue;
     if (u.u <= 0) continue;
-    if (!blocksUnitCell(u, placer)) continue;
+    if (!blocksUnitCell(u, placer, teams)) continue;
     set.add(unitCoordKey(u.gx, u.gy));
   }
   return set;

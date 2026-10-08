@@ -67,9 +67,13 @@ export function App() {
       onRoomLifecycle: (ev) => {
         log.info("app", "room lifecycle", ev);
         if (ev.type === "game_over") {
+          const teamWin =
+            ev.winnerNames && ev.winnerNames.length > 1
+              ? `胜负已分：${ev.winnerNames.join("、")} 队伍获胜`
+              : `胜负已分：${ev.winnerName} 获胜`;
           pushErrorRef.current(
-            `胜负已分：${ev.winnerName} 获胜`,
-            `game_over:${ev.winnerId}`,
+            teamWin,
+            `game_over:${ev.winnerTeamId ?? ev.winnerId}`,
           );
         } else if (ev.type === "room_closed") {
           pushErrorRef.current(
@@ -486,9 +490,11 @@ export function App() {
         : phase === "spectating"
           ? "观战中（不可操作）"
           : phase === "ended"
-            ? state?.winnerName
-              ? `对局结束 · ${state.winnerName} 获胜`
-              : "对局结束"
+            ? state?.winnerNames && state.winnerNames.length > 1
+              ? `对局结束 · ${state.winnerNames.join("、")} 队伍获胜`
+              : state?.winnerName
+                ? `对局结束 · ${state.winnerName} 获胜`
+                : "对局结束"
             : null;
 
   const statusLine =
@@ -528,6 +534,27 @@ export function App() {
         height={viewport.h}
         phase={phase}
         myPlayerId={playerId}
+        teams={state?.teams ?? null}
+        teamMode={!!state?.teamMode}
+        teamInvites={state?.teamInvites ?? []}
+        allyGarrisonRequests={state?.allyGarrisonRequests ?? []}
+        onTeamInvite={(toPlayerId) => send({ type: "team_invite", toPlayerId })}
+        onTeamInviteAccept={(fromPlayerId) =>
+          send({ type: "team_invite_accept", fromPlayerId })
+        }
+        onTeamInviteReject={(fromPlayerId) =>
+          send({ type: "team_invite_reject", fromPlayerId })
+        }
+        onTeamLeave={() => send({ type: "team_leave" })}
+        onAllyGarrisonRequest={(unitId, buildingId) =>
+          send({ type: "ally_garrison_request", unitId, buildingId })
+        }
+        onAllyGarrisonAccept={(requestId) =>
+          send({ type: "ally_garrison_accept", requestId })
+        }
+        onAllyGarrisonReject={(requestId) =>
+          send({ type: "ally_garrison_reject", requestId })
+        }
         onBuild={onBuild}
         onBuildLiaison={onBuildLiaison}
         onDemolishLiaison={onDemolishLiaison}

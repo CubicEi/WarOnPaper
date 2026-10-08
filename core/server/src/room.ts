@@ -113,6 +113,14 @@ import {
   shouldLogClientAction,
   summarizeClientAction,
   formatCostDelta,
+  alliesOf,
+  applyAllyGarrisonDeposit,
+  hasMultiPlayerTeam,
+  sameTeam,
+  teamIdOf,
+  type AllyGarrisonRequest,
+  type TeamInvitePending,
+  type TeamRoster,
 } from "@wop/shared";
 import type { WebSocket } from "ws";
 import {
@@ -149,6 +157,8 @@ export interface CreateRoomOptions {
   seed?: number | string;
   /** Override idle timeout; default ROOM_IDLE_MS (5 min). */
   idleMs?: number;
+  teams?: TeamRoster;
+  teamMode?: boolean;
 }
 
 export type RoomSend = (msg: ServerToClient) => void;
@@ -159,6 +169,9 @@ export type GameRoomEvent =
       roomId: string;
       winnerId: string;
       winnerName: string;
+      winnerTeamId?: string;
+      winnerPlayerIds?: string[];
+      winnerNames?: string[];
     }
   | {
       type: "room_closed";
@@ -221,6 +234,9 @@ export function createRoom(options: CreateRoomOptions): GameRoom {
   let closed = false;
   let winnerId: string | null = null;
   let winnerName: string | null = null;
+  let winnerTeamId: string | null = null;
+  let winnerPlayerIds: string[] | null = null;
+  let winnerNames: string[] | null = null;
   let lastInteractionAt = Date.now();
   /** Players who lost their capital (spectating when !allowRespawn). */
   const spectatorIds = new Set<string>();
@@ -228,6 +244,60 @@ export function createRoom(options: CreateRoomOptions): GameRoom {
   const knownCapitalOwners = new Set<string>();
   /** Capitals seen >1 at some point — enables last-capital win check. */
   let sawMultipleCapitals = false;
+
+  /** playerId → teamId (custom invites + matchmaking). */
+  let teams: TeamRoster = { ...(options.teams ?? {}) };
+  let teamMode = !!options.teamMode || hasMultiPlayerTeam(teams);
+  const teamInvites: TeamInvitePending[] = [];
+  const allyGarrisonRequests: AllyGarrisonRequest[] = [];
+
+  function teamsFrozen(): boolean {
+    return buildings.some((b) => b.buildingId === "capital" && b.hp > 0);
+  }
+
+  function markTeamMode(): void {
+    if (hasMultiPlayerTeam(teams)) teamMode = true;
+  }
+
+  /** Union of published comms for viewer + teammates. */
+  function teamLinkedIds(viewerId: string): string[] {
+    const ids = new Set<string>();
+    for (const pid of alliesOf(teams, viewerId)) {
+      for (const id of publishedLinks(pid)) ids.add(id);
+    }
+    return [...ids];
+  }
+
+  function unitWorld() {
+    return {
+      map: MAP,
+      terrain,
+      buildings,
+      liaisons,
+      units,
+      connectedByOwner,
+      teams,
+    };
+  }
+
+  function purgeAllyRequestsFor(
+    opts: { unitId?: string; buildingId?: string; fromPlayerId?: string },
+  ): void {
+    for (let i = allyGarrisonRequests.length - 1; i >= 0; i--) {
+      const r = allyGarrisonRequests[i]!;
+      if (opts.unitId && r.unitId === opts.unitId) {
+        allyGarrisonRequests.splice(i, 1);
+        continue;
+      }
+      if (opts.buildingId && r.buildingId === opts.buildingId) {
+        allyGarrisonRequests.splice(i, 1);
+        continue;
+      }
+      if (opts.fromPlayerId && r.fromPlayerId === opts.fromPlayerId) {
+        allyGarrisonRequests.splice(i, 1);
+      }
+    }
+  }
 
   function emit(event: GameRoomEvent): void {
     for (const listener of listeners) {
@@ -404,7 +474,7 @@ function syncCapitalHud(player: PlayerSession): void {
 /** Full logical snapshot (all fields). Used for room API / packing base. */
 function snapshotFor(player: PlayerSession): GameStateSnapshot {
   syncCapitalHud(player);
-  const linked = [...publishedLinks(player.id)];
+  const linked = teamLinkedIds(player.id);
   const role: SnapshotRole = spectatorIds.has(player.id) ? "spectator" : "player";
   const fullVision = role === "spectator" || phaseFor(player) === "ended";
   const allSight = terrain ? collectResourceSight(terrain) : [];
@@ -416,20 +486,42 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
         buildings,
         units,
         linked,
+        teams,
       );
+  const myAllyReqs = allyGarrisonRequests.filter((r) => {
+    const b = buildings.find((x) => x.id === r.buildingId);
+    return b?.ownerId === player.id;
+  });
+  const myInvites = teamInvites.filter(
+    (inv) => inv.toPlayerId === player.id || inv.fromPlayerId === player.id,
+  );
   return {
     tick,
     map: MAP,
     you: { ...player.hud },
     buildings: fullVision
       ? buildings.map((b) => ({ ...b }))
-      : filterBuildingsForViewer(buildings, player.id, liaisons, linked, units),
+      : filterBuildingsForViewer(
+          buildings,
+          player.id,
+          liaisons,
+          linked,
+          units,
+          teams,
+        ),
     liaisons: fullVision
       ? liaisons.map((l) => ({ ...l, nodes: l.nodes.map((n) => ({ ...n })) }))
-      : filterLiaisonsForViewer(liaisons, buildings, player.id, linked, units),
+      : filterLiaisonsForViewer(
+          liaisons,
+          buildings,
+          player.id,
+          linked,
+          units,
+          teams,
+        ),
     units: fullVision
       ? units.map((u) => ({ ...u }))
-      : filterUnitsForViewer(units, player.id, buildings, linked),
+      : filterUnitsForViewer(units, player.id, buildings, linked, teams),
     connectedBuildingIds: linked,
     pollutionZones: pollutionZones.map((z) => ({ ...z })),
     phase: phaseFor(player),
@@ -444,6 +536,13 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
     role,
     winnerId,
     winnerName,
+    winnerTeamId,
+    winnerPlayerIds,
+    winnerNames,
+    teams: { ...teams },
+    teamMode,
+    teamInvites: myInvites.map((i) => ({ ...i })),
+    allyGarrisonRequests: myAllyReqs.map((r) => ({ ...r })),
   };
 }
 
@@ -863,7 +962,13 @@ function beginCommWaves(): void {
   for (const ownerId of owners) {
     const existing = commWaves.get(ownerId);
     if (existing && !existing.done) continue;
-    const wave = startCommWave(ownerId, buildings, liaisons, publishedLinks(ownerId));
+    const wave = startCommWave(
+      ownerId,
+      buildings,
+      liaisons,
+      publishedLinks(ownerId),
+      teams,
+    );
     if (!wave) {
       connectedByOwner.set(ownerId, new Set());
       commWaves.delete(ownerId);
@@ -904,6 +1009,11 @@ function generateRoomTerrain(seedRaw?: number | string): void {
   knownCapitalOwners.clear();
   winnerId = null;
   winnerName = null;
+  winnerTeamId = null;
+  winnerPlayerIds = null;
+  winnerNames = null;
+  allyGarrisonRequests.length = 0;
+  teamInvites.length = 0;
   sawMultipleCapitals = false;
   const seed = parseTerrainSeed(seedRaw);
   terrain = generateTerrain({ map: MAP, seed });
@@ -1135,6 +1245,14 @@ function handleDemolishLiaison(session: PlayerSession, lineId: string): void {
 function handlePlaceCapital(session: PlayerSession, gx: number, gy: number): void {
   if (!terrain) {
     sendError(session.ws, "no_terrain", "请先初始化");
+    return;
+  }
+  if (spectatorIds.has(session.id)) {
+    sendError(
+      session.ws,
+      "spectating",
+      teamMode ? "组队模式首都沦陷后不可重新选都" : "观战中无法重新选都",
+    );
     return;
   }
   if (findPlayerCapital(session.id)) {
@@ -2171,9 +2289,12 @@ function onCapitalFallen(ownerId: string): void {
     roomId,
     player: ownerId.slice(0, 8),
     allowRespawn,
+    teamMode,
   });
   clearPlayerWorld(ownerId);
-  if (allowRespawn) {
+  purgeAllyRequestsFor({ fromPlayerId: ownerId });
+  // Team mode: always spectate (no capital re-pick), ignoring allowRespawn.
+  if (!teamMode && allowRespawn) {
     spectatorIds.delete(ownerId);
     if (owner) {
       owner.hud = createHud();
@@ -2193,18 +2314,36 @@ function maybeDeclareWinner(): void {
   if (!sawMultipleCapitals) return;
   const caps = countLivingCapitals();
   const owners = [...new Set(caps.map((c) => c.ownerId))];
-  if (owners.length !== 1) return;
-  const id = owners[0]!;
-  const winner = players.get(id);
-  winnerId = id;
-  winnerName = winner?.name ?? id.slice(0, 8);
+  if (owners.length === 0) return;
+
+  const livingTeams = new Set(owners.map((id) => teamIdOf(teams, id)));
+  if (livingTeams.size !== 1) return;
+
+  const winningTeam = [...livingTeams][0]!;
+  const winIds = [...players.keys()].filter(
+    (id) => teamIdOf(teams, id) === winningTeam,
+  );
+  // Prefer a living capital owner as primary winnerId for back-compat.
+  const primary =
+    owners.find((id) => teamIdOf(teams, id) === winningTeam) ?? winIds[0]!;
+  const winNames = winIds.map(
+    (id) => players.get(id)?.name ?? id.slice(0, 8),
+  );
+  winnerId = primary;
+  winnerName = players.get(primary)?.name ?? primary.slice(0, 8);
+  winnerTeamId = winningTeam;
+  winnerPlayerIds = winIds;
+  winnerNames = winNames;
   phase = "ended";
-  slog("game_over", roomId, winnerId, winnerName);
+  slog("game_over", roomId, winnerId, winnerName, "team=", winningTeam);
   const payload = {
     type: "game_over" as const,
     roomId,
     winnerId,
     winnerName,
+    winnerTeamId: winningTeam,
+    winnerPlayerIds: winIds,
+    winnerNames: winNames,
   };
   for (const p of players.values()) {
     send(p.ws, payload);
@@ -2234,6 +2373,201 @@ function reconcileCapitals(): void {
   noteCapitalCounts();
 }
 
+function handleTeamInvite(session: PlayerSession, toPlayerId: string): void {
+  if (teamsFrozen()) {
+    sendError(session.ws, "teams_frozen", "已有首都放置，无法改队");
+    return;
+  }
+  if (players.size < 3) {
+    sendError(session.ws, "team_need_3", "房间人数不足 3，无法组队");
+    return;
+  }
+  if (!players.has(toPlayerId) || toPlayerId === session.id) {
+    sendError(session.ws, "bad_invite", "邀请目标无效");
+    return;
+  }
+  if (sameTeam(teams, session.id, toPlayerId)) {
+    sendError(session.ws, "already_teammates", "已是队友");
+    return;
+  }
+  const exists = teamInvites.some(
+    (i) => i.fromPlayerId === session.id && i.toPlayerId === toPlayerId,
+  );
+  if (exists) {
+    sendError(session.ws, "invite_pending", "邀请已发送");
+    return;
+  }
+  teamInvites.push({ fromPlayerId: session.id, toPlayerId });
+  const target = players.get(toPlayerId);
+  if (target) {
+    send(target.ws, {
+      type: "team_invite_pending",
+      fromPlayerId: session.id,
+      fromName: session.name,
+      toPlayerId,
+    });
+  }
+  broadcastState();
+}
+
+function handleTeamInviteAccept(session: PlayerSession, fromPlayerId: string): void {
+  if (teamsFrozen()) {
+    sendError(session.ws, "teams_frozen", "已有首都放置，无法改队");
+    return;
+  }
+  const idx = teamInvites.findIndex(
+    (i) => i.fromPlayerId === fromPlayerId && i.toPlayerId === session.id,
+  );
+  if (idx < 0) {
+    sendError(session.ws, "no_invite", "没有待处理邀请");
+    return;
+  }
+  teamInvites.splice(idx, 1);
+  let tid = teams[fromPlayerId];
+  if (!tid) {
+    tid = `c-${fromPlayerId.slice(0, 8)}`;
+    teams[fromPlayerId] = tid;
+  }
+  teams[session.id] = tid;
+  markTeamMode();
+  // Drop other invites involving accepter joining elsewhere
+  for (let i = teamInvites.length - 1; i >= 0; i--) {
+    const inv = teamInvites[i]!;
+    if (inv.toPlayerId === session.id || inv.fromPlayerId === session.id) {
+      teamInvites.splice(i, 1);
+    }
+  }
+  slog("team", "accept", session.id.slice(0, 8), "→", tid);
+  broadcastState();
+}
+
+function handleTeamInviteReject(session: PlayerSession, fromPlayerId: string): void {
+  const idx = teamInvites.findIndex(
+    (i) => i.fromPlayerId === fromPlayerId && i.toPlayerId === session.id,
+  );
+  if (idx >= 0) teamInvites.splice(idx, 1);
+  broadcastState();
+}
+
+function handleTeamLeave(session: PlayerSession): void {
+  if (teamsFrozen()) {
+    sendError(session.ws, "teams_frozen", "已有首都放置，无法改队");
+    return;
+  }
+  delete teams[session.id];
+  for (let i = teamInvites.length - 1; i >= 0; i--) {
+    const inv = teamInvites[i]!;
+    if (inv.fromPlayerId === session.id || inv.toPlayerId === session.id) {
+      teamInvites.splice(i, 1);
+    }
+  }
+  // Keep teamMode sticky once enabled
+  broadcastState();
+}
+
+function handleAllyGarrisonRequest(
+  session: PlayerSession,
+  unitId: string,
+  buildingId: string,
+): void {
+  if (rejectIfNotPlaying(session)) return;
+  const unit = units.find((u) => u.id === unitId);
+  if (!unit || unit.ownerId !== session.id) {
+    sendError(session.ws, "bad_unit", "单位不存在或不属于你");
+    return;
+  }
+  const building = buildings.find((b) => b.id === buildingId);
+  if (!building) {
+    sendError(session.ws, "bad_building", "建筑不存在");
+    return;
+  }
+  if (building.ownerId === session.id) {
+    sendError(session.ws, "use_assign_home", "己方建筑请用部署归属");
+    return;
+  }
+  if (!sameTeam(teams, session.id, building.ownerId)) {
+    sendError(session.ws, "not_ally", "仅可申请进驻友方建筑");
+    return;
+  }
+  const dup = allyGarrisonRequests.some(
+    (r) => r.unitId === unitId && r.buildingId === buildingId,
+  );
+  if (dup) {
+    sendError(session.ws, "request_pending", "已有相同进驻申请");
+    return;
+  }
+  const req: AllyGarrisonRequest = {
+    id: randomUUID(),
+    fromPlayerId: session.id,
+    unitId,
+    buildingId,
+    unitKind: unit.kind,
+    unitU: unit.u,
+    createdAt: Date.now(),
+  };
+  allyGarrisonRequests.push(req);
+  slog("ally_garrison", "request", req.id.slice(0, 8), session.id.slice(0, 8));
+  broadcastState();
+}
+
+function handleAllyGarrisonAccept(
+  session: PlayerSession,
+  requestId: string,
+): void {
+  if (rejectIfNotPlaying(session)) return;
+  const idx = allyGarrisonRequests.findIndex((r) => r.id === requestId);
+  if (idx < 0) {
+    sendError(session.ws, "no_request", "申请不存在");
+    return;
+  }
+  const req = allyGarrisonRequests[idx]!;
+  const building = buildings.find((b) => b.id === req.buildingId);
+  if (!building || building.ownerId !== session.id) {
+    allyGarrisonRequests.splice(idx, 1);
+    sendError(session.ws, "not_owner", "只能审批己方建筑的进驻申请");
+    broadcastState();
+    return;
+  }
+  const result = applyAllyGarrisonDeposit(
+    req.fromPlayerId,
+    session.id,
+    req.unitId,
+    req.buildingId,
+    buildings,
+    units,
+    teams,
+  );
+  allyGarrisonRequests.splice(idx, 1);
+  if (!result.ok) {
+    sendError(session.ws, "ally_garrison_fail", result.error ?? "进驻失败");
+    broadcastState();
+    return;
+  }
+  buildings.length = 0;
+  buildings.push(...result.buildings);
+  units.length = 0;
+  units.push(...result.units);
+  purgeAllyRequestsFor({ unitId: req.unitId });
+  slog("ally_garrison", "accept", requestId.slice(0, 8));
+  broadcastState();
+}
+
+function handleAllyGarrisonReject(
+  session: PlayerSession,
+  requestId: string,
+): void {
+  const idx = allyGarrisonRequests.findIndex((r) => r.id === requestId);
+  if (idx < 0) return;
+  const req = allyGarrisonRequests[idx]!;
+  const building = buildings.find((b) => b.id === req.buildingId);
+  if (!building || building.ownerId !== session.id) {
+    sendError(session.ws, "not_owner", "只能审批己方建筑的进驻申请");
+    return;
+  }
+  allyGarrisonRequests.splice(idx, 1);
+  broadcastState();
+}
+
 function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): void {
   if (msg.type === "init") {
     slog("msg", "init rejected", session.id.slice(0, 8));
@@ -2249,6 +2583,35 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     msg.type === "leave_room"
   ) {
     sendError(session.ws, "lobby_only", "请在大厅处理该消息");
+    return;
+  }
+
+  if (msg.type === "team_invite") {
+    handleTeamInvite(session, msg.toPlayerId);
+    return;
+  }
+  if (msg.type === "team_invite_accept") {
+    handleTeamInviteAccept(session, msg.fromPlayerId);
+    return;
+  }
+  if (msg.type === "team_invite_reject") {
+    handleTeamInviteReject(session, msg.fromPlayerId);
+    return;
+  }
+  if (msg.type === "team_leave") {
+    handleTeamLeave(session);
+    return;
+  }
+  if (msg.type === "ally_garrison_request") {
+    handleAllyGarrisonRequest(session, msg.unitId, msg.buildingId);
+    return;
+  }
+  if (msg.type === "ally_garrison_accept") {
+    handleAllyGarrisonAccept(session, msg.requestId);
+    return;
+  }
+  if (msg.type === "ally_garrison_reject") {
+    handleAllyGarrisonReject(session, msg.requestId);
     return;
   }
 
@@ -2322,7 +2685,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     if (source && rejectIfPolluted(session, source)) return;
     handleTrainUnits(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.id,
       msg.kind,
       msg.u,
@@ -2347,7 +2710,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     slog("msg", "move_units", msg);
     handleMoveUnits(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.gx,
       msg.gy,
       msg.sources,
@@ -2364,7 +2727,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     slog("msg", "assign_home", msg);
     handleAssignHome(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.buildingId,
       msg.unitIds,
       phaseFor(session) === "playing",
@@ -2379,7 +2742,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     slog("msg", "stop_units", msg);
     handleStopUnits(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.unitIds,
       phaseFor(session) === "playing",
       sendError,
@@ -2394,7 +2757,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     slog("msg", "blockade_units", msg);
     handleBlockadeUnits(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.gx,
       msg.gy,
       msg.sources,
@@ -2411,7 +2774,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     slog("msg", "end_blockade", msg);
     handleEndBlockade(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.unitIds,
       phaseFor(session) === "playing",
       sendError,
@@ -2425,7 +2788,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     slog("msg", "supply_units", msg);
     handleSupplyUnits(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.supplyBuildingId,
       msg.gx,
       msg.gy,
@@ -2447,7 +2810,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     }
     handleAttackUnits(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.sources,
       msg.unitIds,
       msg.targetUnitId,
@@ -2477,7 +2840,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     slog("msg", "hold_units", msg);
     handleHoldUnits(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.holdBuildingId,
       msg.sources,
       msg.unitIds,
@@ -2493,7 +2856,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     slog("msg", "end_hold", msg);
     handleEndHold(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.unitIds,
       phaseFor(session) === "playing",
       sendError,
@@ -2511,7 +2874,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     if (b && rejectIfPolluted(session, b)) return;
     handleMutualDefense(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.buildingId,
       msg.partnerBuildingId,
       phaseFor(session) === "playing",
@@ -2528,7 +2891,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     if (target && rejectIfPolluted(session, target)) return;
     handleEndMutualDefense(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.buildingId,
       phaseFor(session) === "playing",
       sendError,
@@ -2544,7 +2907,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     if (port && rejectIfPolluted(session, port)) return;
     handleBuildCarrier(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.id,
       phaseFor(session) === "playing",
       publishedLinks(session.id).has(msg.id),
@@ -2559,7 +2922,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     slog("msg", "embark_air", msg);
     handleEmbarkAir(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.carrierId,
       msg.airUnitId,
       msg.u,
@@ -2575,7 +2938,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     slog("msg", "disembark_air", msg);
     handleDisembarkAir(
       session,
-      { map: MAP, terrain, buildings, liaisons, units, connectedByOwner },
+      unitWorld(),
       msg.carrierId,
       msg.u,
       phaseFor(session) === "playing",
@@ -2640,34 +3003,10 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     }
     advanceCommWaves();
     simulateEconomy();
-    advanceUnitTraining({
-      map: MAP,
-      terrain,
-      buildings,
-      liaisons,
-      units,
-      connectedByOwner,
-    });
-    advanceUnitMovement({
-      map: MAP,
-      terrain,
-      buildings,
-      liaisons,
-      units,
-      connectedByOwner,
-    });
+    advanceUnitTraining(unitWorld());
+    advanceUnitMovement(unitWorld());
     {
-      const aaEvents = advanceUnitAntiAir(
-        {
-          map: MAP,
-          terrain,
-          buildings,
-          liaisons,
-          units,
-          connectedByOwner,
-        },
-        tick,
-      );
+      const aaEvents = advanceUnitAntiAir(unitWorld(), tick);
       if (aaEvents.length > 0) notifyAaAmmoEvents(aaEvents);
     }
     {
@@ -2675,7 +3014,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       for (const [pid, p] of players) {
         energyAvail.set(pid, p.hud.energy);
       }
-      const world = { map: MAP, terrain, buildings, liaisons, units, connectedByOwner };
+      const world = unitWorld();
       const blockadeDrains = advanceUnitBlockades(world, energyAvail);
       for (const [pid, cost] of blockadeDrains) {
         energyAvail.set(pid, Math.max(0, (energyAvail.get(pid) ?? 0) - cost));
@@ -2775,8 +3114,17 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     leave(playerId: string): void {
       if (!players.has(playerId)) return;
       players.delete(playerId);
+      delete teams[playerId];
+      purgeAllyRequestsFor({ fromPlayerId: playerId });
+      for (let i = teamInvites.length - 1; i >= 0; i--) {
+        const inv = teamInvites[i]!;
+        if (inv.fromPlayerId === playerId || inv.toPlayerId === playerId) {
+          teamInvites.splice(i, 1);
+        }
+      }
       slog("conn", "leave", roomId, playerId.slice(0, 8), "players=", players.size);
       emit({ type: "player_left", roomId, playerId });
+      if (!closed) broadcastState();
     },
     dispatch(playerId: string, msg: ClientToServer): void {
       if (closed) return;

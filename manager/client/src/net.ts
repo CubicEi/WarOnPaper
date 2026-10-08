@@ -11,7 +11,17 @@ export type ClientMsg =
       maxPlayers: number;
     }
   | { type: "join_room"; roomId: string }
-  | { type: "queue_match"; playerCount: number }
+  | {
+      type: "queue_match";
+      playerCount?: number;
+      teamFormat?:
+        | "2v2"
+        | "3v3"
+        | "4v4"
+        | "2v2v2"
+        | "3v3v3"
+        | "2v2v2v2";
+    }
   | { type: "cancel_queue" }
   | { type: "leave_room" };
 

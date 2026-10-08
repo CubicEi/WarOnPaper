@@ -2174,3 +2174,153 @@ body,
   line-height: 1.4;
   color: #e8e4dc;
 }
+
+/* —— Team mode —— */
+.team-panel-fab {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 40;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 8px;
+  background: rgba(20, 22, 28, 0.88);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.team-panel-fab img {
+  display: block;
+}
+.team-panel-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.45);
+  display: grid;
+  place-items: center;
+}
+.team-panel {
+  width: min(420px, 92vw);
+  max-height: min(70vh, 520px);
+  overflow: auto;
+  background: #1c1f26;
+  color: #eee;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 14px 16px 16px;
+}
+.team-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.team-panel-head h2 {
+  margin: 0;
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+}
+.team-panel-close {
+  border: none;
+  background: transparent;
+  color: #ccc;
+  font-size: 22px;
+  cursor: pointer;
+  line-height: 1;
+}
+.team-panel-note {
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+}
+.team-panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.team-panel-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.team-panel-list li.is-ally {
+  outline: 1px solid rgba(0, 110, 235, 0.55);
+}
+.team-panel-name {
+  flex: 1;
+  font-size: 13px;
+}
+.team-panel-tid {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+}
+.team-panel-incoming {
+  margin-top: 12px;
+}
+.team-panel-incoming h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+.team-panel-inv {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.team-panel-leave {
+  margin-top: 12px;
+  width: 100%;
+}
+
+.ally-req-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.ally-req-chip {
+  border: 1px solid rgba(0, 110, 235, 0.55);
+  background: rgba(0, 40, 90, 0.75);
+  color: #dcecff;
+  font-size: 12px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+.ally-req-chip.is-open {
+  background: rgba(0, 80, 170, 0.85);
+}
+.ally-req-detail {
+  background: rgba(16, 20, 28, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  padding: 8px;
+  font-size: 12px;
+  color: #eee;
+}
+.ally-req-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.ally-req-row span {
+  color: rgba(255, 255, 255, 0.5);
+}
+.ally-req-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}

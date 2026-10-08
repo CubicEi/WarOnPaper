@@ -40,6 +40,9 @@ export function TitleScreen() {
   );
 
   const [matchCount, setMatchCount] = useState(2);
+  const [teamFormat, setTeamFormat] = useState<
+    "" | "2v2" | "3v3" | "4v4" | "2v2v2" | "3v3v3" | "2v2v2v2"
+  >("");
   const [queuing, setQueuing] = useState(false);
   const [queueInfo, setQueueInfo] = useState("");
 
@@ -82,12 +85,18 @@ export function TitleScreen() {
         }
         case "queued":
           setQueuing(true);
-          setStatus(`已加入 ${msg.playerCount} 人匹配队列`);
+          setStatus(
+            msg.teamFormat
+              ? `已加入 ${msg.teamFormat} 组队匹配`
+              : `已加入 ${msg.playerCount} 人匹配队列`,
+          );
           setStatusKind("ok");
           break;
         case "match_status":
           setQueueInfo(
-            `匹配中 ${msg.queued}/${msg.needed}（${msg.playerCount} 人局）`,
+            msg.teamFormat
+              ? `匹配中 ${msg.queued}/${msg.needed}（${msg.teamFormat}）`
+              : `匹配中 ${msg.queued}/${msg.needed}（${msg.playerCount} 人局）`,
           );
           break;
         case "queue_cancelled":
@@ -174,7 +183,11 @@ export function TitleScreen() {
 
   const startMatch = () => {
     rename();
-    socket.send({ type: "queue_match", playerCount: matchCount });
+    if (teamFormat) {
+      socket.send({ type: "queue_match", teamFormat });
+    } else {
+      socket.send({ type: "queue_match", playerCount: matchCount });
+    }
   };
 
   const cancelMatch = () => {
@@ -247,20 +260,57 @@ export function TitleScreen() {
           <h2>匹配</h2>
           <div className="row">
             <div className="field grow" style={{ marginBottom: 0 }}>
-              <label htmlFor="matchCount">人数（2–5）</label>
+              <label htmlFor="teamFormat">组队</label>
               <select
-                id="matchCount"
-                value={matchCount}
+                id="teamFormat"
+                value={teamFormat}
                 disabled={queuing}
-                onChange={(e) => setMatchCount(Number(e.target.value))}
+                onChange={(e) =>
+                  setTeamFormat(
+                    e.target.value as
+                      | ""
+                      | "2v2"
+                      | "3v3"
+                      | "4v4"
+                      | "2v2v2"
+                      | "3v3v3"
+                      | "2v2v2v2",
+                  )
+                }
               >
-                {[2, 3, 4, 5].map((n) => (
-                  <option key={n} value={n}>
-                    {n} 人 · {n <= 3 ? "89×59" : "119×79"}
-                  </option>
-                ))}
+                <option value="">无（自由混战）</option>
+                <option value="2v2">2v2 · 4 人</option>
+                <option value="3v3">3v3 · 6 人</option>
+                <option value="4v4">4v4 · 8 人</option>
+                <option value="2v2v2">2v2v2 · 6 人</option>
+                <option value="3v3v3">3v3v3 · 9 人</option>
+                <option value="2v2v2v2">2v2v2v2 · 8 人</option>
               </select>
             </div>
+            {!teamFormat ? (
+              <div className="field grow" style={{ marginBottom: 0 }}>
+                <label htmlFor="matchCount">人数（2–5）</label>
+                <select
+                  id="matchCount"
+                  value={matchCount}
+                  disabled={queuing}
+                  onChange={(e) => setMatchCount(Number(e.target.value))}
+                >
+                  {[2, 3, 4, 5].map((n) => (
+                    <option key={n} value={n}>
+                      {n} 人 · {n <= 3 ? "89×59" : "119×79"}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : (
+              <div className="field grow" style={{ marginBottom: 0 }}>
+                <label>地图</label>
+                <div style={{ paddingTop: "0.35rem", opacity: 0.85 }}>
+                  119×79（组队局）
+                </div>
+              </div>
+            )}
             {!queuing ? (
               <button
                 type="button"

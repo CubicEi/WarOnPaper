@@ -14,18 +14,37 @@ function load(src: string): HTMLImageElement | null {
   return null;
 }
 
-function variantSrc(catalogSrc: string, enemy: boolean): string {
-  if (!enemy) return catalogSrc;
-  return catalogSrc.replace("/icons/symbol/units/", "/icons/symbol/units - orange/");
+export type UnitIconRelation = "own" | "ally" | "enemy";
+
+function variantSrc(catalogSrc: string, relation: UnitIconRelation): string {
+  if (relation === "enemy") {
+    return catalogSrc.replace(
+      "/icons/symbol/units/",
+      "/icons/symbol/units - orange/",
+    );
+  }
+  if (relation === "ally") {
+    return catalogSrc.replace(
+      "/icons/symbol/units/",
+      "/icons/symbol/units - blue/",
+    );
+  }
+  return catalogSrc;
 }
 
 export function getUnitIcon(
   kind: UnitKind,
   state: UnitState,
-  enemy: boolean,
+  enemyOrRelation: boolean | UnitIconRelation = false,
 ): HTMLImageElement | null {
   const def = UNIT_BY_KIND[kind];
   const moving = isMovingState(state);
-  const src = variantSrc(moving ? def.iconMoving : def.iconIdle, enemy);
+  const relation: UnitIconRelation =
+    typeof enemyOrRelation === "boolean"
+      ? enemyOrRelation
+        ? "enemy"
+        : "own"
+      : enemyOrRelation;
+  const src = variantSrc(moving ? def.iconMoving : def.iconIdle, relation);
   return load(src);
 }

@@ -27,6 +27,7 @@ import {
   type LiaisonKind,
   type PlacedLiaison,
 } from "./liaison.js";
+import { isFriendly, type TeamRoster } from "../teams.js";
 
 /** Restart a full diffusion wave every N ticks. */
 export const COMM_WAVE_INTERVAL_TICKS = 10;
@@ -120,10 +121,11 @@ function addEdge(
 export function buildLiaisonAdjacency(
   liaisons: readonly PlacedLiaison[],
   ownerId: string,
+  teams?: TeamRoster | null,
 ): Map<string, CommEdge[]> {
   const adj = new Map<string, CommEdge[]>();
   for (const line of liaisons) {
-    if (line.ownerId !== ownerId) continue;
+    if (!isFriendly(teams, line.ownerId, ownerId)) continue;
     if (line.buildTicksRemaining > 0) continue;
     if (line.nodes.length < 2) continue;
     const maxRangeDu = maxRangeForKind(line.kind);
@@ -142,10 +144,11 @@ export function buildLiaisonAdjacency(
 function indexBuildingsByNode(
   buildings: readonly PlacedBuilding[],
   ownerId: string,
+  teams?: TeamRoster | null,
 ): Map<string, PlacedBuilding[]> {
   const map = new Map<string, PlacedBuilding[]>();
   for (const b of buildings) {
-    if (b.ownerId !== ownerId) continue;
+    if (!isFriendly(teams, b.ownerId, ownerId)) continue;
     const k = nodeKey({ gx: b.gx, gy: b.gy });
     const list = map.get(k) ?? [];
     list.push(b);
@@ -244,17 +247,19 @@ function radiateFromNode(wave: CommWaveState, gx: number, gy: number, rem: numbe
   }
 }
 
-/** Start a new wave from the player's capital (remaining = 1). */
+/** Start a new wave from team capitals (remaining = 1); graph includes allies. */
 export function startCommWave(
   ownerId: string,
   buildings: readonly PlacedBuilding[],
   liaisons: readonly PlacedLiaison[],
   publishedConnected: ReadonlySet<string> | readonly string[] = [],
+  teams?: TeamRoster | null,
 ): CommWaveState | null {
-  const capital = buildings.find(
-    (b) => b.ownerId === ownerId && b.buildingId === "capital",
+  const capitals = buildings.filter(
+    (b) =>
+      b.buildingId === "capital" && isFriendly(teams, b.ownerId, ownerId),
   );
-  if (!capital) return null;
+  if (capitals.length === 0) return null;
 
   const wave: CommWaveState = {
     ownerId,
@@ -262,18 +267,20 @@ export function startCommWave(
     bestRem: new Map(),
     connected: new Set(),
     usedEdges: new Set(),
-    adj: buildLiaisonAdjacency(liaisons, ownerId),
-    buildingsAt: indexBuildingsByNode(buildings, ownerId),
-    allOwned: buildings.filter((b) => b.ownerId === ownerId),
+    adj: buildLiaisonAdjacency(liaisons, ownerId, teams),
+    buildingsAt: indexBuildingsByNode(buildings, ownerId, teams),
+    allOwned: buildings.filter((b) => isFriendly(teams, b.ownerId, ownerId)),
     publishedConnected:
       publishedConnected instanceof Set ? publishedConnected : new Set(publishedConnected),
     done: false,
   };
 
-  wave.connected.add(capital.id);
-  // 污染首都：通信停用，不向外扩散
-  if (!capital.polluted) {
-    pushBetter(wave, capital.gx, capital.gy, 1, "comms");
+  for (const capital of capitals) {
+    wave.connected.add(capital.id);
+    // 污染首都：通信停用，不向外扩散
+    if (!capital.polluted) {
+      pushBetter(wave, capital.gx, capital.gy, 1, "comms");
+    }
   }
   return wave;
 }

@@ -88,8 +88,17 @@ import { MobilizePanel } from "../components/MobilizePanel";
 import { TrainPanel } from "../components/TrainPanel";
 import { BuildingInspectHud, type BuildingInspectAction } from "../components/BuildingInspectHud";
 import { UnitInspectHud, type UnitInspectAction } from "../components/UnitInspectHud";
+import { AllyRequestStack } from "../components/AllyRequestStack";
+import { TeamPanel, TeamPanelButton } from "../components/TeamPanel";
+import {
+  isFriendly,
+  sameTeam,
+  type AllyGarrisonRequest,
+  type TeamInvitePending,
+  type TeamRoster,
+} from "@wop/shared";
 import { ChatPanel, type ChatMessage } from "../components/ChatPanel";
-import { buildingUiIcon } from "../ui/buildingUiIcon";
+import { buildingIconSrc } from "../ui/buildingUiIcon";
 import { log } from "../net/log";
 import { logLocalReject } from "../debug/playerActionLog";
 import type { TrainableKind } from "@wop/shared";
@@ -108,6 +117,17 @@ interface Props {
   phase?: GamePhase;
   /** Local player id for own vs enemy building icon colors. */
   myPlayerId?: string | null;
+  teams?: TeamRoster | null;
+  teamMode?: boolean;
+  teamInvites?: readonly TeamInvitePending[];
+  allyGarrisonRequests?: readonly AllyGarrisonRequest[];
+  onTeamInvite?: (toPlayerId: string) => void;
+  onTeamInviteAccept?: (fromPlayerId: string) => void;
+  onTeamInviteReject?: (fromPlayerId: string) => void;
+  onTeamLeave?: () => void;
+  onAllyGarrisonRequest?: (unitId: string, buildingId: string) => void;
+  onAllyGarrisonAccept?: (requestId: string) => void;
+  onAllyGarrisonReject?: (requestId: string) => void;
   onBuild?: (args: {
     buildingId: string;
     gx: number;
@@ -238,9 +258,18 @@ function sortOwnFirstThenId<T extends { ownerId: string; id: string }>(
   });
 }
 
-/** Radial menu always uses black unit glyphs (same family as build-tree UI). */
-function unitMenuIconSrc(kind: UnitGroup["kind"]): string {
+/** Radial menu unit glyphs: black own, blue ally, orange enemy. */
+function unitMenuIconSrc(
+  kind: UnitGroup["kind"],
+  relation: "own" | "ally" | "enemy",
+): string {
   const src = UNIT_BY_KIND[kind].iconIdle;
+  if (relation === "enemy") {
+    return src.replace("/icons/symbol/units/", "/icons/symbol/units - orange/");
+  }
+  if (relation === "ally") {
+    return src.replace("/icons/symbol/units/", "/icons/symbol/units - blue/");
+  }
   return src.replace("/icons/symbol/units/", "/icons/symbol/units - black/");
 }
 
@@ -250,6 +279,7 @@ function buildRadialPickItems(
   buildings: readonly PlacedBuilding[],
   units: readonly UnitGroup[],
   myPlayerId: string | null,
+  teams?: TeamRoster | null,
 ): RadialPickItem[] {
   const items: RadialPickItem[] = [
     {
@@ -260,20 +290,41 @@ function buildRadialPickItems(
   ];
   for (const b of sortOwnFirstThenId(buildings, myPlayerId)) {
     const def = BUILDING_BY_ID[b.buildingId];
+    const relation =
+      myPlayerId == null
+        ? "own"
+        : b.ownerId === myPlayerId
+          ? "own"
+          : isFriendly(teams, b.ownerId, myPlayerId)
+            ? "ally"
+            : "enemy";
     items.push({
       id: `building:${b.id}`,
       kind: "building",
       label: def?.name ?? b.buildingId,
-      icon: def ? buildingUiIcon(def.icon) : undefined,
+      icon: def
+        ? buildingIconSrc(
+            def.icon,
+            relation === "own" ? "ui" : relation === "ally" ? "ally" : "enemy",
+          )
+        : undefined,
     });
   }
   for (const u of sortOwnFirstThenId(units, myPlayerId)) {
     const def = UNIT_BY_KIND[u.kind];
+    const relation =
+      myPlayerId == null
+        ? "own"
+        : u.ownerId === myPlayerId
+          ? "own"
+          : isFriendly(teams, u.ownerId, myPlayerId)
+            ? "ally"
+            : "enemy";
     items.push({
       id: `unit:${u.id}`,
       kind: "unit",
       label: def?.name ?? u.kind,
-      icon: unitMenuIconSrc(u.kind),
+      icon: unitMenuIconSrc(u.kind, relation),
     });
   }
   return items;
@@ -292,6 +343,17 @@ export function GameCanvas({
   height,
   phase = "need_init",
   myPlayerId = null,
+  teams = null,
+  teamMode: _teamMode = false,
+  teamInvites = [],
+  allyGarrisonRequests = [],
+  onTeamInvite,
+  onTeamInviteAccept,
+  onTeamInviteReject,
+  onTeamLeave,
+  onAllyGarrisonRequest,
+  onAllyGarrisonAccept,
+  onAllyGarrisonReject,
   onBuild,
   onBuildLiaison,
   onDemolishLiaison,
@@ -405,6 +467,7 @@ export function GameCanvas({
   const [selectionUi, setSelectionUi] = useState<SelectionView | null>(null);
   /** Building inspect HUD waits until focus-to-center pan finishes. */
   const [inspectHudReady, setInspectHudReady] = useState(false);
+  const [teamPanelOpen, setTeamPanelOpen] = useState(false);
   const [buildMode, setBuildMode] = useState<{
     fromX: number;
     fromY: number;
@@ -1279,6 +1342,7 @@ export function GameCanvas({
           null,
         resourceSight: resourceSightRef.current,
         myPlayerId: myPlayerIdRef.current,
+        teams,
         connectedBuildingIds: connectedIdsRef.current,
         showCapitalExclusion: phaseRef.current === "pick_capital",
         workRanges: workRangeRef.current,
@@ -1321,7 +1385,7 @@ export function GameCanvas({
     };
     raf = requestAnimationFrame(paint);
     return () => cancelAnimationFrame(raf);
-  }, [map, terrain, buildings, liaisons, resourceSight, connectedBuildingIds, pollutionZones, myPlayerId, showEnemyVision, showCommStatus, width, height, miniSize.width, miniSize.height]);
+  }, [map, terrain, buildings, liaisons, resourceSight, connectedBuildingIds, pollutionZones, myPlayerId, teams, showEnemyVision, showCommStatus, width, height, miniSize.width, miniSize.height]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -2040,6 +2104,7 @@ export function GameCanvas({
                 nearBuildings,
                 nearUnits,
                 myPlayerIdRef.current,
+                teams,
               );
               log.info(
                 "select",
@@ -2938,7 +3003,17 @@ export function GameCanvas({
             commsLinked={isBuildingCommsLinked(inspectedBuilding.id, connectedBuildingIds)}
             energy={energy}
             organization={organization}
-            readOnly={phase !== "playing"}
+            isAlly={
+              !!myPlayerId &&
+              inspectedBuilding.ownerId !== myPlayerId &&
+              sameTeam(teams, inspectedBuilding.ownerId, myPlayerId)
+            }
+            readOnly={
+              phase !== "playing" ||
+              (!!myPlayerId &&
+                inspectedBuilding.ownerId !== myPlayerId &&
+                sameTeam(teams, inspectedBuilding.ownerId, myPlayerId))
+            }
             nukeReloadBlockReason={
               inspectedBuilding.buildingId === "nuke_missile" && myPlayerId
                 ? nukeReloadRejectReason(
@@ -2952,6 +3027,12 @@ export function GameCanvas({
             onAction={(action: BuildingInspectAction, b, detail) => {
               log.info("building-action", action, b.buildingId, b.gx, b.gy, detail);
               if (action === "attack") {
+                if (
+                  myPlayerId &&
+                  isFriendly(teams, b.ownerId, myPlayerId)
+                ) {
+                  return;
+                }
                 const dest = snapToUnitCoord(b.gx, b.gy);
                 setMobilize({
                   mode: "attack",
@@ -3144,6 +3225,17 @@ export function GameCanvas({
             liaisons={liaisons}
             units={units}
             buildings={buildings}
+            isAlly={
+              !!myPlayerId &&
+              inspectedUnit.ownerId !== myPlayerId &&
+              sameTeam(teams, inspectedUnit.ownerId, myPlayerId)
+            }
+            readOnly={
+              phase !== "playing" ||
+              (!!myPlayerId &&
+                inspectedUnit.ownerId !== myPlayerId &&
+                sameTeam(teams, inspectedUnit.ownerId, myPlayerId))
+            }
             onAction={(action: UnitInspectAction, u, detail) => {
               if (phase !== "playing") return;
               log.info("unit-action", action, u.kind, u.id.slice(0, 8));
@@ -3152,6 +3244,9 @@ export function GameCanvas({
                 return;
               }
               if (action === "attack") {
+                if (myPlayerId && isFriendly(teams, u.ownerId, myPlayerId)) {
+                  return;
+                }
                 const dest = snapToUnitCoord(u.gx, u.gy);
                 setMobilize({
                   mode: "attack",
@@ -3395,10 +3490,24 @@ export function GameCanvas({
               unitIds: mobilize.unitIds.length > 0 ? mobilize.unitIds : undefined,
             };
             if (mobilize.mode === "assign" && mobilize.assignBuildingId) {
-              onAssignHome?.({
-                buildingId: mobilize.assignBuildingId,
-                unitIds: mobilize.unitIds,
-              });
+              const target = buildings.find(
+                (b) => b.id === mobilize.assignBuildingId,
+              );
+              if (
+                target &&
+                myPlayerId &&
+                target.ownerId !== myPlayerId &&
+                sameTeam(teams, target.ownerId, myPlayerId)
+              ) {
+                for (const uid of mobilize.unitIds) {
+                  onAllyGarrisonRequest?.(uid, target.id);
+                }
+              } else {
+                onAssignHome?.({
+                  buildingId: mobilize.assignBuildingId,
+                  unitIds: mobilize.unitIds,
+                });
+              }
             } else if (mobilize.mode === "blockade") onBlockadeUnits?.(args);
             else if (mobilize.mode === "supply" && mobilize.supplyBuildingId) {
               onSupplyUnits?.({
@@ -3645,6 +3754,21 @@ export function GameCanvas({
       )}
       {map && miniSize.width > 0 && (
         <div className="minimap-stack" style={{ width: miniSize.width }}>
+          <AllyRequestStack
+            requests={allyGarrisonRequests}
+            playerNames={playerNames}
+            buildingLabels={
+              new Map(
+                buildings.map((b) => [
+                  b.id,
+                  BUILDING_BY_ID[b.buildingId]?.name ?? b.buildingId,
+                ]),
+              )
+            }
+            width={miniSize.width}
+            onAccept={(id) => onAllyGarrisonAccept?.(id)}
+            onReject={(id) => onAllyGarrisonReject?.(id)}
+          />
           <ChatPanel
             messages={chatMessages}
             width={miniSize.width}
@@ -3659,6 +3783,29 @@ export function GameCanvas({
           />
         </div>
       )}
+      <TeamPanelButton
+        visible={
+          phase === "pick_capital" &&
+          playerNames.length >= 3 &&
+          !!myPlayerId
+        }
+        onClick={() => setTeamPanelOpen(true)}
+      />
+      {myPlayerId ? (
+        <TeamPanel
+          open={teamPanelOpen}
+          onClose={() => setTeamPanelOpen(false)}
+          myPlayerId={myPlayerId}
+          players={playerNames}
+          teams={teams ?? {}}
+          invites={teamInvites}
+          frozen={buildings.some((b) => b.buildingId === "capital" && b.hp > 0)}
+          onInvite={(id) => onTeamInvite?.(id)}
+          onAccept={(id) => onTeamInviteAccept?.(id)}
+          onReject={(id) => onTeamInviteReject?.(id)}
+          onLeave={() => onTeamLeave?.()}
+        />
+      ) : null}
     </>
   );
 }

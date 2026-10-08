@@ -13,6 +13,7 @@ import {
 } from "../buildings/workRange.js";
 import { BUILDING_BY_ID } from "../buildings/catalog.js";
 import type { UnitKind } from "./catalog.js";
+import { isFriendly, type TeamRoster } from "../teams.js";
 
 const RADIO_BUILDING_ID = "boardcast";
 
@@ -22,16 +23,17 @@ function linkedSet(
   return connectedIds instanceof Set ? connectedIds : new Set(connectedIds);
 }
 
-/** All radio coverage circles for an owner (completed, comms-linked 电台). */
+/** All radio coverage circles for an owner (completed, comms-linked 电台 + allies). */
 export function collectRadioCoverage(
   buildings: readonly PlacedBuilding[],
   ownerId: string,
   connectedIds: ReadonlySet<string> | readonly string[] = [],
+  teams?: TeamRoster | null,
 ): WorkRangeCircle[] {
   const linked = linkedSet(connectedIds);
   const out: WorkRangeCircle[] = [];
   for (const b of buildings) {
-    if (b.ownerId !== ownerId) continue;
+    if (!isFriendly(teams, b.ownerId, ownerId)) continue;
     if (b.buildingId !== RADIO_BUILDING_ID) continue;
     if (!isBuildingComplete(b)) continue;
     if (b.polluted) continue;
@@ -58,11 +60,12 @@ export function isInsideRadioCoverage(
   buildings: readonly PlacedBuilding[],
   ownerId: string,
   connectedIds: ReadonlySet<string> | readonly string[] = [],
+  teams?: TeamRoster | null,
 ): boolean {
   return isInsideAnyCircle(
     gx,
     gy,
-    collectRadioCoverage(buildings, ownerId, connectedIds),
+    collectRadioCoverage(buildings, ownerId, connectedIds, teams),
   );
 }
 
@@ -112,6 +115,7 @@ export function collectMovingUnitCoverage(
   unit: { kind: UnitKind; ownerId: string; homeBuildingId: string },
   buildings: readonly PlacedBuilding[],
   connectedIds: ReadonlySet<string> | readonly string[] = [],
+  teams?: TeamRoster | null,
 ): WorkRangeCircle[] {
   if (unit.kind === "air") {
     return collectUnitActivityCoverage(
@@ -120,6 +124,7 @@ export function collectMovingUnitCoverage(
       unit.homeBuildingId,
       buildings,
       connectedIds,
+      teams,
     );
   }
   const home = buildings.find((b) => b.id === unit.homeBuildingId);
@@ -135,6 +140,7 @@ export function collectMovingUnitCoverage(
     unit.homeBuildingId,
     buildings,
     connectedIds,
+    teams,
   );
 }
 
@@ -153,13 +159,14 @@ export function collectUnitActivityCoverage(
   homeBuildingId: string,
   buildings: readonly PlacedBuilding[],
   connectedIds: ReadonlySet<string> | readonly string[] = [],
+  teams?: TeamRoster | null,
 ): WorkRangeCircle[] {
   if (kind === "air") {
     const home = buildings.find((b) => b.id === homeBuildingId);
     if (!home) return [];
     return collectAirportCoverage(home, buildings, connectedIds);
   }
-  return collectRadioCoverage(buildings, ownerId, connectedIds);
+  return collectRadioCoverage(buildings, ownerId, connectedIds, teams);
 }
 
 export function buildingHasWorkR(buildingId: string): boolean {

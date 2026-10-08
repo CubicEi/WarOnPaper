@@ -1,7 +1,14 @@
 import { createServer } from "node:http";
 import { WebSocketServer, type WebSocket, type RawData } from "ws";
 import { IdentityStore } from "./identity.js";
-import { MatchQueues, isMatchPlayerCount } from "./lobby.js";
+import {
+  MatchQueues,
+  ffaQueueKey,
+  formatSeatCount,
+  isMatchPlayerCount,
+  isTeamFormat,
+  teamQueueKey,
+} from "./lobby.js";
 import {
   isLobbyClientMessage,
   isMapSizeId,
@@ -262,19 +269,51 @@ async function main(): Promise<void> {
             sendError(session.ws, "ALREADY_IN_ROOM", "请先离开当前房间");
             return;
           }
-          if (!isMatchPlayerCount(msg.playerCount)) {
-            sendError(session.ws, "BAD_QUEUE", "匹配人数须为 2–5");
+          const teamFormat = isTeamFormat(msg.teamFormat)
+            ? msg.teamFormat
+            : undefined;
+          if (teamFormat) {
+            const needed = formatSeatCount(teamFormat);
+            const queueKey = teamQueueKey(teamFormat);
+            matchQueues.enqueue({
+              playerId: session.playerId!,
+              name: session.name!,
+              ws: session.ws,
+              queueKey,
+              needed,
+              teamFormat,
+              enqueuedAt: Date.now(),
+            });
+            send(session.ws, {
+              type: "queued",
+              playerCount: needed,
+              teamFormat,
+            });
+            const st = matchQueues.status(queueKey);
+            send(session.ws, {
+              type: "match_status",
+              playerCount: needed,
+              queued: st.queued,
+              needed: st.needed,
+              teamFormat,
+            });
             return;
           }
+          if (!isMatchPlayerCount(msg.playerCount)) {
+            sendError(session.ws, "BAD_QUEUE", "匹配人数须为 2–5，或选择组队队形");
+            return;
+          }
+          const queueKey = ffaQueueKey(msg.playerCount);
           matchQueues.enqueue({
             playerId: session.playerId!,
             name: session.name!,
             ws: session.ws,
-            playerCount: msg.playerCount,
+            queueKey,
+            needed: msg.playerCount,
             enqueuedAt: Date.now(),
           });
           send(session.ws, { type: "queued", playerCount: msg.playerCount });
-          const st = matchQueues.status(msg.playerCount);
+          const st = matchQueues.status(queueKey);
           send(session.ws, {
             type: "match_status",
             playerCount: msg.playerCount,
