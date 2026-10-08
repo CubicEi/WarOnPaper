@@ -43,6 +43,7 @@
 | `destructionMarksRef` | 小地图毁坏警示 |
 | `pendingDemolishIdsRef` | 己方主动拆除，跳过警示 |
 | `workRangeRef` | 当前要画的射程圈（开火或检视） |
+| `inspectFocusRef` | 检视 HUD 打开时传给 `drawMap` 的焦点图标（调暗其余） |
 | `pathPreviewsRef` | 调动/训练路径预览折线 |
 | `fireAimRef` / `mutualAimRef` | 瞄准模式建筑 id |
 
@@ -85,16 +86,22 @@ screen = center + zoom * (layout - center) + pan
 
 ## 5. 选中逻辑（`setSelectionAt` / 点击）
 
-### 点选优先级（`pointerup` 且未拖动，`playing`）
+### 缩放门控
 
-1. 单位（`findUnitNear` 0.35 Du）— 除非正在开火/互防瞄准  
-2. 互防瞄准 → 邻格己方建筑  
-3. 开火瞄准 → 取消钮 / 敌方单位(炮)或建筑，校验 `isInsideWorkRange`  
-4. 建筑：Shift 仅用于双击拆除计时；普通点击 `focusCenter`；人工岛当作点菜单  
-5. 敌方联络线段 → `enemyLiaison` 进攻钮  
-6. 否则空地点选 → 半环菜单  
+对局中点击地图（非开火/互防瞄准）时，若 `zoom < MAP_CLICK_ZOOM_GATE`（**3**）：以点击点为枢轴将 `zoom + 1`（`animateCameraTo` 平滑插值，`panAfterZoomAt` 保持点位），**本次不打开菜单/检视**。`zoom` 为相机放大倍数（`MAP_ZOOM_MIN=1` … `MAP_ZOOM_MAX=16`）。
 
-观战/结束：可检视建筑，不可玩法操作。选都阶段：点菜单仅「定为首都」。
+### ≥3 倍时的点选（`playing`，命中圆 R = `MAP_CLICK_HIT_R_DU` = **0.3 Du**）
+
+Du = 格点距离单位（与 `findUnitNear` / 网格坐标一致）。人工岛不计入「建筑」命中（仍可单独打开点菜单）。点击后按 **4 → 3 → 2 → 1** 倒序判定：
+
+4. **建筑 + 单位** → `RadialPickMenu` 叠放菜单（坐标 → 建筑 → 单位）  
+3. **仅单位** → 叠放菜单（坐标 → 单位）  
+2. **仅建筑** → 镜头居中 + `BuildingInspectHud`；Shift+点击仍只做双击拆除计时（跳过焦点）  
+1. **皆无** → 半环点菜单（或敌方联络线进攻）；仅人工岛命中 → 点菜单  
+
+叠放菜单：左右侧环位（正上/正下不排）；「坐标（x，y）」在环正下方居中；建筑/单位角度 **−45° / 0° / 45°（右）→ 135° / 180° / 225°（左）**，右侧优先（不均分全环）；各方内 **我方优先**、同方按 **id**；环上建筑+单位 &gt;6 时最多 6 +「更多」列表；菜单图标一律黑版。点建筑/单位走与直接点选相同的 `focusCenter` 流程（`selectionUiRef` 在 `setSelectionAt` 内同步写入，焦点动画经 `pendingBuildingFocusRef` 延后一拍，避免仍读到上一选中态而中止）。
+
+开火/互防瞄准逻辑不变（仍用既有近点拾取）。观战/结束：R=0.3 最近单位优先，其次建筑，可检视不可操作。选都阶段：缩放门控后点菜单仅「定为首都」。
 
 `clearSelection`：取消 pending 焦点、相机动画、follow、互防/敌线选中；**不**退出开火瞄准（见下）。
 
@@ -110,7 +117,9 @@ paint → drawMap(ctx, { pan, zoom, selection, buildings, … })
       → requestAnimationFrame(paint)
 ```
 
-`selectionRef` 只服务点选半环；建筑/单位检视环由 DOM HUD 表达。`workRanges` / `pathPreviews` / `focusMarks` / `fireAimAt` 每帧从 refs 组装。
+`selectionRef` 只服务点选半环；建筑/单位检视环由 DOM HUD 表达。`workRanges` / `pathPreviews` / `focusMarks` / `fireAimAt` / `inspectFocus` 每帧从 refs 组装。
+
+检视态（`inspectHudReady` 且 `BuildingInspectHud` / `UnitInspectHud` 打开）：`drawMap` 用半透明暗层盖住棋盘后，再以正常亮度重绘选中目标图标（其余地物保持调暗）；取消选中后 `inspectFocus` 清空并恢复。叠放菜单阶段不启用此调暗。
 
 ## 7. 联络线编辑
 

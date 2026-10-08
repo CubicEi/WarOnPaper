@@ -172,6 +172,24 @@ export function findBuildingNear(
   return best;
 }
 
+/**
+ * All buildings within circular `radius` Du of (gx,gy), nearest first.
+ */
+export function findBuildingsInRadius(
+  buildings: readonly PlacedBuilding[],
+  gx: number,
+  gy: number,
+  radius: number,
+): PlacedBuilding[] {
+  const hits: Array<{ b: PlacedBuilding; d: number }> = [];
+  for (const b of buildings) {
+    const d = Math.hypot(b.gx - gx, b.gy - gy);
+    if (d <= radius) hits.push({ b, d });
+  }
+  hits.sort((a, b) => a.d - b.d);
+  return hits.map((h) => h.b);
+}
+
 export function isBuildingComplete(b: PlacedBuilding): boolean {
   return b.buildTicksRemaining <= 0;
 }

@@ -42,6 +42,24 @@ export function findUnitNear(
   return best;
 }
 
+/**
+ * All units within circular `radius` Du of (gx,gy), nearest first.
+ */
+export function findUnitsInRadius(
+  units: readonly UnitGroup[],
+  gx: number,
+  gy: number,
+  radius: number,
+): UnitGroup[] {
+  const hits: Array<{ u: UnitGroup; d: number }> = [];
+  for (const u of units) {
+    const d = Math.hypot(u.gx - gx, u.gy - gy);
+    if (d <= radius) hits.push({ u, d });
+  }
+  hits.sort((a, b) => a.d - b.d);
+  return hits.map((h) => h.u);
+}
+
 /** Present U in the building（在营）. */
 export function presentU(building: PlacedBuilding): number {
   return building.u ?? 0;

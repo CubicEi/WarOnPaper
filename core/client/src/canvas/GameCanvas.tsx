@@ -17,7 +17,9 @@ import {
   cellAt,
   findBuildingAt,
   findBuildingNear,
+  findBuildingsInRadius,
   findUnitNear,
+  findUnitsInRadius,
   findLiaisonNear,
   findLiaisonSegmentNear,
   workRangeCircles,
@@ -45,6 +47,8 @@ import {
   isBuildingCommsLinked,
   nukeReloadRejectReason,
   LIAISON_BY_ID,
+  BUILDING_BY_ID,
+  UNIT_BY_KIND,
   capitalSiteRejectReason,
   capitalSiteRejectMessage,
   availableTrainingRoom,
@@ -75,12 +79,17 @@ import {
   CAPITAL_PICK_ACTIONS,
   type PointActionId,
 } from "../components/PointActionMenu";
+import {
+  RadialPickMenu,
+  type RadialPickItem,
+} from "../components/RadialPickMenu";
 import { BuildModeOverlay } from "../components/BuildModeOverlay";
 import { MobilizePanel } from "../components/MobilizePanel";
 import { TrainPanel } from "../components/TrainPanel";
 import { BuildingInspectHud, type BuildingInspectAction } from "../components/BuildingInspectHud";
 import { UnitInspectHud, type UnitInspectAction } from "../components/UnitInspectHud";
 import { ChatPanel, type ChatMessage } from "../components/ChatPanel";
+import { buildingUiIcon } from "../ui/buildingUiIcon";
 import { log } from "../net/log";
 import { logLocalReject } from "../debug/playerActionLog";
 import type { TrainableKind } from "@wop/shared";
@@ -185,7 +194,7 @@ interface Props {
 }
 
 interface SelectionView {
-  kind: "point" | "building" | "unit";
+  kind: "point" | "building" | "unit" | "radial_pick";
   gx: number;
   gy: number;
   screenX: number;
@@ -194,6 +203,8 @@ interface SelectionView {
   buildingId?: string;
   /** Unit group id when kind === "unit". */
   unitId?: string;
+  /** Multi-hit circular menu when kind === "radial_pick". */
+  radialItems?: RadialPickItem[];
 }
 
 /** Button centers sit just outside the half-ring along a right-side arc. */
@@ -201,11 +212,71 @@ const ACTION_BTN_R = 18;
 const ACTION_ARC_RADIUS = SEL_RING_OUTER + ACTION_BTN_R + 10;
 /** Unit inspect: place the unit at ~38% width (center-left), vertical center. */
 const UNIT_FOCUS_X_RATIO = 0.38;
+/**
+ * Map click zoom gate: below this scale, click only zooms +1 (smooth).
+ * `zoom` is the camera multiplier (MAP_ZOOM_MIN=1 … MAP_ZOOM_MAX=16).
+ */
+const MAP_CLICK_ZOOM_GATE = 3;
+/** Playing-phase map click hit radius in Du (grid distance units). */
+const MAP_CLICK_HIT_R_DU = 0.3;
 /** Pan/zoom camera tween when focusing a building or fitting fire range. */
 const CAMERA_FOCUS_MS = 500;
 /** CSS ease-in-out equivalent: accelerate then decelerate. */
 function easeInOutCubic(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+function sortOwnFirstThenId<T extends { ownerId: string; id: string }>(
+  items: readonly T[],
+  myPlayerId: string | null,
+): T[] {
+  return [...items].sort((a, b) => {
+    const aMine = myPlayerId != null && a.ownerId === myPlayerId ? 0 : 1;
+    const bMine = myPlayerId != null && b.ownerId === myPlayerId ? 0 : 1;
+    if (aMine !== bMine) return aMine - bMine;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+/** Radial menu always uses black unit glyphs (same family as build-tree UI). */
+function unitMenuIconSrc(kind: UnitGroup["kind"]): string {
+  const src = UNIT_BY_KIND[kind].iconIdle;
+  return src.replace("/icons/symbol/units/", "/icons/symbol/units - black/");
+}
+
+function buildRadialPickItems(
+  gx: number,
+  gy: number,
+  buildings: readonly PlacedBuilding[],
+  units: readonly UnitGroup[],
+  myPlayerId: string | null,
+): RadialPickItem[] {
+  const items: RadialPickItem[] = [
+    {
+      id: `coord:${gx},${gy}`,
+      kind: "coord",
+      label: `坐标（${gx}，${gy}）`,
+    },
+  ];
+  for (const b of sortOwnFirstThenId(buildings, myPlayerId)) {
+    const def = BUILDING_BY_ID[b.buildingId];
+    items.push({
+      id: `building:${b.id}`,
+      kind: "building",
+      label: def?.name ?? b.buildingId,
+      icon: def ? buildingUiIcon(def.icon) : undefined,
+    });
+  }
+  for (const u of sortOwnFirstThenId(units, myPlayerId)) {
+    const def = UNIT_BY_KIND[u.kind];
+    items.push({
+      id: `unit:${u.id}`,
+      kind: "unit",
+      label: def?.name ?? u.kind,
+      icon: unitMenuIconSrc(u.kind),
+    });
+  }
+  return items;
 }
 
 export function GameCanvas({
@@ -408,6 +479,9 @@ export function GameCanvas({
   const shiftHeldRef = useRef(false);
   const mouseClientRef = useRef({ x: width / 2, y: height / 2 });
   const workRangeRef = useRef<{ gx: number; gy: number; radiusDu: number }[]>([]);
+  const inspectFocusRef = useRef<{ kind: "building" | "unit"; id: string } | null>(
+    null,
+  );
 
   mapRef.current = map;
   terrainRef.current = terrain;
@@ -506,6 +580,7 @@ export function GameCanvas({
     cancelCameraAnim();
     followUnitIdRef.current = null;
     selectionRef.current = null;
+    selectionUiRef.current = null;
     setSelectionUi(null);
     setInspectHudReady(false);
     // Fire-aim mode exits only via the × cancel chip (exitFireAim).
@@ -584,6 +659,27 @@ export function GameCanvas({
       }
     };
     cameraAnimRef.current = requestAnimationFrame(step);
+  };
+
+  /** Click-to-zoom: +1 scale pivoted at screen point, ease via animateCameraTo. */
+  const zoomInAtScreen = (sx: number, sy: number) => {
+    const m = mapRef.current;
+    if (!m) return;
+    const { width: w, height: h } = sizeRef.current;
+    const { boardW, boardH } = getBoardLayout(w, h, m);
+    const z0 = zoomRef.current;
+    const z1 = Math.min(MAP_ZOOM_MAX, z0 + 1);
+    if (z1 <= z0 + 1e-6) return;
+    clearSelection();
+    const nextPan = clampPan(
+      panAfterZoomAt(sx, sy, z0, z1, panRef.current, w, h),
+      w,
+      h,
+      boardW,
+      boardH,
+      z1,
+    );
+    animateCameraTo(nextPan, z1);
   };
 
   /** Pan so (gx,gy) lands at a target screen point, then clamp. */
@@ -895,9 +991,10 @@ export function GameCanvas({
     gx: number,
     gy: number,
     opts?: {
-      kind?: "point" | "building" | "unit";
+      kind?: "point" | "building" | "unit" | "radial_pick";
       buildingId?: string;
       unitId?: string;
+      radialItems?: RadialPickItem[];
       /** When selecting a unit, pan viewport so it sits center-left. */
       focusCenterLeft?: boolean;
       /** Animate building/unit to viewport center, then reveal inspect HUD. */
@@ -927,9 +1024,13 @@ export function GameCanvas({
 
     const screen = gridScreenAt(gx, gy);
     if (!screen) return;
-    selectionRef.current = kind === "point" ? { gx, gy } : null;
+    selectionRef.current =
+      kind === "point" || kind === "radial_pick" ? { gx, gy } : null;
     setEnemyLiaison(null);
-    setSelectionUi({
+    // Sync ref before any focus check: setState alone is not visible until re-render,
+    // so a sync startFocusAnim would still see the previous selection (e.g. radial_pick)
+    // and abort — leaving work-range rings with no camera tween / inspect HUD.
+    const nextUi: SelectionView = {
       kind,
       gx,
       gy,
@@ -937,7 +1038,10 @@ export function GameCanvas({
       screenY: screen.y,
       buildingId: opts?.buildingId,
       unitId: opts?.unitId,
-    });
+      radialItems: opts?.radialItems,
+    };
+    selectionUiRef.current = nextUi;
+    setSelectionUi(nextUi);
 
     if (useFocusCenter) {
       setInspectHudReady(false);
@@ -998,10 +1102,26 @@ export function GameCanvas({
               cur.kind === "building" &&
               cur.buildingId === opts?.buildingId
             ) {
-              return { ...cur, gx: liveGx, gy: liveGy, screenX: settled.x, screenY: settled.y };
+              const updated = {
+                ...cur,
+                gx: liveGx,
+                gy: liveGy,
+                screenX: settled.x,
+                screenY: settled.y,
+              };
+              selectionUiRef.current = updated;
+              return updated;
             }
             if (kind === "unit" && cur.kind === "unit" && cur.unitId === opts?.unitId) {
-              return { ...cur, gx: liveGx, gy: liveGy, screenX: settled.x, screenY: settled.y };
+              const updated = {
+                ...cur,
+                gx: liveGx,
+                gy: liveGy,
+                screenX: settled.x,
+                screenY: settled.y,
+              };
+              selectionUiRef.current = updated;
+              return updated;
             }
             return cur;
           });
@@ -1009,7 +1129,9 @@ export function GameCanvas({
         });
       };
 
-      startFocusAnim();
+      // Defer so cancelPendingBuildingFocus can still abort, and so we run after
+      // the selecting event finishes (matches pendingBuildingFocusRef design).
+      pendingBuildingFocusRef.current = setTimeout(startFocusAnim, 0);
     }
   };
 
@@ -1165,6 +1287,7 @@ export function GameCanvas({
           selectionUiRef.current?.kind === "unit"
             ? selectionUiRef.current.unitId ?? null
             : null,
+        inspectFocus: inspectFocusRef.current,
         pollutionZones: pollutionZonesRef.current,
         showEnemyVision: showEnemyVisionRef.current,
         showCommStatus: showCommStatusRef.current,
@@ -1732,30 +1855,24 @@ export function GameCanvas({
         zoomRef.current,
       );
       if (hit) {
-        if (phaseRef.current === "playing" || phaseRef.current === "spectating" || phaseRef.current === "ended") {
-          const nearUnit = findUnitNear(unitsRef.current, hit.gx, hit.gy, 0.35);
-          if (nearUnit && !fireAimRef.current && !mutualAimRef.current) {
-            log.info("select", "unit", nearUnit.kind, nearUnit.gx, nearUnit.gy);
-            setSelectionAt(nearUnit.gx, nearUnit.gy, {
-              kind: "unit",
-              unitId: nearUnit.id,
-              focusCenter: true,
-            });
-            return;
-          }
-          if (phaseRef.current !== "playing") {
-            const near = findBuildingNear(buildingsRef.current, hit.gx, hit.gy, 0.2);
-            if (near && !shiftDown(e)) {
-              setSelectionAt(near.gx, near.gy, {
-                kind: "building",
-                buildingId: near.id,
-                focusCenter: true,
-              });
-            }
-            return;
-          }
+        const phaseNow = phaseRef.current;
+        const aiming = !!fireAimRef.current || !!mutualAimRef.current;
+        if (
+          !aiming &&
+          (phaseNow === "playing" ||
+            phaseNow === "pick_capital" ||
+            phaseNow === "spectating" ||
+            phaseNow === "ended") &&
+          zoomRef.current < MAP_CLICK_ZOOM_GATE
+        ) {
+          log.info("select", "zoom-gate", zoomRef.current, "→", zoomRef.current + 1);
+          zoomInAtScreen(local.x, local.y);
+          return;
+        }
+
+        if (phaseNow === "playing" || phaseNow === "spectating" || phaseNow === "ended") {
           const near = findBuildingNear(buildingsRef.current, hit.gx, hit.gy, 0.2);
-          if (mutualAimRef.current && !shiftDown(e)) {
+          if (phaseNow === "playing" && mutualAimRef.current && !shiftDown(e)) {
             const source = buildingsRef.current.find((b) => b.id === mutualAimRef.current);
             if (!source) {
               setMutualAim(null);
@@ -1785,7 +1902,7 @@ export function GameCanvas({
             clearSelection();
             return;
           }
-          if (fireAimRef.current && !shiftDown(e)) {
+          if (phaseNow === "playing" && fireAimRef.current && !shiftDown(e)) {
             const source = buildingsRef.current.find((b) => b.id === fireAimRef.current);
             if (!source) {
               exitFireAim();
@@ -1895,38 +2012,126 @@ export function GameCanvas({
             setFireAimNote("选择目标");
             return;
           }
-          if (near) {
-            const mine =
-              myPlayerIdRef.current != null && near.ownerId === myPlayerIdRef.current;
-            const withShift = shiftDown(e);
-            if (mine && withShift) {
-              const now = performance.now();
-              if (shiftDbl && shiftDbl.id === near.id && now - shiftDbl.at < SHIFT_DBL_MS) {
-                shiftDbl = null;
-                log.info("building-action", "shift-dbl-demolish", near.buildingId, near.gx, near.gy);
-                pendingDemolishIdsRef.current.add(near.id);
-                onDemolishRef.current?.(near.id);
-                clearSelection();
+
+          if (phaseNow === "playing") {
+            // Priority 4→3→2→1 within R=MAP_CLICK_HIT_R_DU (islands excluded from "building").
+            const inRadius = findBuildingsInRadius(
+              buildingsRef.current,
+              hit.gx,
+              hit.gy,
+              MAP_CLICK_HIT_R_DU,
+            );
+            const islands = inRadius.filter((b) => b.buildingId === "artificial_island");
+            const nearBuildings = inRadius.filter((b) => b.buildingId !== "artificial_island");
+            const nearUnits = findUnitsInRadius(
+              unitsRef.current,
+              hit.gx,
+              hit.gy,
+              MAP_CLICK_HIT_R_DU,
+            );
+            const hasBuildings = nearBuildings.length > 0;
+            const hasUnits = nearUnits.length > 0;
+
+            // 4: buildings+units → radial; 3: units only → radial
+            if (hasUnits) {
+              const radialItems = buildRadialPickItems(
+                hit.gx,
+                hit.gy,
+                nearBuildings,
+                nearUnits,
+                myPlayerIdRef.current,
+              );
+              log.info(
+                "select",
+                "radial_pick",
+                hasBuildings ? 4 : 3,
+                "buildings",
+                nearBuildings.length,
+                "units",
+                nearUnits.length,
+              );
+              setSelectionAt(hit.gx, hit.gy, {
+                kind: "radial_pick",
+                radialItems,
+              });
+              return;
+            }
+
+            // 2: buildings only → focus center + BuildingInspectHud
+            if (hasBuildings) {
+              const focusB = nearBuildings[0]!;
+              const mine =
+                myPlayerIdRef.current != null && focusB.ownerId === myPlayerIdRef.current;
+              const withShift = shiftDown(e);
+              if (mine && withShift) {
+                const now = performance.now();
+                if (shiftDbl && shiftDbl.id === focusB.id && now - shiftDbl.at < SHIFT_DBL_MS) {
+                  shiftDbl = null;
+                  log.info(
+                    "building-action",
+                    "shift-dbl-demolish",
+                    focusB.buildingId,
+                    focusB.gx,
+                    focusB.gy,
+                  );
+                  pendingDemolishIdsRef.current.add(focusB.id);
+                  onDemolishRef.current?.(focusB.id);
+                  clearSelection();
+                  return;
+                }
+                shiftDbl = { id: focusB.id, at: now };
+              }
+              // Shift+click: demolish dbl-window only — skip focus pan / inspect HUD.
+              if (withShift) {
+                cancelPendingBuildingFocus();
                 return;
               }
-              shiftDbl = { id: near.id, at: now };
-            }
-            // Shift+click: keep demolish dbl detection only — no focus pan / inspect HUD.
-            if (withShift) {
-              cancelPendingBuildingFocus();
+              log.info("select", "building", focusB.buildingId, focusB.gx, focusB.gy);
+              setSelectionAt(focusB.gx, focusB.gy, {
+                kind: "building",
+                buildingId: focusB.id,
+                focusCenter: true,
+              });
               return;
             }
-            if (near.buildingId === "artificial_island") {
-              log.info("select", "artificial_island → point menu", near.gx, near.gy);
-              setSelectionAt(near.gx, near.gy, { kind: "point" });
+
+            // 1 fallback: artificial island → point menu; else fall through to liaison / half-ring
+            if (islands.length > 0) {
+              const island = islands[0]!;
+              log.info("select", "artificial_island → point menu", island.gx, island.gy);
+              setSelectionAt(island.gx, island.gy, { kind: "point" });
               return;
             }
-            log.info("select", "building", near.buildingId, near.gx, near.gy);
-            setSelectionAt(near.gx, near.gy, {
-              kind: "building",
-              buildingId: near.id,
-              focusCenter: true,
-            });
+          } else {
+            // Spectating / ended: inspect nearest unit then building (R=0.3 Du).
+            const nearUnit = findUnitNear(
+              unitsRef.current,
+              hit.gx,
+              hit.gy,
+              MAP_CLICK_HIT_R_DU,
+            );
+            if (nearUnit) {
+              log.info("select", "unit", nearUnit.kind, nearUnit.gx, nearUnit.gy);
+              setSelectionAt(nearUnit.gx, nearUnit.gy, {
+                kind: "unit",
+                unitId: nearUnit.id,
+                focusCenter: true,
+              });
+              return;
+            }
+            const nearB = findBuildingsInRadius(
+              buildingsRef.current,
+              hit.gx,
+              hit.gy,
+              MAP_CLICK_HIT_R_DU,
+            ).find((b) => b.buildingId !== "artificial_island");
+            if (nearB && !shiftDown(e)) {
+              setSelectionAt(nearB.gx, nearB.gy, {
+                kind: "building",
+                buildingId: nearB.id,
+                focusCenter: true,
+              });
+            }
             return;
           }
         }
@@ -1951,6 +2156,7 @@ export function GameCanvas({
               const screen = gridScreenAt(mid.gx, mid.gy);
               if (screen) {
                 selectionRef.current = null;
+                selectionUiRef.current = null;
                 setSelectionUi(null);
                 setEnemyLiaison({
                   id: seg.line.id,
@@ -2334,6 +2540,18 @@ export function GameCanvas({
       : inspectOpen
         ? workRangeCircles(inspectedBuilding, buildings, connectedBuildingIds)
         : [];
+  // Dim map while BuildingInspectHud / UnitInspectHud is showing (after focus settle).
+  const unitInspectOpen =
+    !!inspectedUnit &&
+    inspectHudReady &&
+    !buildMode &&
+    (phase === "playing" || phase === "spectating" || phase === "ended");
+  inspectFocusRef.current =
+    inspectOpen && inspectHudReady && !fireAim && inspectedBuilding
+      ? { kind: "building", id: inspectedBuilding.id }
+      : unitInspectOpen && inspectedUnit
+        ? { kind: "unit", id: inspectedUnit.id }
+        : null;
 
   // Keep inspect HUD on building node if HP/state updates
   useEffect(() => {
@@ -2380,14 +2598,16 @@ export function GameCanvas({
       Math.abs(screen.y - selectionUi.screenY) > 0.5
     ) {
       selectionRef.current = null;
-      setSelectionUi({
+      const nextUi: SelectionView = {
         kind: "unit",
         gx: live.gx,
         gy: live.gy,
         screenX: screen.x,
         screenY: screen.y,
         unitId: live.id,
-      });
+      };
+      selectionUiRef.current = nextUi;
+      setSelectionUi(nextUi);
     }
   }, [units, selectionUi?.unitId, selectionUi?.gx, selectionUi?.gy, selectionUi?.screenX, selectionUi?.screenY]);
 
@@ -2659,6 +2879,46 @@ export function GameCanvas({
             arcRadius={ACTION_ARC_RADIUS}
             actions={phase === "pick_capital" ? CAPITAL_PICK_ACTIONS : POINT_ACTIONS}
             onAction={onPointAction}
+          />
+        )}
+      {selectionUi &&
+        selectionUi.kind === "radial_pick" &&
+        selectionUi.radialItems &&
+        selectionUi.radialItems.length > 0 &&
+        !buildMode &&
+        phase === "playing" && (
+          <RadialPickMenu
+            screenX={selectionUi.screenX}
+            screenY={selectionUi.screenY}
+            arcRadius={ACTION_ARC_RADIUS}
+            items={selectionUi.radialItems}
+            onPick={(item) => {
+              if (item.kind === "coord") {
+                setSelectionAt(selectionUi.gx, selectionUi.gy, { kind: "point" });
+                return;
+              }
+              if (item.kind === "building") {
+                const id = item.id.replace(/^building:/, "");
+                const b = buildingsRef.current.find((x) => x.id === id);
+                if (!b) return;
+                setSelectionAt(b.gx, b.gy, {
+                  kind: "building",
+                  buildingId: b.id,
+                  focusCenter: true,
+                });
+                return;
+              }
+              if (item.kind === "unit") {
+                const id = item.id.replace(/^unit:/, "");
+                const u = unitsRef.current.find((x) => x.id === id);
+                if (!u) return;
+                setSelectionAt(u.gx, u.gy, {
+                  kind: "unit",
+                  unitId: u.id,
+                  focusCenter: true,
+                });
+              }
+            }}
           />
         )}
       {selectionUi &&

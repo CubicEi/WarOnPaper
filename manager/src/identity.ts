@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { IDENTITY_DATA_PATH } from "./paths.js";
 
@@ -45,16 +45,34 @@ export class IdentityStore {
   async load(): Promise<void> {
     try {
       const raw = await readFile(IDENTITY_DATA_PATH, "utf8");
-      const parsed = JSON.parse(raw) as IdentityFile;
-      if (parsed?.version === 1 && Array.isArray(parsed.identities)) {
-        for (const rec of parsed.identities) {
-          if (!rec?.playerId || !rec?.name) continue;
-          this.byId.set(rec.playerId, {
-            playerId: rec.playerId,
-            name: sanitizeName(rec.name),
-            lastSeenAt:
-              typeof rec.lastSeenAt === "number" ? rec.lastSeenAt : null,
-          });
+      const trimmed = raw.trim();
+      // Empty / truncated file (crash mid-write) → start fresh, don't warn loudly.
+      if (!trimmed) {
+        await this.flush();
+      } else {
+        let parsed: IdentityFile;
+        try {
+          parsed = JSON.parse(trimmed) as IdentityFile;
+        } catch {
+          console.warn(
+            "[manager] identity file corrupt; resetting",
+            IDENTITY_DATA_PATH,
+          );
+          await this.flush();
+          this.purgeExpired();
+          this.scheduleClean();
+          return;
+        }
+        if (parsed?.version === 1 && Array.isArray(parsed.identities)) {
+          for (const rec of parsed.identities) {
+            if (!rec?.playerId || !rec?.name) continue;
+            this.byId.set(rec.playerId, {
+              playerId: rec.playerId,
+              name: sanitizeName(rec.name),
+              lastSeenAt:
+                typeof rec.lastSeenAt === "number" ? rec.lastSeenAt : null,
+            });
+          }
         }
       }
     } catch (err) {
@@ -161,7 +179,18 @@ export class IdentityStore {
       version: 1,
       identities: [...this.byId.values()],
     };
-    await mkdir(dirname(IDENTITY_DATA_PATH), { recursive: true });
-    await writeFile(IDENTITY_DATA_PATH, JSON.stringify(payload, null, 2), "utf8");
+    const dir = dirname(IDENTITY_DATA_PATH);
+    await mkdir(dir, { recursive: true });
+    const body = JSON.stringify(payload, null, 2);
+    // Atomic-ish write so a crash mid-save cannot leave an empty/truncated JSON.
+    const tmp = join(dir, `.identities.${process.pid}.${Date.now()}.tmp`);
+    await writeFile(tmp, body, "utf8");
+    try {
+      await rename(tmp, IDENTITY_DATA_PATH);
+    } catch {
+      // Windows cannot rename over an existing file — replace then drop tmp.
+      await writeFile(IDENTITY_DATA_PATH, body, "utf8");
+      await unlink(tmp).catch(() => undefined);
+    }
   }
 }

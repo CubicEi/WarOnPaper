@@ -10,6 +10,7 @@ flowchart TB
   App --> ErrorToast
   App --> DebugOverlay
   GameCanvas --> PointActionMenu
+  GameCanvas --> RadialPickMenu
   GameCanvas --> BuildingInspectHud
   GameCanvas --> UnitInspectHud
   GameCanvas --> BuildModeOverlay
@@ -25,6 +26,7 @@ flowchart TB
 | `HudOverlay` | 左上角能源/组织 + 首都 HP 环 |
 | `CapitalHpRing` | SVG/canvas 环显示首都生命 |
 | `PointActionMenu` | 点选半环动作钮 |
+| `RadialPickMenu` | 多目标圆形点选（坐标 / 建筑 / 单位） |
 | `BuildModeOverlay` | 全屏建造/联络线编辑壳 |
 | `BuildTreePanel` | 升级树节点点击 |
 | `BuildingInspectHud` | 建筑信息与操作 |
@@ -49,6 +51,15 @@ flowchart TB
 - 对局：`POINT_ACTIONS`（调动/封锁/建造）；选都：`CAPITAL_PICK_ACTIONS`。  
 - `onPointerDown` stopPropagation，避免拖动画布。
 
+## 3b. `RadialPickMenu`（叠放菜单）
+
+- 对局中 `zoom ≥ 3` 且点击圆 R=0.3 Du 内有单位（情况 3）或建筑+单位（情况 4）时由 `GameCanvas` 打开。  
+- 项：`coord` / `building` / `unit`（顺序：坐标 → 建筑 → 单位）。  
+- **布局**：左右侧环位（正上/正下不排建筑/单位）；`coord`（「坐标（x，y）」）固定在圆环正下方居中，不占环位。建筑/单位角度表 **−45° / 0° / 45°（右）→ 135° / 180° / 225°（左）**，右侧优先、少量不拉开均分；左侧项 `is-left` 标签在图标左侧。环上建筑+单位 &gt;6 时最多 6 +「更多」列表（列表在坐标/更多下方）。  
+- 点 `building` / `unit` → 与直接点选相同的居中焦点 + 检视 HUD；点 `coord` → 半环点菜单。  
+- 环上/列表图标一律用黑版资源（建筑 `buildingUiIcon`、单位 `units - black`）。  
+- 复用 `.point-action-btn` 视觉；坐标钮为 `.radial-pick-coord`。
+
 ## 4. `BuildModeOverlay` + `BuildTreePanel`
 
 - 从建造钮飞入左上；`getBuildTree(currentBuildingId, ground)`；人工岛限制中型且排除纯海建筑。  
@@ -58,6 +69,8 @@ flowchart TB
 - UI 图标用 `buildingUiIcon`（黑版）。
 
 ## 5. `BuildingInspectHud`
+
+打开时（镜头居中后的检视态）地图经 `drawMap.inspectFocus` 调暗，仅该建筑图标保持正常亮度。
 
 **动作类型** `BuildingInspectAction`：`demolish`、`upgrade`、`level_upgrade`、`relocate_capital`、`repair`、`deploy`、`reload`、`train`、`build_carrier`、`garrison`、`mutual_defense`、`end_mutual_defense`、`supply`、`fire`、`attack`。
 
@@ -73,6 +86,8 @@ flowchart TB
 实际发令在 `GameCanvas` 的 `onAction` 分支（含通信/污染门闩）。
 
 ## 6. `UnitInspectHud`
+
+打开时同样走 `inspectFocus` 调暗，仅该单位图标保持正常亮度。
 
 动作：`retreat` | `stop` | `embark_air` | `disembark_air` | `attack`。
 

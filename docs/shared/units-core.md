@@ -84,7 +84,8 @@
 
 - `snapToUnitCoord` — 0.2 吸附并清浮点噪声  
 - `unitCoordKey` — `"gx,gy"` 占位键  
-- `findUnitNear` — 点击拾取，默认半径 0.35 Du  
+- `findUnitNear` — 点击拾取最近单位，默认半径 0.35 Du  
+- `findUnitsInRadius` — 圆形半径内全部单位（近到远）；对局点选用 R=0.3 Du  
 
 ### 编制占用
 

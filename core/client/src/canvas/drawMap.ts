@@ -45,6 +45,8 @@ const BG = "#2a2a2a";
 const GRID = "#4a4a4a";
 /** Satellite-only areas (outside direct vision). */
 const SATELLITE_FOG = "rgba(10, 12, 16, 0.5)";
+/** Inspect HUD focus: dim board so the selected icon stays readable. */
+const INSPECT_FOCUS_DIM = "rgba(8, 10, 14, 0.48)";
 /** Known enemy vision overlay (beige / 米黄, no stroke; union fill, uniform alpha). */
 const ENEMY_VISION_FILL = "rgba(235, 210, 155, 0.14)";
 /** Match selection half-ring fill. */
@@ -172,6 +174,11 @@ export interface DrawMapArgs {
   units?: readonly UnitGroup[] | null;
   /** Selected unit group id — draws remaining march path when present. */
   selectedUnitId?: string | null;
+  /**
+   * Building/unit inspect HUD open: dim the board, then redraw this entity's
+   * icon at full brightness (focus highlight).
+   */
+  inspectFocus?: { kind: "building" | "unit"; id: string } | null;
   /** Checked mobilize rows: light-cyan rings. Cleared when unchecked. */
   focusMarks?: readonly { gx: number; gy: number }[] | null;
   /** Mobilize / train dry-run march polylines (same stroke as selected-unit path). */
@@ -489,6 +496,35 @@ function drawUnitPathPreview(
   ctx.restore();
 }
 
+function drawUnitIconAt(
+  ctx: CanvasRenderingContext2D,
+  u: UnitGroup,
+  originX: number,
+  originY: number,
+  cell: number,
+  myPlayerId: string | null,
+): void {
+  const x = originX + u.gx * cell;
+  const y = originY + u.gy * cell;
+  const size = cell * UNIT_ICON_CELL;
+  const half = size / 2;
+  const mine = myPlayerId != null && u.ownerId === myPlayerId;
+  const img = getUnitIcon(u.kind, u.state, !mine);
+  const angle = unitFacingAngle(u);
+  ctx.save();
+  ctx.translate(x, y);
+  if (angle !== 0) ctx.rotate(angle);
+  if (img) {
+    ctx.drawImage(img, -half, -half, size, size);
+  } else {
+    ctx.fillStyle = mine ? "#ffffff" : "#eb6040";
+    ctx.beginPath();
+    ctx.arc(0, 0, half * 0.45, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
 function drawUnits(
   ctx: CanvasRenderingContext2D,
   units: readonly UnitGroup[],
@@ -510,26 +546,95 @@ function drawUnits(
   }
 
   for (const u of units) {
-    const x = originX + u.gx * cell;
-    const y = originY + u.gy * cell;
-    const size = cell * UNIT_ICON_CELL;
-    const half = size / 2;
-    const mine = myPlayerId != null && u.ownerId === myPlayerId;
-    const img = getUnitIcon(u.kind, u.state, !mine);
-    const angle = unitFacingAngle(u);
-    ctx.save();
-    ctx.translate(x, y);
-    if (angle !== 0) ctx.rotate(angle);
-    if (img) {
-      ctx.drawImage(img, -half, -half, size, size);
-    } else {
-      ctx.fillStyle = mine ? "#ffffff" : "#eb6040";
-      ctx.beginPath();
-      ctx.arc(0, 0, half * 0.45, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
+    drawUnitIconAt(ctx, u, originX, originY, cell, myPlayerId);
   }
+}
+
+/** Icon-only redraw used after inspect dim overlay (no HP / cooldown chrome). */
+function drawBuildingIconAt(
+  ctx: CanvasRenderingContext2D,
+  b: PlacedBuilding,
+  originX: number,
+  originY: number,
+  cell: number,
+  myPlayerId: string | null,
+  connectedIds: ReadonlySet<string> | null,
+  showCommStatus: boolean,
+): void {
+  const x = originX + b.gx * cell;
+  const y = originY + b.gy * cell;
+  const size = cell * 0.85;
+  const half = size / 2;
+  const mine = myPlayerId != null && b.ownerId === myPlayerId;
+  const incomplete = b.buildTicksRemaining > 0;
+  const linked = !!connectedIds && isBuildingCommsLinked(b.id, connectedIds);
+  let iconVariant: "own" | "enemy" | "online" | "offline" = mine ? "own" : "enemy";
+  if (showCommStatus && mine && !incomplete) {
+    iconVariant = linked ? "online" : "offline";
+  }
+  const img = getBuildingIcon(b.buildingId, iconVariant);
+  ctx.save();
+  if (img) {
+    ctx.drawImage(img, x - half, y - half, size, size);
+  } else {
+    const fallback =
+      showCommStatus && mine && !incomplete
+        ? linked
+          ? COMM_STATUS_LINKED
+          : COMM_STATUS_UNLINKED
+        : mine
+          ? "#8a8a8a"
+          : "#eb6040";
+    ctx.fillStyle = fallback;
+    ctx.beginPath();
+    ctx.arc(x, y, half * 0.55, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.restore();
+}
+
+/**
+ * Dim the whole board, then redraw the inspected building/unit icon so it
+ * stays at normal brightness while everything else reads as background.
+ */
+function drawInspectFocusHighlight(
+  ctx: CanvasRenderingContext2D,
+  focus: { kind: "building" | "unit"; id: string },
+  originX: number,
+  originY: number,
+  boardW: number,
+  boardH: number,
+  cell: number,
+  buildings: readonly PlacedBuilding[] | null | undefined,
+  units: readonly UnitGroup[] | null | undefined,
+  myPlayerId: string | null,
+  connectedIds: ReadonlySet<string> | null,
+  showCommStatus: boolean,
+): void {
+  ctx.save();
+  ctx.fillStyle = INSPECT_FOCUS_DIM;
+  ctx.fillRect(originX, originY, boardW, boardH);
+  ctx.restore();
+
+  if (focus.kind === "building") {
+    const b = buildings?.find((x) => x.id === focus.id);
+    if (b) {
+      drawBuildingIconAt(
+        ctx,
+        b,
+        originX,
+        originY,
+        cell,
+        myPlayerId,
+        connectedIds,
+        showCommStatus,
+      );
+    }
+    return;
+  }
+
+  const u = units?.find((x) => x.id === focus.id);
+  if (u) drawUnitIconAt(ctx, u, originX, originY, cell, myPlayerId);
 }
 
 /** Gray fill for remaining launch-cooldown pie sector. */
@@ -1194,6 +1299,7 @@ export function drawMap(
     workRanges,
     units,
     selectedUnitId,
+    inspectFocus,
     pollutionZones,
     showEnemyVision,
     showCommStatus,
@@ -1381,6 +1487,24 @@ export function drawMap(
       originX,
       originY,
       cell,
+    );
+  }
+
+  // Inspect HUD: dim map/entities, keep selected icon bright (before work-range UI).
+  if (inspectFocus) {
+    drawInspectFocusHighlight(
+      ctx,
+      inspectFocus,
+      originX,
+      originY,
+      boardW,
+      boardH,
+      cell,
+      buildings,
+      units,
+      myPlayerId ?? null,
+      linked,
+      !!showCommStatus,
     );
   }
 

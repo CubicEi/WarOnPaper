@@ -55,7 +55,7 @@
 | 符号 | 作用 |
 |------|------|
 | `BUILD_O_COST` 等 | 建造/拆除/装填/迁都 O 费与拆除/修理 E 公式常量 |
-| `snapToBuildNode` / `nodeKey` / `findBuildingAt` / `Near` | 格点工具 |
+| `snapToBuildNode` / `nodeKey` / `findBuildingAt` / `Near` / `findBuildingsInRadius` | 格点工具；半径拾取用圆形 Du |
 | `isBuildingComplete` | `buildTicksRemaining <= 0` |
 | `buildingStartsEmptyGarrison` / `initialBuildingGarrisonU` | 兵营/装甲营空编；其它满编 |
 | `constructionHp` / `repairHp` | 建造/修理中 HP 插值 |

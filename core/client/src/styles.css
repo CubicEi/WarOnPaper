@@ -847,6 +847,121 @@ body,
   user-select: none;
 }
 
+.radial-pick-menu {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.radial-pick-btn.is-left {
+  flex-direction: row-reverse;
+  margin-left: 0;
+  margin-right: -18px;
+  transform: translate(-100%, -50%);
+}
+
+.radial-pick-btn.is-left:active {
+  transform: translate(-100%, -50%) scale(0.96);
+}
+
+.radial-pick-glyph {
+  font-size: 16px;
+  line-height: 1;
+  color: #222;
+  font-weight: 700;
+}
+
+.radial-pick-coord {
+  position: absolute;
+  transform: translate(-50%, 0);
+  margin: 0;
+  padding: 6px 12px;
+  border: 1px solid #6a6a6a;
+  border-radius: 4px;
+  background: rgba(22, 22, 22, 0.92);
+  color: #e8e4dc;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.75);
+}
+
+.radial-pick-coord:hover {
+  background: rgba(40, 40, 40, 0.95);
+}
+
+.radial-pick-more {
+  position: absolute;
+  transform: translate(-50%, 0);
+  margin: 0;
+  padding: 6px 14px;
+  border: 1px solid #6a6a6a;
+  border-radius: 4px;
+  background: rgba(22, 22, 22, 0.92);
+  color: #e8e4dc;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: auto;
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.radial-pick-more:hover {
+  background: rgba(40, 40, 40, 0.95);
+}
+
+.radial-pick-list {
+  position: absolute;
+  transform: translate(-50%, 0);
+  z-index: 4;
+  width: min(240px, 70vw);
+  max-height: 40vh;
+  overflow: auto;
+  pointer-events: auto;
+  background: rgba(22, 22, 22, 0.94);
+  border: 1px solid #5a5a5a;
+  padding: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.radial-pick-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.radial-pick-list-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.radial-pick-list-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.radial-pick-list-item .point-action-icon {
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+}
+
+.radial-pick-list-item .point-action-label {
+  pointer-events: none;
+}
+
 .building-inspect {
   position: absolute;
   inset: 0;
