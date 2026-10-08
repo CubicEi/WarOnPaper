@@ -69,11 +69,12 @@ flowchart TB
 
 ### 服务器权威（经 `GameStateSnapshot`）
 
-- `tick`、`map`、`phase`、`you`（能源/组织/首都 HP）
+- `tick`、`phase`、`you`（能源/组织/首都 HP）
 - `buildings` / `liaisons` / `units`
 - `connectedBuildingIds`（己方通信连通）
 - `pollutionZones`、`resourceSight`、`resourceTerrain`
-- `terrainSeed`（整数；客户端用同一 seed 调 `generateTerrain`）
+- `map` / `terrainSeed` / `allowRespawn`（仅开局/再入房；客户端缓存）
+- `role` / `winnerId` / `winnerName`（仅变化时；客户端保留上一值）
 
 ### 仅客户端本地
 

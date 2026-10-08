@@ -10,6 +10,7 @@
 | [room.md](./room.md) | `GameRoom` / `createRoom`：状态、进出房、建造/经济/胜负 |
 | [networking.md](./networking.md) | 消息协议、`RoomSend` 适配、与客户端的同步约定 |
 | [game-loop.md](./game-loop.md) | `tick()` 顺序、经济节奏、通讯波、污染与广播 |
+| [tick-packets.md](../shared/tick-packets.md) | 每 tick 下发的 `state` 数据包字段与按玩家裁剪 |
 | [units.md](./units.md) | `units.ts`：单位命令与逐 tick 推进 |
 | [sessions.md](./sessions.md) | 房间内玩家会话（无独立鉴权模块） |
 | [shared-integration.md](./shared-integration.md) | 如何依赖 `@wop/shared` |

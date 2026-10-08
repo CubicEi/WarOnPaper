@@ -3,6 +3,7 @@ import {
   capitalSiteRejectMessage,
   capitalSiteRejectReason,
   capitalExclusionRejectReason,
+  mergeGameStateSnapshot,
   type GameStateSnapshot,
   type GroundContext,
   type GridNode,
@@ -32,28 +33,30 @@ export function App() {
   const [terrain, setTerrain] = useState<TerrainMap | null>(null);
   const onState = useCallback((next: GameStateSnapshot) => {
     // Server is sole source of truth for you.energy / you.organization.
+    // Bootstrap / change-only fields may be omitted — merge retains cache.
     setState((prev) => {
+      const merged = mergeGameStateSnapshot(prev, next);
       const buildingDelta =
-        (next.buildings?.length ?? 0) !== (prev?.buildings?.length ?? 0) ||
-        (next.liaisons?.length ?? 0) !== (prev?.liaisons?.length ?? 0) ||
-        (next.units?.length ?? 0) !== (prev?.units?.length ?? 0) ||
-        next.you.energy !== prev?.you.energy ||
-        next.you.organization !== prev?.you.organization ||
-        next.phase !== prev?.phase ||
-        next.terrainSeed !== prev?.terrainSeed;
+        (merged.buildings?.length ?? 0) !== (prev?.buildings?.length ?? 0) ||
+        (merged.liaisons?.length ?? 0) !== (prev?.liaisons?.length ?? 0) ||
+        (merged.units?.length ?? 0) !== (prev?.units?.length ?? 0) ||
+        merged.you.energy !== prev?.you.energy ||
+        merged.you.organization !== prev?.you.organization ||
+        merged.phase !== prev?.phase ||
+        merged.terrainSeed !== prev?.terrainSeed;
       if (buildingDelta) {
         log.info("app", "state apply", {
-          tick: next.tick,
-          phase: next.phase,
-          E: next.you.energy,
-          O: next.you.organization,
-          buildings: next.buildings?.length ?? 0,
-          liaisons: next.liaisons?.length ?? 0,
-          terrainSeed: next.terrainSeed,
-          sample: next.buildings?.[0],
+          tick: merged.tick,
+          phase: merged.phase,
+          E: merged.you.energy,
+          O: merged.you.organization,
+          buildings: merged.buildings?.length ?? 0,
+          liaisons: merged.liaisons?.length ?? 0,
+          terrainSeed: merged.terrainSeed,
+          sample: merged.buildings?.[0],
         });
       }
-      return next;
+      return merged;
     });
   }, []);
 
@@ -139,12 +142,14 @@ export function App() {
 
   // Sync terrain from authoritative seed, then apply depletion patches
   useEffect(() => {
-    if (!state?.map || state.terrainSeed == null) {
+    const map = state?.map;
+    const seed = state?.terrainSeed;
+    if (!map || seed == null) {
       if (state?.phase === "need_init") setTerrain(null);
       return;
     }
     setTerrain((prev) => {
-      const base = applyTerrainSeed(state.map, state.terrainSeed!, prev);
+      const base = applyTerrainSeed(map, seed, prev);
       return syncTerrainResources(base, state.resourceTerrain);
     });
   }, [state?.map, state?.terrainSeed, state?.phase, state?.resourceTerrain]);

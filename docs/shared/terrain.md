@@ -9,7 +9,7 @@
 | `capitalSite.ts` | 格点触及、首都选址约束 |
 | `placement.ts` | 港口与公路/铁路地形造价、可通行段 |
 
-服务端在快照中下发 `terrainSeed`；客户端用同一种子本地 `generateTerrain`，避免传输整张图。资源枯竭通过 `resourceTerrain` / `resourceSight` 同步。
+服务端在开局 / 再入房 bootstrap 快照中下发 `terrainSeed`（常规 tick 省略，客户端缓存）；客户端用同一种子本地 `generateTerrain`，避免传输整张图。资源枯竭通过 `resourceTerrain` / `resourceSight` 同步。
 
 ---
 

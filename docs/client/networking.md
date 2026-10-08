@@ -61,12 +61,14 @@ sequenceDiagram
   Note over C: onclose → 1.2s 后自动重连（cleanup 除外）
 ```
 
+每 tick 权威同步的载荷形状见 **[tick-packets.md](../shared/tick-packets.md)**（`type: "state"`；实体全量绝对值，顶层部分字段按 §3.0 省略）。
+
 ## 5. 入站消息处理
 
 | `msg.type` | 行为 |
 |------------|------|
-| `welcome` | 设身份；有 `state` 则 `onState`；否则 play 回退 `join_room` |
-| `state` | 缓存 `roomId`；`onState(msg.state)`（整包替换，含 E/O） |
+| `welcome` | 设身份；有 `state` 则 `onState`（bootstrap，含 map/seed 等）；否则 play 回退 `join_room` |
+| `state` | 缓存 `roomId`；`onState(msg.state)` → `App` 内 `mergeGameStateSnapshot`（E/O 绝对值；缺省字段保留缓存） |
 | `chat` | 追加本地聊天，标记 `mine` |
 | `action_result` | `applyServerActionResult` 对齐调试日志 |
 | `game_over` / `room_closed` | 回调生命周期；关房清 lastRoom |
@@ -117,7 +119,7 @@ sequenceDiagram
 
 ## 9. `App` 侧网络消费要点
 
-- `onState`：有建筑/联络线/单位/E/O/phase/seed 变化时打 info 日志。
+- `onState`：`mergeGameStateSnapshot` 合并后再应用；有建筑/联络线/单位/E/O/phase/seed 变化时打 info 日志。
 - `room_closed`：清空 `state`；idle 提示「房间因空闲已关闭」。
 - `game_over`：toast「胜负已分」。
 - `lastError` / `lastTip` → `ErrorToast`；调试原文进 F2 `errorLog`。

@@ -53,7 +53,8 @@ flowchart TD
 | 15 | `broadcastState` | 全员个性化快照 |
 | 16 | 空闲检查 | 可能 `destroyRoom("idle")` |
 
-单位相关封装见 [units.md](./units.md)；规则细节在 `@wop/shared`。
+单位相关封装见 [units.md](./units.md)；规则细节在 `@wop/shared`。  
+每 tick 广播的 JSON 字段与按玩家过滤见 [tick-packets.md](../shared/tick-packets.md)。
 
 ## 3. 经济节奏 `simulateEconomy`
 

@@ -21,6 +21,8 @@
 
 包级 README 中链接的细分子文档（如 `architecture.md`、`room.md`、`lobby-ws.md`）为深入分析页；以对应源码与包 README 为准。
 
+专项协议：[shared/tick-packets.md](./shared/tick-packets.md) — 客户端 / 服务端每 tick 的 `state` 数据包。
+
 ## 建议阅读顺序
 
 1. [00-project-overview.md](./00-project-overview.md) — 先建立「manager 托管 + shared 规则 + GameRoom 权威」心智模型  

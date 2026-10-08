@@ -256,11 +256,20 @@ export function createRoom(options: CreateRoomOptions): GameRoom {
     };
     return sock as unknown as WebSocket;
   }
+/** Last change-only snapshot fields sent on this connection. */
+interface LastSentChangeFields {
+  role: SnapshotRole;
+  winnerId: string | null;
+  winnerName: string | null;
+}
+
 interface PlayerSession {
   id: string;
   name: string;
   hud: PlayerHudState;
   ws: WebSocket;
+  /** Tracks role/winner last put on the wire for this player connection. */
+  lastSentChange?: LastSentChangeFields;
 }
 
 /** Active map; set at room creation. */
@@ -348,6 +357,7 @@ function syncCapitalHud(player: PlayerSession): void {
   player.hud.capitalHpMax = cap.hpMax > 0 ? cap.hpMax : CAPITAL_HP_MAX;
 }
 
+/** Full logical snapshot (all fields). Used for room API / packing base. */
 function snapshotFor(player: PlayerSession): GameStateSnapshot {
   syncCapitalHud(player);
   const linked = [...publishedLinks(player.id)];
@@ -393,6 +403,46 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
   };
 }
 
+/**
+ * Pack a wire `state` payload.
+ * - bootstrap (join / re-enter): include map / terrainSeed / allowRespawn
+ * - regular ticks: omit those; include role / winner* only when changed
+ */
+function packWireSnapshot(
+  player: PlayerSession,
+  opts: { bootstrap: boolean },
+): GameStateSnapshot {
+  const full = snapshotFor(player);
+  const role = full.role ?? "player";
+  const winId = full.winnerId ?? null;
+  const winName = full.winnerName ?? null;
+
+  const out: GameStateSnapshot = { ...full };
+
+  if (!opts.bootstrap) {
+    delete out.map;
+    delete out.terrainSeed;
+    delete out.allowRespawn;
+  }
+
+  const prev = player.lastSentChange;
+  const sendRole = opts.bootstrap || !prev || prev.role !== role;
+  const sendWinner =
+    opts.bootstrap ||
+    !prev ||
+    prev.winnerId !== winId ||
+    prev.winnerName !== winName;
+
+  if (!sendRole) delete out.role;
+  if (!sendWinner) {
+    delete out.winnerId;
+    delete out.winnerName;
+  }
+
+  player.lastSentChange = { role, winnerId: winId, winnerName: winName };
+  return out;
+}
+
 function send(ws: WebSocket, msg: ServerToClient): void {
   if (ws.readyState === ws.OPEN) {
     ws.send(JSON.stringify(msg));
@@ -402,11 +452,15 @@ function send(ws: WebSocket, msg: ServerToClient): void {
 }
 
 /**
- * Full authoritative snapshot for one player (includes you.energy / you.organization).
+ * Authoritative snapshot for one player (includes you.energy / you.organization).
  * E/O are never sent as deltas — always the current absolute balances.
+ * Regular ticks omit bootstrap-only and unchanged change-only fields.
  */
-function sendPlayerState(player: PlayerSession, state = snapshotFor(player)): void {
-  send(player.ws, { type: "state", state });
+function sendPlayerState(player: PlayerSession, state?: GameStateSnapshot): void {
+  send(player.ws, {
+    type: "state",
+    state: state ?? packWireSnapshot(player, { bootstrap: false }),
+  });
 }
 
 function broadcastState(): void {
@@ -415,9 +469,11 @@ function broadcastState(): void {
   }
 }
 
-/** Join / rejoin: push current E/O immediately (do not wait for the next 1s economy tick). */
+/** Join / rejoin: push bootstrap fields + current E/O immediately. */
 function syncPlayerOnJoin(player: PlayerSession): GameStateSnapshot {
-  const state = snapshotFor(player);
+  // Re-enter: always re-send bootstrap + change fields as if first contact.
+  player.lastSentChange = undefined;
+  const state = packWireSnapshot(player, { bootstrap: true });
   send(player.ws, {
     type: "welcome",
     playerId: player.id,

@@ -12,6 +12,7 @@
 | [ui-components.md](./ui-components.md) | HUD、点选菜单、建造树、检视面板、聊天等 |
 | [state-and-hooks.md](./state-and-hooks.md) | `App` 状态、`initGame`、地形同步、调试日志 |
 | [networking.md](./networking.md) | `useGameSocket`、消息类型、本地缓存、重连 |
+| [tick-packets.md](../shared/tick-packets.md) | 每 tick 收到的 `state` 快照字段与视野裁剪 |
 
 ## 快速定位源码
 

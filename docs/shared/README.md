@@ -20,7 +20,7 @@ core/shared/src/
 
 | 子域 | 主要源文件 | 文档 |
 |------|------------|------|
-| 包总览 / 协议 | `index.ts`, `map.ts` | [architecture.md](./architecture.md)、[types-protocol.md](./types-protocol.md) |
+| 包总览 / 协议 | `index.ts`, `map.ts` | [architecture.md](./architecture.md)、[types-protocol.md](./types-protocol.md)、[tick-packets.md](./tick-packets.md) |
 | 地形 | `terrain/*` | [terrain.md](./terrain.md) |
 | 建筑 | `buildings/*` | [buildings.md](./buildings.md) |
 | 单位核心 | `units/catalog`, `types`, `garrison`, `filter`, `occupy`, `radio`, `supply`, `train`, `carrier` | [units-core.md](./units-core.md) |
@@ -33,12 +33,13 @@ core/shared/src/
 
 1. **[architecture.md](./architecture.md)** — shared 相对 client/server 的职责、权威性、tick 节奏  
 2. **[types-protocol.md](./types-protocol.md)** — `GameStateSnapshot`、`ClientToServer` / `ServerToClient`  
-3. **[terrain.md](./terrain.md)** — 格子模型与选址约束（后续寻路依赖）  
-4. **[buildings.md](./buildings.md)** — `PlacedBuilding`、目录、通信波、联络线  
-5. **[units-core.md](./units-core.md)** — `UnitGroup`、驻军 `u` / `awayOccupiedU`、电台覆盖  
-6. **[orders-pathfind.md](./orders-pathfind.md)** — 下达命令如何规划路径  
-7. **[tick-combat.md](./tick-combat.md)** — 每 tick 如何推进移动与交战  
-8. **[vision.md](./vision.md)** — 如何把权威世界滤成玩家快照  
+3. **[tick-packets.md](./tick-packets.md)** — 每 tick 的 `state` 载荷、字段表、全量 vs 视野裁剪  
+4. **[terrain.md](./terrain.md)** — 格子模型与选址约束（后续寻路依赖）  
+5. **[buildings.md](./buildings.md)** — `PlacedBuilding`、目录、通信波、联络线  
+6. **[units-core.md](./units-core.md)** — `UnitGroup`、驻军 `u` / `awayOccupiedU`、电台覆盖  
+7. **[orders-pathfind.md](./orders-pathfind.md)** — 下达命令如何规划路径  
+8. **[tick-combat.md](./tick-combat.md)** — 每 tick 如何推进移动与交战  
+9. **[vision.md](./vision.md)** — 如何把权威世界滤成玩家快照  
 
 ## 刻意跳过
 

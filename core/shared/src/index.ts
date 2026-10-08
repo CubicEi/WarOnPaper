@@ -88,7 +88,11 @@ export {
 
 export interface GameStateSnapshot {
   tick: number;
-  map: import("./map.js").MapConfig;
+  /**
+   * Map size for this match. Wire: only on join / re-enter (bootstrap);
+   * omitted on regular ticks — client must cache from the last bootstrap.
+   */
+  map?: import("./map.js").MapConfig;
   you: PlayerHudState;
   buildings: import("./buildings/actions.js").PlacedBuilding[];
   liaisons: import("./buildings/liaison.js").PlacedLiaison[];
@@ -98,8 +102,12 @@ export interface GameStateSnapshot {
   /** Persistent nuclear pollution zones (server-authoritative). */
   pollutionZones: import("./buildings/pollution.js").PollutionZone[];
   phase: GamePhase;
-  /** Shared terrain seed; client regenerates locally with the same seed. */
-  terrainSeed: number | null;
+  /**
+   * Shared terrain seed; client regenerates locally with the same seed.
+   * Wire: only on join / re-enter; omitted on regular ticks (client caches).
+   * `null` means no terrain yet (`need_init`).
+   */
+  terrainSeed?: number | null;
   /** Revealed resource reserves (after first mining). */
   resourceSight: import("./terrain/types.js").ResourceSightCell[];
   /** Cleared / depleted resource cells + deposit reserves for terrain re-render. */
@@ -108,12 +116,48 @@ export interface GameStateSnapshot {
   players?: Array<{ id: string; name: string }>;
   /** Room id when in a managed match (omit for legacy single-room debug). */
   roomId?: string;
-  /** Match rule: capital fall → respawn (pick capital) vs spectate. */
+  /**
+   * Match rule: capital fall → respawn (pick capital) vs spectate.
+   * Wire: only on join / re-enter; omitted on regular ticks (client caches).
+   */
   allowRespawn?: boolean;
-  /** Viewer role for this snapshot. Spectators get unfiltered world. */
+  /**
+   * Viewer role for this snapshot. Spectators get unfiltered world.
+   * Wire: omit when unchanged vs last value sent on this connection;
+   * client keeps the previous known role.
+   */
   role?: SnapshotRole;
+  /**
+   * End-of-match winner. Wire: omit when unchanged vs last send on this
+   * connection; client keeps previous. Include when a winner is first set
+   * (or cleared). `null` = no winner yet.
+   */
   winnerId?: string | null;
   winnerName?: string | null;
+}
+
+/**
+ * Merge an incoming wire snapshot into the client's last applied state.
+ * Bootstrap-only fields (`map` / `terrainSeed` / `allowRespawn`) and
+ * change-only fields (`role` / `winnerId` / `winnerName`) are retained from
+ * `prev` when omitted on `next`.
+ */
+export function mergeGameStateSnapshot(
+  prev: GameStateSnapshot | null,
+  next: GameStateSnapshot,
+): GameStateSnapshot {
+  return {
+    ...next,
+    map: next.map ?? prev?.map,
+    terrainSeed:
+      next.terrainSeed !== undefined ? next.terrainSeed : prev?.terrainSeed,
+    allowRespawn:
+      next.allowRespawn !== undefined ? next.allowRespawn : prev?.allowRespawn,
+    role: next.role !== undefined ? next.role : prev?.role,
+    winnerId: next.winnerId !== undefined ? next.winnerId : prev?.winnerId,
+    winnerName:
+      next.winnerName !== undefined ? next.winnerName : prev?.winnerName,
+  };
 }
 
 export type ClientToServer =

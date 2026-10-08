@@ -204,7 +204,8 @@ export function useGameSocket(
             O: msg.state.you.organization,
             buildings: msg.state.buildings?.length ?? 0,
           });
-          // Replace HUD balances wholesale from server; never invent local E/O.
+          // Apply wire snapshot; App merges bootstrap/change-only omissions.
+          // HUD E/O always absolute from server — never invent local balances.
           onStateRef.current(msg.state);
         } else if (msg.type === "chat") {
           chatIdRef.current += 1;

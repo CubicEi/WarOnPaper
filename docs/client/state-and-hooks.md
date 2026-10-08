@@ -7,7 +7,7 @@
 | 状态变量 | 类型 / 来源 | 作用 |
 |----------|-------------|------|
 | `viewport` | `{ w, h }` | 窗口尺寸 → canvas 宽高 |
-| `state` | `GameStateSnapshot \| null` | 权威对局快照 |
+| `state` | `GameStateSnapshot \| null` | 权威对局快照（经 `mergeGameStateSnapshot` 合并缺省字段） |
 | `terrain` | `TerrainMap \| null` | 由 seed + resourceTerrain 派生 |
 | `debugOpen` | boolean | F2 切换 |
 | `showEnemyVision` | boolean | 角落「视野」按钮 → 画布米黄敌方视野 |
@@ -19,7 +19,9 @@
 
 ## 2. 地形同步逻辑
 
-`useEffect` 依赖 `state.map`、`state.terrainSeed`、`state.phase`、`state.resourceTerrain`：
+`onState` 先 `mergeGameStateSnapshot(prev, next)`：常规 tick 省略的 `map`/`terrainSeed`/`allowRespawn`/`role`/`winner*` 从上一帧缓存补齐。
+
+`useEffect` 依赖合并后的 `state.map`、`state.terrainSeed`、`state.phase`、`state.resourceTerrain`：
 
 1. 无 map/seed：若 `phase === "need_init"` 则 `setTerrain(null)`。
 2. 否则 `applyTerrainSeed(map, seed, prev)`：seed 与尺寸未变则复用 prev，避免每 tick 重生。

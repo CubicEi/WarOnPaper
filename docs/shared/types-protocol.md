@@ -49,27 +49,27 @@
 
 ## `GameStateSnapshot`
 
-服务端周期性下发的世界切片（已按观众过滤，观战除外）。
+服务端周期性下发的世界切片（已按观众过滤，观战除外）。部分顶层字段按发送规则省略；客户端用 `mergeGameStateSnapshot` 合并。细节见 [tick-packets.md](./tick-packets.md) §3.0。
 
-| 字段 | 类型来源 | 含义 |
-|------|----------|------|
-| `tick` | `number` | 当前仿真 tick |
-| `map` | `MapConfig` | 本局地图尺寸 |
-| `you` | `PlayerHudState` | 本观众 HUD |
-| `buildings` | `PlacedBuilding[]` | 可见建筑 |
-| `liaisons` | `PlacedLiaison[]` | 可见联络线 |
-| `units` | `UnitGroup[]` | 可见单位组 |
-| `connectedBuildingIds` | `string[]` | **本玩家**与首都通信连通的建筑实例 id |
-| `pollutionZones` | `PollutionZone[]` | 核污染区 |
-| `phase` | `GamePhase` | 阶段 |
-| `terrainSeed` | `number \| null` | 地形种子；客户端本地 `generateTerrain` |
-| `resourceSight` | `ResourceSightCell[]` | 已揭示储量环（再经视野过滤） |
-| `resourceTerrain` | `ResourceTerrainSync` | 枯竭格与矿点储量，驱动地形重绘 |
-| `players?` | `{id,name}[]` | 检查面板显示所有者名 |
-| `roomId?` | `string` | 托管对局房间 id |
-| `allowRespawn?` | `boolean` | 首都陷落后再选都 vs 观战 |
-| `role?` | `SnapshotRole` | 观众角色 |
-| `winnerId` / `winnerName` | 可选 | 终局 |
+| 字段 | 类型来源 | 含义 | 发送 |
+|------|----------|------|------|
+| `tick` | `number` | 当前仿真 tick | 每帧 |
+| `map?` | `MapConfig` | 本局地图尺寸 | 仅开局 / 再入房 |
+| `you` | `PlayerHudState` | 本观众 HUD | 每帧 |
+| `buildings` | `PlacedBuilding[]` | 可见建筑 | 每帧 |
+| `liaisons` | `PlacedLiaison[]` | 可见联络线 | 每帧 |
+| `units` | `UnitGroup[]` | 可见单位组 | 每帧 |
+| `connectedBuildingIds` | `string[]` | **本玩家**与首都通信连通的建筑实例 id | 每帧 |
+| `pollutionZones` | `PollutionZone[]` | 核污染区 | 每帧 |
+| `phase` | `GamePhase` | 阶段 | 每帧 |
+| `terrainSeed?` | `number \| null` | 地形种子；客户端本地 `generateTerrain` | 仅开局 / 再入房 |
+| `resourceSight` | `ResourceSightCell[]` | 已揭示储量环（再经视野过滤） | 每帧 |
+| `resourceTerrain` | `ResourceTerrainSync` | 枯竭格与矿点储量，驱动地形重绘 | 每帧 |
+| `players?` | `{id,name}[]` | 检查面板显示所有者名 | 每帧 |
+| `roomId?` | `string` | 托管对局房间 id | 每帧 |
+| `allowRespawn?` | `boolean` | 首都陷落后再选都 vs 观战 | 仅开局 / 再入房 |
+| `role?` | `SnapshotRole` | 观众角色 | 仅相对该连接上次发送值变化时 |
+| `winnerId?` / `winnerName?` | `string \| null` | 终局 | 仅相对该连接上次发送值变化时 |
 
 ---
 
@@ -138,7 +138,7 @@
 | `type` | 含义 |
 |--------|------|
 | `welcome` | `playerId`、`name`、可选 `activeRoomId` / 初始 `state` |
-| `state` | 完整 `GameStateSnapshot` |
+| `state` | `GameStateSnapshot`（常规帧可省略 bootstrap / 未变化字段，见 tick-packets §3.0） |
 | `pong` | 回显 `t` |
 | `error` | `code` + `message` |
 | `tip` | 提示文案 |
@@ -165,6 +165,7 @@
 
 ## 与子文档的交叉引用
 
+- 每 tick 通信载荷（谁发谁收、字段表、过滤）→ [tick-packets.md](./tick-packets.md)  
 - 建筑字段详解 → [buildings.md](./buildings.md)  
 - `UnitGroup` 字段 → [units-core.md](./units-core.md)  
 - 视野过滤如何改写快照字段 → [vision.md](./vision.md)  

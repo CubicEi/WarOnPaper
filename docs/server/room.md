@@ -131,7 +131,7 @@ stateDiagram-v2
 
 ## 6. 快照与出站
 
-`snapshotFor(player)` 组装 `GameStateSnapshot`：
+`snapshotFor(player)` 组装**逻辑全量** `GameStateSnapshot`：
 
 - `you`：拷贝 HUD（先 `syncCapitalHud`）
 - `buildings`/`liaisons`/`units`/`resourceSight`：全视或 `filter*ForViewer`
@@ -139,7 +139,9 @@ stateDiagram-v2
 - `pollutionZones`、`phase`、`terrainSeed`、`resourceTerrain`
 - `players` 花名册、`roomId`、`allowRespawn`、`role`、`winnerId`/`winnerName`
 
-`syncPlayerOnJoin`：先 `welcome`（含 `activeRoomId`、`state`），再发一条 `state`（兼容只监听 `state` 的客户端）。
+`packWireSnapshot(player, { bootstrap })` 再按规则裁剪上线字段：bootstrap 带 `map`/`terrainSeed`/`allowRespawn` 与当前 `role`/winner；常规帧省略三者，且仅在相对该连接 `lastSentChange` 变化时带 `role`/winner。
+
+`syncPlayerOnJoin`：清空 `lastSentChange` → bootstrap 打包 → 先 `welcome`（含 `activeRoomId`、`state`），再发一条同内容 `state`（兼容只监听 `state` 的客户端）。
 
 `makeSocket(sendFn)`：伪造 `readyState=OPEN` 的对象，`send(jsonString)` 时 `JSON.parse` 再交给 `RoomSend`——因为内部统一用 `ws.send(JSON.stringify(msg))` 路径。
 
