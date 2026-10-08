@@ -96,7 +96,7 @@ Manager 路径类似，但 `hello` / `create_room` / `join_room` 等在进入 `G
 | type | 何时 | 字段要点 |
 |------|------|----------|
 | `welcome` | `join` | `playerId`, `name`, `activeRoomId`, `state?` |
-| `state` | join 同步（bootstrap）、每 tick 广播、多数成功操作后 | `state: GameStateSnapshot`（常规帧可省略 map/seed/allowRespawn 与未变 role/winner） |
+| `state` | join 同步（bootstrap）、每 tick 广播、多数成功操作后 | `state: GameStateSnapshot`（常规帧可省略 map/seed/allowRespawn 与未变 role/winner/pollutionZones/resourceTerrain） |
 | `pong` | 响应 `ping` | `t` |
 | `error` | 校验失败 | `code`, `message`（人类可读，常中文） |
 | `tip` | 如防空弹药消耗提示 | `message` |
@@ -118,18 +118,19 @@ Manager 还会发 `room_ready`、`match_status`、`room_status` 等；**这些�
 | `tick` | 当前模拟 tick | 每帧 |
 | `map` | `MapConfig`（尺寸等） | 仅 join / 再入房 |
 | `you` | 该玩家 HUD 绝对值 | 每帧 |
-| `buildings` / `liaisons` / `units` | 经视野过滤或全量拷贝 | 每帧 |
+| `buildings` / `liaisons` | 经视野过滤；bootstrap / 每 150 tick 全量，否则 `*Delta` | 见 [tick-packets.md](../shared/tick-packets.md) §3.0 |
+| `units` | 经视野过滤或全量拷贝 | 每帧 |
 | `connectedBuildingIds` | 本玩家已提交通讯连通的建筑实例 id | 每帧 |
-| `pollutionZones` | 核污染区列表 | 每帧 |
+| `pollutionZones` | 核污染区列表 | bootstrap / 再入房，或变化时 |
 | `phase` | **该玩家**视角阶段 | 每帧 |
 | `terrainSeed` | 客户端本地重生成地形 | 仅 join / 再入房 |
 | `resourceSight` | 已揭示储量 | 每帧 |
-| `resourceTerrain` | `cleared` + `deposits` 同步 | 每帧 |
+| `resourceTerrain` | `cleared`（枯竭格）+ `deposits` 同步 | bootstrap / 再入房，或变化时 |
 | `players` | `{id,name}[]` 花名册 | 每帧 |
 | `roomId` | 房间 id | 每帧 |
 | `allowRespawn` | 房间元数据 | 仅 join / 再入房 |
-| `role` | `player` \| `spectator` | 仅相对该连接上次发送变化时 |
-| `winnerId` / `winnerName` | 胜负信息 | 仅相对该连接上次发送变化时 |
+| `role` | `player` \| `spectator` | bootstrap / 再入房，或相对该连接上次发送变化时 |
+| `winnerId` / `winnerName` | 胜负信息 | bootstrap / 再入房，或相对该连接上次发送变化时 |
 
 ## 5. 常见 `error.code`（房间发出，非穷尽）
 

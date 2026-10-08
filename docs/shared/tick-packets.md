@@ -38,7 +38,7 @@ sequenceDiagram
 要点：
 
 - **无人 `playing`**（例如仍在选都）或 **已有胜者**：仍会 `broadcastState()`，但**不**推进 `tick` 与模拟（见 `tickRoom`）。
-- **无实体增量包**：协议里**没有** delta / patch / entity-diff 类型；每 tick 仍下发权威世界切片（建筑/单位等全量绝对值）。E/O 也从不发增量。少数顶层字段按 §3.0 省略（开局缓存 / 仅变化时发送）。
+- **建筑物 / 联络线可增量**：常规 tick 对 `buildings` / `liaisons` 相对该连接上次已发送的**已过滤**集合发 `*Delta`；约每 10 秒（150 tick）或 bootstrap 再发全量数组重置基线。`units` 等其余实体仍每帧全量；E/O 从不发增量。其它顶层字段按 §3.0 省略。
 - 传输：每帧一个 JSON 对象，`type` 判别联合类型；底层 `JSON.stringify` / `JSON.parse`。
 
 ---
@@ -70,39 +70,61 @@ sequenceDiagram
 | `tick` | `number` | 当前仿真 tick（无人 playing / 已胜时可不递增，但快照仍带当前值） | 每帧 |
 | `map?` | `MapConfig` | 本局地图尺寸 | **仅开局 / 再入房** |
 | `you` | `PlayerHudState` | **本观众** HUD（绝对 E/O；先 `syncCapitalHud`） | 每帧 |
-| `buildings` | `PlacedBuilding[]` | 可见建筑（已按观众过滤，或观战/终局全量拷贝） | 每帧 |
-| `liaisons` | `PlacedLiaison[]` | 可见联络线 | 每帧 |
+| `buildings?` | `PlacedBuilding[]` | 可见建筑全量（已按观众过滤，或观战/终局全量拷贝） | **bootstrap / 每 150 tick 基线刷新** |
+| `buildingsDelta?` | `SnapshotListDelta<PlacedBuilding>` | 相对该连接上次已发送过滤集的增量 | **常规 tick**（无变化则省略） |
+| `liaisons?` | `PlacedLiaison[]` | 可见联络线全量 | **同 buildings** |
+| `liaisonsDelta?` | `SnapshotListDelta<PlacedLiaison>` | 联络线增量 | **同 buildingsDelta** |
 | `units` | `UnitGroup[]` | 可见单位组 | 每帧 |
 | `connectedBuildingIds` | `string[]` | **本玩家**已发布、与首都通讯连通的建筑实例 id | 每帧 |
-| `pollutionZones` | `PollutionZone[]` | 核污染区（全员同内容浅拷贝，不过滤） | 每帧 |
+| `pollutionZones?` | `PollutionZone[]` | 核污染区（全员同内容浅拷贝，不过滤） | **bootstrap / 再入房，或相对该连接上次发送变化时** |
 | `phase` | `GamePhase` | **该玩家**视角阶段 | 每帧 |
 | `terrainSeed?` | `number \| null` | 地形种子；客户端本地 `generateTerrain` | **仅开局 / 再入房** |
 | `resourceSight` | `ResourceSightCell[]` | 已揭示储量环（玩家视角再经直接视野过滤） | 每帧 |
-| `resourceTerrain` | `ResourceTerrainSync` | 枯竭格 + 矿点储量（驱动地形重绘；**不过滤**） | 每帧 |
+| `resourceTerrain?` | `ResourceTerrainSync` | 枯竭格（`cleared`）+ 矿点储量（`deposits`）；驱动地形重绘；**不过滤** | **bootstrap / 再入房，或相对该连接上次发送变化时** |
 | `players?` | `{ id: string; name: string }[]` | 花名册（检视 HUD 显示所有者名） | 每帧（可选字段，现实现仍带） |
 | `roomId?` | `string` | 托管对局房间 id | 每帧（可选字段，现实现仍带） |
 | `allowRespawn?` | `boolean` | 首都陷落后再选都 vs 观战 | **仅开局 / 再入房** |
-| `role?` | `SnapshotRole` | `"player"` \| `"spectator"` | **仅相对该连接上次已发送值变化时** |
-| `winnerId?` / `winnerName?` | `string \| null` | 终局信息 | **仅相对该连接上次已发送值变化时**（成对） |
+| `role?` | `SnapshotRole` | `"player"` \| `"spectator"` | **bootstrap / 再入房，或相对该连接上次已发送值变化时** |
+| `winnerId?` / `winnerName?` | `string \| null` | 终局信息 | **bootstrap / 再入房，或相对该连接上次已发送值变化时**（成对） |
 
 ### 3.0 字段发送与客户端合并
 
 **开局 / 再入房（bootstrap）** — `syncPlayerOnJoin` → `packWireSnapshot(..., { bootstrap: true })`（`welcome.state` 与紧随的 `state`）：
 
 - 必带：`map`、`terrainSeed`、`allowRespawn`，以及当前 `role`、`winnerId` / `winnerName`（可为 `null`）。
-- 触发：首次 `join`、同 `playerId` 重连入房；会清空该连接上的 `lastSentChange` 后再打包。
+- 必带：当前全量 `pollutionZones`、`resourceTerrain`（枯竭格权威快照）。
+- 必带：**全量** `buildings` / `liaisons`（已按观众过滤）；不发 `*Delta`。
+- 触发：首次 `join`、同 `playerId` 重连入房；会清空该连接上的 `lastSentChange` 后再打包（重置实体与 change-only 基线）。
 
 **常规 tick / 指令后广播** — `packWireSnapshot(..., { bootstrap: false })`：
 
 - **不发** `map` / `terrainSeed` / `allowRespawn`（服务端 `delete`；客户端若误收到也可忽略，以缓存为准）。
 - `role`、`winnerId` / `winnerName`：与该玩家连接上一次已发送值比较，**未变则省略**；角色切换、终局刚产生胜者等必须发出。
+- `pollutionZones`、`resourceTerrain`：相对该连接上次已发送 JSON 指纹比较，**未变则省略**；核弹落点新增污染区、资源枯竭 / 矿点储量变化等必须发出（整段替换，非增量）。
+- **`buildings` / `liaisons`**：
+  - 若距该连接上次**全量**实体包已过 ≥ `TICKS_PER_10S`（150 tick，约 10 秒仿真时间）→ 再发**全量**数组，并重置该连接基线（不发 `*Delta`）。
+  - 否则相对该连接上次已发送的过滤集合算 diff，发 `buildingsDelta` / `liaisonsDelta`（无变化则整段省略）；**不发**全量数组。
+  - 视野：diff 在**过滤后**集合上计算——刚进入视野 → `upserts`；刚离开视野 → `removes`；实体字段变化 → `upserts`（整实体替换）。
+
+**`SnapshotListDelta<T>`**：
+
+```ts
+{ upserts: T[]; removes: string[] }
+```
+
+- `upserts`：按 `id` 替换或插入完整实体（过滤后形态，与全量数组元素同形）。
+- `removes`：按 `id` 从客户端缓存删除（含离开视野、被拆除等）。
 
 **客户端合并** — `mergeGameStateSnapshot(prev, next)`（`core/shared`，`App.onState` 调用）：
 
-| 缺省字段 | 行为 |
-|----------|------|
+| 缺省 / 字段 | 行为 |
+|-------------|------|
 | `map` / `terrainSeed` / `allowRespawn` | 保留上一帧缓存 |
 | `role` / `winnerId` / `winnerName` | 保留上一帧已知值 |
+| `pollutionZones` / `resourceTerrain` | 保留上一帧已知值 |
+| `buildings` / `liaisons` 全量数组 | **整段替换**本地列表 |
+| `buildingsDelta` / `liaisonsDelta` | `applySnapshotListDelta` 应用到本地缓存；合并结果**不含** delta 字段 |
+| 全量与 delta 皆缺省 | 保留上一帧列表 |
 | 其余字段 | 以本包为准整段替换 |
 
 ### 3.1 `MapConfig`
@@ -254,8 +276,9 @@ const fullVision = role === "spectator" || phaseFor(player) === "ended";
 
 **始终按玩家定制、但非「迷雾」的字段：**
 
-- `you`、`connectedBuildingIds`、`phase`、`role` — 本观众会话（`role` 仅变化时上线，见 §3.0）
-- `players`、`roomId`、`pollutionZones`、`resourceTerrain`、`tick` — 房间级；污染区与资源地形层**不过滤**
+- `you`、`connectedBuildingIds`、`phase`、`role` — 本观众会话（`role` 在 bootstrap 与变化时上线，见 §3.0）
+- `players`、`roomId`、`tick` — 房间级，现实现仍每帧带
+- `pollutionZones`、`resourceTerrain` — 房间级、不过滤；上线规则同 change-only（bootstrap + 变化，见 §3.0）
 - `map`、`terrainSeed`、`allowRespawn` — 房间级，但**仅 bootstrap 上线**（§3.0）
 
 ### 5.1 建筑过滤摘要（`filterBuildingForViewer`）
@@ -310,7 +333,7 @@ const fullVision = role === "spectator" || phaseFor(player) === "ended";
 成功处理玩家 `dispatch`（建造、调动等）后，房间通常**立即** `broadcastState()`，**不等**下一个时钟 tick。因此：
 
 - 客户端可能在两次 clock tick 之间收到额外的 `state`；
-- 载荷形状与每 tick 的 `state` **相同**（常规帧，非 bootstrap；仍遵循 §3.0 省略规则）；
+- 载荷形状与每 tick 的 `state` **相同**（常规帧，非 bootstrap；仍遵循 §3.0 省略 / buildings·liaisons 增量规则）；
 - 经济等按秒取模的变化仍主要出现在 tick 广播里（`simulateEconomy`）。
 
 客户端 **ping**（约每 5s）→ 服务端 **pong**：延迟探测，**不是** tick 同步，且不刷新空闲计时。
@@ -334,7 +357,7 @@ const fullVision = role === "spectator" || phaseFor(player) === "ended";
 
 | 主题 | 路径 |
 |------|------|
-| `TICK_HZ` / `GameStateSnapshot` / `mergeGameStateSnapshot` / 协议联合类型 | `core/shared/src/index.ts` |
+| `TICK_HZ` / `GameStateSnapshot` / `SnapshotListDelta` / `mergeGameStateSnapshot` / `applySnapshotListDelta` / 协议联合类型 | `core/shared/src/index.ts` |
 | 嵌套实体类型 | `buildings/actions.ts`、`liaison.ts`、`pollution.ts`、`units/types.ts`、`terrain/types.ts`、`map.ts` |
 | 视野与快照裁剪 | `core/shared/src/vision/vision.ts`、`units/filter.ts` |
 | `snapshotFor` / `packWireSnapshot` / `broadcastState` / `tickRoom` | `core/server/src/room.ts` |

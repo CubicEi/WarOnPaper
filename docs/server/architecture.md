@@ -124,9 +124,9 @@ flowchart TB
 来自 `GameStateSnapshot` 注释与 `sendPlayerState`：
 
 - `you.energy` / `you.organization` **始终发绝对值**，从不发增量。
-- 每 tick（有人在 `playing` 时）`broadcastState()`；经济虽在 1 Hz / 10s / 30s 突变，客户端仍以权威世界切片为准（实体全量；`map`/`terrainSeed`/`allowRespawn` 仅 bootstrap；`role`/winner 仅变化时）。
+- 每 tick（有人在 `playing` 时）`broadcastState()`；经济虽在 1 Hz / 10s / 30s 突变，客户端仍以权威世界切片为准（`units` 等每帧；`map`/`terrainSeed`/`allowRespawn` 仅 bootstrap；`role`/winner/`pollutionZones`/`resourceTerrain` 在 bootstrap 与变化时；`buildings`/`liaisons` 增量）。
 - 视野：非观战/未结束时，建筑、联络线、单位、资源视野经 `filter*ForViewer` 过滤；观战与 `ended` 看全图。
-- 地形本体不通过网络下发格子；`terrainSeed` 仅在开局/再入房下发，客户端本地 `generateTerrain` 并缓存；资源枯竭等用 `resourceTerrain` / `resourceSight` 同步。
+- 地形本体不通过网络下发格子；`terrainSeed` 仅在开局/再入房下发，客户端本地 `generateTerrain` 并缓存；资源枯竭等用 `resourceTerrain`（bootstrap + 变化）/ `resourceSight`（每帧）同步。
 
 ## 6. 关键导出一览
 

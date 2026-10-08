@@ -72,9 +72,10 @@ flowchart TB
 - `tick`、`phase`、`you`（能源/组织/首都 HP）
 - `buildings` / `liaisons` / `units`
 - `connectedBuildingIds`（己方通信连通）
-- `pollutionZones`、`resourceSight`、`resourceTerrain`
+- `resourceSight`（每帧）
+- `pollutionZones`、`resourceTerrain`（bootstrap / 再入房，或变化时；客户端保留上一值）
 - `map` / `terrainSeed` / `allowRespawn`（仅开局/再入房；客户端缓存）
-- `role` / `winnerId` / `winnerName`（仅变化时；客户端保留上一值）
+- `role` / `winnerId` / `winnerName`（bootstrap / 再入房，或变化时；客户端保留上一值）
 
 ### 仅客户端本地
 

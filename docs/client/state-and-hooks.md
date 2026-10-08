@@ -19,7 +19,7 @@
 
 ## 2. 地形同步逻辑
 
-`onState` 先 `mergeGameStateSnapshot(prev, next)`：常规 tick 省略的 `map`/`terrainSeed`/`allowRespawn`/`role`/`winner*` 从上一帧缓存补齐。
+`onState` 先 `mergeGameStateSnapshot(prev, next)`：常规 tick 省略的 `map`/`terrainSeed`/`allowRespawn`/`role`/`winner*`/`pollutionZones`/`resourceTerrain` 从上一帧缓存补齐；`buildings`/`liaisons` 全量替换，或应用 `*Delta`，或缺省则保留上一帧列表。
 
 `useEffect` 依赖合并后的 `state.map`、`state.terrainSeed`、`state.phase`、`state.resourceTerrain`：
 

@@ -86,6 +86,39 @@ export {
   reconcileMutualDefensePartners,
 } from "./buildings/actions.js";
 
+/**
+ * Incremental list patch for wire snapshots (buildings / liaisons).
+ * `upserts` replace-or-insert by `id`; `removes` drop by id (incl. left FOV).
+ */
+export interface SnapshotListDelta<T extends { id: string }> {
+  upserts: T[];
+  removes: string[];
+}
+
+/** Apply a list delta onto the client's cached entity array (stable-ish order). */
+export function applySnapshotListDelta<T extends { id: string }>(
+  prev: readonly T[] | undefined,
+  delta: SnapshotListDelta<T>,
+): T[] {
+  const remove = new Set(delta.removes);
+  const pending = new Map(delta.upserts.map((e) => [e.id, e]));
+  const out: T[] = [];
+  for (const e of prev ?? []) {
+    if (remove.has(e.id)) continue;
+    const next = pending.get(e.id);
+    if (next) {
+      out.push(next);
+      pending.delete(e.id);
+    } else {
+      out.push(e);
+    }
+  }
+  for (const e of delta.upserts) {
+    if (pending.has(e.id)) out.push(e);
+  }
+  return out;
+}
+
 export interface GameStateSnapshot {
   tick: number;
   /**
@@ -94,13 +127,38 @@ export interface GameStateSnapshot {
    */
   map?: import("./map.js").MapConfig;
   you: PlayerHudState;
-  buildings: import("./buildings/actions.js").PlacedBuilding[];
-  liaisons: import("./buildings/liaison.js").PlacedLiaison[];
+  /**
+   * Visible buildings (viewer-filtered). Wire: full array on bootstrap and
+   * every ~10s (150 ticks) baseline refresh; omitted when `buildingsDelta`
+   * is used (or when unchanged with an empty delta).
+   */
+  buildings?: import("./buildings/actions.js").PlacedBuilding[];
+  /**
+   * Incremental building patch vs last sent filtered set on this connection.
+   * Wire-only; cleared by `mergeGameStateSnapshot` into `buildings`.
+   */
+  buildingsDelta?: SnapshotListDelta<
+    import("./buildings/actions.js").PlacedBuilding
+  >;
+  /**
+   * Visible liaisons. Same full / delta cadence as `buildings`.
+   */
+  liaisons?: import("./buildings/liaison.js").PlacedLiaison[];
+  /**
+   * Incremental liaison patch. Wire-only; merged into `liaisons` on the client.
+   */
+  liaisonsDelta?: SnapshotListDelta<
+    import("./buildings/liaison.js").PlacedLiaison
+  >;
   units: import("./units/types.js").UnitGroup[];
   /** Building instance ids with live comms link to capital (this player). */
   connectedBuildingIds: string[];
-  /** Persistent nuclear pollution zones (server-authoritative). */
-  pollutionZones: import("./buildings/pollution.js").PollutionZone[];
+  /**
+   * Persistent nuclear pollution zones (server-authoritative).
+   * Wire: full list on bootstrap / re-enter and when the list changes vs last
+   * send on this connection; omitted on unchanged regular ticks (client caches).
+   */
+  pollutionZones?: import("./buildings/pollution.js").PollutionZone[];
   phase: GamePhase;
   /**
    * Shared terrain seed; client regenerates locally with the same seed.
@@ -110,8 +168,13 @@ export interface GameStateSnapshot {
   terrainSeed?: number | null;
   /** Revealed resource reserves (after first mining). */
   resourceSight: import("./terrain/types.js").ResourceSightCell[];
-  /** Cleared / depleted resource cells + deposit reserves for terrain re-render. */
-  resourceTerrain: import("./terrain/types.js").ResourceTerrainSync;
+  /**
+   * Cleared / depleted resource cells (`cleared`) + deposit reserves
+   * (`deposits`) for terrain re-render.
+   * Wire: full sync on bootstrap / re-enter and when changed vs last send on
+   * this connection; omitted on unchanged regular ticks (client caches).
+   */
+  resourceTerrain?: import("./terrain/types.js").ResourceTerrainSync;
   /** Roster for owner-name display in inspect HUD. */
   players?: Array<{ id: string; name: string }>;
   /** Room id when in a managed match (omit for legacy single-room debug). */
@@ -123,31 +186,59 @@ export interface GameStateSnapshot {
   allowRespawn?: boolean;
   /**
    * Viewer role for this snapshot. Spectators get unfiltered world.
-   * Wire: omit when unchanged vs last value sent on this connection;
-   * client keeps the previous known role.
+   * Wire: always on bootstrap / re-enter; on regular ticks omit when
+   * unchanged vs last value sent on this connection (client keeps previous).
    */
   role?: SnapshotRole;
   /**
-   * End-of-match winner. Wire: omit when unchanged vs last send on this
-   * connection; client keeps previous. Include when a winner is first set
-   * (or cleared). `null` = no winner yet.
+   * End-of-match winner. Wire: always on bootstrap / re-enter; on regular
+   * ticks omit when unchanged vs last send on this connection (client keeps
+   * previous). Include when a winner is first set (or cleared).
+   * `null` = no winner yet.
    */
   winnerId?: string | null;
   winnerName?: string | null;
 }
 
+function mergeEntityListField<T extends { id: string }>(
+  prev: readonly T[] | undefined,
+  full: T[] | undefined,
+  delta: SnapshotListDelta<T> | undefined,
+): T[] {
+  if (full !== undefined) return full;
+  if (delta !== undefined) return applySnapshotListDelta(prev, delta);
+  return prev ? [...prev] : [];
+}
+
 /**
  * Merge an incoming wire snapshot into the client's last applied state.
  * Bootstrap-only fields (`map` / `terrainSeed` / `allowRespawn`) and
- * change-only fields (`role` / `winnerId` / `winnerName`) are retained from
- * `prev` when omitted on `next`.
+ * change-only fields (`role` / `winnerId` / `winnerName` / `pollutionZones` /
+ * `resourceTerrain`) are retained from `prev` when omitted on `next`.
+ * Buildings / liaisons: full array replaces; `*Delta` applies upserts/removes;
+ * omit keeps previous list.
  */
 export function mergeGameStateSnapshot(
   prev: GameStateSnapshot | null,
   next: GameStateSnapshot,
 ): GameStateSnapshot {
+  const {
+    buildingsDelta: _bd,
+    liaisonsDelta: _ld,
+    ...rest
+  } = next;
   return {
-    ...next,
+    ...rest,
+    buildings: mergeEntityListField(
+      prev?.buildings,
+      next.buildings,
+      next.buildingsDelta,
+    ),
+    liaisons: mergeEntityListField(
+      prev?.liaisons,
+      next.liaisons,
+      next.liaisonsDelta,
+    ),
     map: next.map ?? prev?.map,
     terrainSeed:
       next.terrainSeed !== undefined ? next.terrainSeed : prev?.terrainSeed,
@@ -157,6 +248,14 @@ export function mergeGameStateSnapshot(
     winnerId: next.winnerId !== undefined ? next.winnerId : prev?.winnerId,
     winnerName:
       next.winnerName !== undefined ? next.winnerName : prev?.winnerName,
+    pollutionZones:
+      next.pollutionZones !== undefined
+        ? next.pollutionZones
+        : prev?.pollutionZones,
+    resourceTerrain:
+      next.resourceTerrain !== undefined
+        ? next.resourceTerrain
+        : prev?.resourceTerrain,
   };
 }
 

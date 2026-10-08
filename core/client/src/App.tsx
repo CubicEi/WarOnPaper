@@ -33,7 +33,7 @@ export function App() {
   const [terrain, setTerrain] = useState<TerrainMap | null>(null);
   const onState = useCallback((next: GameStateSnapshot) => {
     // Server is sole source of truth for you.energy / you.organization.
-    // Bootstrap / change-only fields may be omitted — merge retains cache.
+    // Bootstrap / change-only / entity-delta fields may be omitted — merge retains cache.
     setState((prev) => {
       const merged = mergeGameStateSnapshot(prev, next);
       const buildingDelta =

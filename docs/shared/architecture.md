@@ -62,7 +62,7 @@ flowchart TB
 核心实体：
 
 1. **`MapConfig`**（`map.ts`）— 格网尺寸：`cellsX/Y` 与线网 `linesX/Y`（线数 = 格数 + 1）。
-2. **`TerrainMap`**（`terrain/types.ts`）— 由 bootstrap 下发的 `terrainSeed` 在 client/server **各自** `generateTerrain` 再生（客户端缓存 seed，常规 tick 不再带）；资源枯竭用 `resourceTerrain` 同步。
+2. **`TerrainMap`**（`terrain/types.ts`）— 由 bootstrap 下发的 `terrainSeed` 在 client/server **各自** `generateTerrain` 再生（客户端缓存 seed，常规 tick 不再带）；资源枯竭用 `resourceTerrain`（`cleared` + `deposits`；bootstrap / 变化时下发）同步。
 3. **`PlacedBuilding`** — 格点整数坐标；驻军 `u` + `awayOccupiedU`；建造/修理 tick；训练队列等。
 4. **`PlacedLiaison`** — 折线节点（整数格点）；线缆/公路/铁路。
 5. **`UnitGroup`** — 0.2 Du 坐标；路径、状态机、携行 E、交战/驻守/封锁字段。

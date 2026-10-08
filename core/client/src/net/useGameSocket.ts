@@ -202,9 +202,22 @@ export function useGameSocket(
             role: msg.state.role,
             E: msg.state.you.energy,
             O: msg.state.you.organization,
-            buildings: msg.state.buildings?.length ?? 0,
+            buildings: msg.state.buildings?.length,
+            buildingsDelta: msg.state.buildingsDelta
+              ? {
+                  upserts: msg.state.buildingsDelta.upserts.length,
+                  removes: msg.state.buildingsDelta.removes.length,
+                }
+              : undefined,
+            liaisons: msg.state.liaisons?.length,
+            liaisonsDelta: msg.state.liaisonsDelta
+              ? {
+                  upserts: msg.state.liaisonsDelta.upserts.length,
+                  removes: msg.state.liaisonsDelta.removes.length,
+                }
+              : undefined,
           });
-          // Apply wire snapshot; App merges bootstrap/change-only omissions.
+          // Apply wire snapshot; App merges bootstrap / change-only / entity deltas.
           // HUD E/O always absolute from server — never invent local balances.
           onStateRef.current(msg.state);
         } else if (msg.type === "chat") {

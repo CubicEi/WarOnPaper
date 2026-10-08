@@ -107,6 +107,7 @@ import {
   type PlayerHudState,
   ROOM_IDLE_MS,
   type ServerToClient,
+  type SnapshotListDelta,
   type SnapshotRole,
   type TerrainMap,
   shouldLogClientAction,
@@ -256,11 +257,24 @@ export function createRoom(options: CreateRoomOptions): GameRoom {
     };
     return sock as unknown as WebSocket;
   }
-/** Last change-only snapshot fields sent on this connection. */
+/**
+ * Per-connection wire baseline: change-only scalars / room layers + last
+ * filtered buildings/liaisons (JSON by id) for delta packing.
+ */
 interface LastSentChangeFields {
   role: SnapshotRole;
   winnerId: string | null;
   winnerName: string | null;
+  /** Last pollutionZones payload put on the wire (JSON.stringify). */
+  pollutionZonesJson: string;
+  /** Last resourceTerrain payload put on the wire (JSON.stringify). */
+  resourceTerrainJson: string;
+  /** Room tick when buildings+liaisons were last sent as a full array. */
+  lastFullEntitiesTick: number;
+  /** Last filtered building payloads put on the wire (id → JSON.stringify). */
+  buildingsJson: Map<string, string>;
+  /** Last filtered liaison payloads put on the wire (id → JSON.stringify). */
+  liaisonsJson: Map<string, string>;
 }
 
 interface PlayerSession {
@@ -268,8 +282,38 @@ interface PlayerSession {
   name: string;
   hud: PlayerHudState;
   ws: WebSocket;
-  /** Tracks role/winner last put on the wire for this player connection. */
+  /** Tracks role/winner/entity baseline last put on the wire for this connection. */
   lastSentChange?: LastSentChangeFields;
+}
+
+function entityWireJson(entity: { id: string }): string {
+  return JSON.stringify(entity);
+}
+
+function buildEntityListDelta<T extends { id: string }>(
+  current: readonly T[],
+  prevJson: Map<string, string> | undefined,
+): { delta: SnapshotListDelta<T>; nextJson: Map<string, string> } {
+  const nextJson = new Map<string, string>();
+  const upserts: T[] = [];
+  for (const e of current) {
+    const j = entityWireJson(e);
+    nextJson.set(e.id, j);
+    if (!prevJson || prevJson.get(e.id) !== j) {
+      upserts.push(e);
+    }
+  }
+  const removes: string[] = [];
+  if (prevJson) {
+    for (const id of prevJson.keys()) {
+      if (!nextJson.has(id)) removes.push(id);
+    }
+  }
+  return { delta: { upserts, removes }, nextJson };
+}
+
+function isEmptyEntityDelta(delta: SnapshotListDelta<{ id: string }>): boolean {
+  return delta.upserts.length === 0 && delta.removes.length === 0;
 }
 
 /** Active map; set at room creation. */
@@ -405,8 +449,13 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
 
 /**
  * Pack a wire `state` payload.
- * - bootstrap (join / re-enter): include map / terrainSeed / allowRespawn
- * - regular ticks: omit those; include role / winner* only when changed
+ * - bootstrap (join / re-enter): include map / terrainSeed / allowRespawn +
+ *   current role / winner* / pollutionZones / resourceTerrain + full
+ *   buildings / liaisons
+ * - regular ticks: omit bootstrap fields; role / winner* / pollutionZones /
+ *   resourceTerrain only when changed vs lastSentChange; buildings /
+ *   liaisons as delta vs last sent filtered set, with a full refresh every
+ *   TICKS_PER_10S (150 ticks) of simulation since last full
  */
 function packWireSnapshot(
   player: PlayerSession,
@@ -416,6 +465,12 @@ function packWireSnapshot(
   const role = full.role ?? "player";
   const winId = full.winnerId ?? null;
   const winName = full.winnerName ?? null;
+  const buildings = full.buildings ?? [];
+  const liaisons = full.liaisons ?? [];
+  const pollutionZones = full.pollutionZones ?? [];
+  const resourceTerrain = full.resourceTerrain ?? { cleared: [], deposits: [] };
+  const pollutionZonesJson = JSON.stringify(pollutionZones);
+  const resourceTerrainJson = JSON.stringify(resourceTerrain);
 
   const out: GameStateSnapshot = { ...full };
 
@@ -432,14 +487,64 @@ function packWireSnapshot(
     !prev ||
     prev.winnerId !== winId ||
     prev.winnerName !== winName;
+  const sendPollution =
+    opts.bootstrap || !prev || prev.pollutionZonesJson !== pollutionZonesJson;
+  const sendResourceTerrain =
+    opts.bootstrap ||
+    !prev ||
+    prev.resourceTerrainJson !== resourceTerrainJson;
 
   if (!sendRole) delete out.role;
   if (!sendWinner) {
     delete out.winnerId;
     delete out.winnerName;
   }
+  if (!sendPollution) delete out.pollutionZones;
+  else out.pollutionZones = pollutionZones;
+  if (!sendResourceTerrain) delete out.resourceTerrain;
+  else out.resourceTerrain = resourceTerrain;
 
-  player.lastSentChange = { role, winnerId: winId, winnerName: winName };
+  const forceFullEntities =
+    opts.bootstrap ||
+    !prev ||
+    tick - prev.lastFullEntitiesTick >= TICKS_PER_10S;
+
+  let buildingsJson: Map<string, string>;
+  let liaisonsJson: Map<string, string>;
+  let lastFullEntitiesTick: number;
+
+  if (forceFullEntities) {
+    delete out.buildingsDelta;
+    delete out.liaisonsDelta;
+    out.buildings = buildings;
+    out.liaisons = liaisons;
+    buildingsJson = new Map(buildings.map((b) => [b.id, entityWireJson(b)]));
+    liaisonsJson = new Map(liaisons.map((l) => [l.id, entityWireJson(l)]));
+    lastFullEntitiesTick = tick;
+  } else {
+    delete out.buildings;
+    delete out.liaisons;
+    const bPack = buildEntityListDelta(buildings, prev.buildingsJson);
+    const lPack = buildEntityListDelta(liaisons, prev.liaisonsJson);
+    if (isEmptyEntityDelta(bPack.delta)) delete out.buildingsDelta;
+    else out.buildingsDelta = bPack.delta;
+    if (isEmptyEntityDelta(lPack.delta)) delete out.liaisonsDelta;
+    else out.liaisonsDelta = lPack.delta;
+    buildingsJson = bPack.nextJson;
+    liaisonsJson = lPack.nextJson;
+    lastFullEntitiesTick = prev.lastFullEntitiesTick;
+  }
+
+  player.lastSentChange = {
+    role,
+    winnerId: winId,
+    winnerName: winName,
+    pollutionZonesJson,
+    resourceTerrainJson,
+    lastFullEntitiesTick,
+    buildingsJson,
+    liaisonsJson,
+  };
   return out;
 }
 
@@ -454,7 +559,9 @@ function send(ws: WebSocket, msg: ServerToClient): void {
 /**
  * Authoritative snapshot for one player (includes you.energy / you.organization).
  * E/O are never sent as deltas — always the current absolute balances.
- * Regular ticks omit bootstrap-only and unchanged change-only fields.
+ * Regular ticks omit bootstrap-only / unchanged change-only fields
+ * (role / winner* / pollutionZones / resourceTerrain), and pack
+ * buildings/liaisons as deltas (full refresh every ~10s).
  */
 function sendPlayerState(player: PlayerSession, state?: GameStateSnapshot): void {
   send(player.ws, {
