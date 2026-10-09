@@ -2,8 +2,8 @@
 
 本文描述客户端与服务端之间 **按仿真 tick 节奏** 交换的 WebSocket 载荷。类型定义在 `core/shared/src/index.ts`；组装与广播在 `core/server/src/room.ts`（`snapshotFor` / `broadcastState` / `tickRoom`）；时钟由 `manager` 的 `RoomRegistry`（或 server 调试入口）按 `TICK_MS` 驱动。
 
-> **聚焦范围**：每 tick（及同 tick 内附带）的报文。  
-> **不展开**：`hello` / 大厅 / 建造与单位指令等非周期消息 → 见 [types-protocol.md](./types-protocol.md)、[server/networking.md](../server/networking.md)、[client/networking.md](../client/networking.md)。  
+> **聚焦范围**：每 tick（及同 tick 内附带）的报文，含快照顶层的准备 / 读档 / 组队字段。  
+> **不展开**：`hello` / 大厅 / 建造与单位指令 / `export_save` 等非周期消息 → 见 [types-protocol.md](./types-protocol.md)、[manager/save-load.md](../manager/save-load.md)、[server/networking.md](../server/networking.md)、[client/networking.md](../client/networking.md)。  
 > **仿真步骤**（建造推进、交战等）→ 见 [server/game-loop.md](../server/game-loop.md)、[tick-combat.md](./tick-combat.md)。  
 > **视野规则细节** → 见 [vision.md](./vision.md)。
 
@@ -28,7 +28,7 @@ sequenceDiagram
 
   loop 每 TICK_MS
     Clock->>Room: tick()
-    Note over Room: 若有人 playing：tick+=1 并推进模拟
+    Note over Room: 非 awaitingReady 且有人 playing 且无胜者：tick+=1 并推进模拟
     Room->>C1: state { state: Snapshot(A 视角) }
     Room->>C2: state { state: Snapshot(B 视角) }
   end
@@ -37,7 +37,7 @@ sequenceDiagram
 
 要点：
 
-- **无人 `playing`**（例如仍在选都）或 **已有胜者**：仍会 `broadcastState()`，但**不**推进 `tick` 与模拟（见 `tickRoom`）。
+- **`awaitingReady`**（`pick_capital` / `ready_lobby` / `restore_lobby`）、**无人 `playing`**、或 **已有胜者**：仍会 `broadcastState()`，但**不**推进 `tick` 与模拟（见 `tickRoom`）。
 - **建筑物 / 联络线可增量**：常规 tick 对 `buildings` / `liaisons` 相对该连接上次已发送的**已过滤**集合发 `*Delta`；约每 10 秒（150 tick）或 bootstrap 再发全量数组重置基线。`units` 等其余实体仍每帧全量；E/O 从不发增量。其它顶层字段按 §3.0 省略。
 - 传输：每帧一个 JSON 对象，`type` 判别联合类型；底层 `JSON.stringify` / `JSON.parse`。
 
@@ -67,10 +67,10 @@ sequenceDiagram
 
 | 字段 | 类型 | 含义 | 发送规则 |
 |------|------|------|----------|
-| `tick` | `number` | 当前仿真 tick（无人 playing / 已胜时可不递增，但快照仍带当前值） | 每帧 |
+| `tick` | `number` | 当前仿真 tick（`awaitingReady` / 无人 playing / 已胜时可不递增，但快照仍带当前值） | 每帧 |
 | `map?` | `MapConfig` | 本局地图尺寸 | **仅开局 / 再入房** |
 | `you` | `PlayerHudState` | **本观众** HUD（绝对 E/O；先 `syncCapitalHud`） | 每帧 |
-| `buildings?` | `PlacedBuilding[]` | 可见建筑全量（已按观众过滤，或观战/终局全量拷贝） | **bootstrap / 每 150 tick 基线刷新** |
+| `buildings?` | `PlacedBuilding[]` | 可见建筑全量（视野过滤 / 观战终局全量 / `restore_lobby` 卫星门面） | **bootstrap / 每 150 tick 基线刷新** |
 | `buildingsDelta?` | `SnapshotListDelta<PlacedBuilding>` | 相对该连接上次已发送过滤集的增量 | **常规 tick**（无变化则省略） |
 | `liaisons?` | `PlacedLiaison[]` | 可见联络线全量 | **同 buildings** |
 | `liaisonsDelta?` | `SnapshotListDelta<PlacedLiaison>` | 联络线增量 | **同 buildingsDelta** |
@@ -85,14 +85,23 @@ sequenceDiagram
 | `roomId?` | `string` | 托管对局房间 id | 每帧（可选字段，现实现仍带） |
 | `allowRespawn?` | `boolean` | 首都陷落后再选都 vs 观战 | **仅开局 / 再入房** |
 | `role?` | `SnapshotRole` | `"player"` \| `"spectator"` | **bootstrap / 再入房，或相对该连接上次已发送值变化时** |
-| `winnerId?` / `winnerName?` | `string \| null` | 终局信息（主胜者） | **bootstrap / 再入房，或相对该连接上次已发送值变化时**（成对） |
-| `winnerTeamId?` / `winnerPlayerIds?` / `winnerNames?` | 队胜扩展 | 组队终局全队名单 | 同 winner* |
-| `teams?` | `Record<playerId, teamId>` | 队伍花名册 | 每帧（现实现） |
-| `teamMode?` | `boolean` | 队胜 / 无再选都 | 每帧（现实现） |
-| `teamInvites?` | `{ fromPlayerId, toPlayerId }[]` | 与本观众相关的待处理邀请 | 每帧 |
+| `winnerId?` / `winnerName?` | `string \| null` | 终局信息（主胜者） | **bootstrap / 再入房，或相对该连接上次已发送值变化时**（成对省略） |
+| `winnerTeamId?` / `winnerPlayerIds?` / `winnerNames?` | 队胜扩展 | 组队终局全队名单 | **每帧**（现实现；`packWireSnapshot` 未随 `winnerId` 一起省略） |
+| `teams?` | `TeamRoster`（`Record<playerId, teamId>`） | 队伍花名册 | 每帧（现实现；客户端 merge 可缓存） |
+| `teamMode?` | `boolean` | 队胜 / 无中局再选都 | 每帧（现实现） |
+| `teamInvites?` | `TeamInvitePending[]` | 与本观众相关的待处理邀请 | 每帧 |
 | `allyGarrisonRequests?` | `AllyGarrisonRequest[]` | 指向本观众建筑的友方进驻申请 | 每帧 |
+| `ready?` | `boolean` | 本观众是否已 Ready（`ready_lobby` / `restore_lobby`） | 每帧（现实现） |
+| `readyPlayerIds?` | `string[]` | 当前已 Ready 的玩家 id | 每帧（现实现） |
+| `restoreMode?` | `boolean` | 是否处于读档准备门闸（`restore_lobby`） | 每帧（现实现） |
+| `restoreHolder?` | `boolean` | 本观众是否为存档持有者（不可选都） | 每帧（现实现） |
+| `mappedSaveId?` | `string \| null` | 本观众已映射的存档身份 id | 每帧（现实现） |
+| `canPickCapital?` | `boolean` | 本观众当前可选都 / 继承身份 | 每帧（现实现） |
+| `canAbandonCapital?` | `boolean` | 本观众可放弃首都并重选 / 再继承 | 每帧（现实现） |
+| `restoreIdentities?` | `RestoreIdentityOption[]` | 可读档身份列表（非 `restore_lobby` 时为空数组） | 每帧（现实现） |
 
-> 组队时 `connectedBuildingIds` 为同队已发布连通建筑 id 的并集；视野过滤传入 `teams`。
+> 组队时 `connectedBuildingIds` 为同队已发布连通建筑 id 的并集；视野过滤传入 `teams`。  
+> `restore_lobby` 时 `connectedBuildingIds` / `units` 为空；建筑与联络线为卫星门面（见 §5）。
 
 ### 3.0 字段发送与客户端合并
 
@@ -100,18 +109,20 @@ sequenceDiagram
 
 - 必带：`map`、`terrainSeed`、`allowRespawn`，以及当前 `role`、`winnerId` / `winnerName`（可为 `null`）。
 - 必带：当前全量 `pollutionZones`、`resourceTerrain`（枯竭格权威快照）。
-- 必带：**全量** `buildings` / `liaisons`（已按观众过滤）；不发 `*Delta`。
+- 必带：**全量** `buildings` / `liaisons`（已按观众过滤或 `restore_lobby` 卫星门面）；不发 `*Delta`。
+- 同时带出逻辑快照中的组队 / Ready / 读档 UI 字段（与常规帧相同，见上表）。
 - 触发：首次 `join`、同 `playerId` 重连入房；会清空该连接上的 `lastSentChange` 后再打包（重置实体与 change-only 基线）。
 
 **常规 tick / 指令后广播** — `packWireSnapshot(..., { bootstrap: false })`：
 
 - **不发** `map` / `terrainSeed` / `allowRespawn`（服务端 `delete`；客户端若误收到也可忽略，以缓存为准）。
 - `role`、`winnerId` / `winnerName`：与该玩家连接上一次已发送值比较，**未变则省略**；角色切换、终局刚产生胜者等必须发出。
+- `winnerTeamId` / `winnerPlayerIds` / `winnerNames`：现实现**不**随上述成对省略，仍每帧带出。
 - `pollutionZones`、`resourceTerrain`：相对该连接上次已发送 JSON 指纹比较，**未变则省略**；核弹落点新增污染区、资源枯竭 / 矿点储量变化等必须发出（整段替换，非增量）。
 - **`buildings` / `liaisons`**：
   - 若距该连接上次**全量**实体包已过 ≥ `TICKS_PER_10S`（150 tick，约 10 秒仿真时间）→ 再发**全量**数组，并重置该连接基线（不发 `*Delta`）。
   - 否则相对该连接上次已发送的过滤集合算 diff，发 `buildingsDelta` / `liaisonsDelta`（无变化则整段省略）；**不发**全量数组。
-  - 视野：diff 在**过滤后**集合上计算——刚进入视野 → `upserts`；刚离开视野 → `removes`；实体字段变化 → `upserts`（整实体替换）。
+  - 视野：diff 在**过滤后**（或 restore 门面）集合上计算——刚进入视野 → `upserts`；刚离开视野 → `removes`；实体字段变化 → `upserts`（整实体替换）。
 
 **`SnapshotListDelta<T>`**：
 
@@ -127,12 +138,16 @@ sequenceDiagram
 | 缺省 / 字段 | 行为 |
 |-------------|------|
 | `map` / `terrainSeed` / `allowRespawn` | 保留上一帧缓存 |
-| `role` / `winnerId` / `winnerName` | 保留上一帧已知值 |
+| `role` / `winnerId` / `winnerName` / `winnerTeamId` / `winnerPlayerIds` / `winnerNames` | 保留上一帧已知值 |
 | `pollutionZones` / `resourceTerrain` | 保留上一帧已知值 |
+| `teams` / `teamMode` / `teamInvites` / `allyGarrisonRequests` | 保留上一帧已知值 |
+| `ready` / `readyPlayerIds` / `restoreMode` / `restoreHolder` / `mappedSaveId` / `canPickCapital` / `canAbandonCapital` / `restoreIdentities` | 保留上一帧已知值 |
 | `buildings` / `liaisons` 全量数组 | **整段替换**本地列表 |
 | `buildingsDelta` / `liaisonsDelta` | `applySnapshotListDelta` 应用到本地缓存；合并结果**不含** delta 字段 |
 | 全量与 delta 皆缺省 | 保留上一帧列表 |
-| 其余字段 | 以本包为准整段替换 |
+| 其余字段（含 `tick` / `you` / `units` / `phase` / `connectedBuildingIds` / `resourceSight` / `players` / `roomId`） | 以本包为准整段替换 |
+
+> 说明：`index.ts` 部分字段注释写「变化时上线」；当前 `packWireSnapshot` **实际省略**的只有 bootstrap 三字段 + `role` / `winnerId`·`winnerName` + `pollutionZones` / `resourceTerrain` + buildings/liaisons 全量↔delta。组队 / Ready / 读档 UI 等字段现实现每帧带出，但 merge 已按「缺省则保留」处理，便于日后收紧。
 
 ### 3.1 `MapConfig`
 
@@ -155,12 +170,26 @@ sequenceDiagram
 | `phase` | 含义 |
 |---------|------|
 | `need_init` | 房间待初始化地图（正常托管房间创建后不应出现） |
-| `pick_capital` | 选首都（含允许重生时的再选） |
+| `pick_capital` | 选首都（新开局尚未定都；含允许重生时的再选；读档未映射且可落都时） |
+| `ready_lobby` | 新开局已定都后的准备门闸（与读档同一套 Ready UI；可 `abandon_capital` 重回选都） |
+| `restore_lobby` | 读档开局前：卫星全图 + 准备门闸（可继承身份 / 部分座位选都） |
 | `playing` | 对局中 |
 | `spectating` | 观战 |
 | `ended` | 结束 |
 
-`role`：`"spectator"` 时拿未过滤世界；`"player"` 时走视野过滤（见 §5）。
+`role`：`"spectator"` 时拿未过滤世界；`"player"` 时走视野过滤（见 §5）。`restore_lobby` 另有卫星门面路径，不走普通 `filter*`。
+
+房间内阶段由 `phaseFor(session)` 按观众计算：`awaitingReady` 时有首都 → `ready_lobby`，无首都 → `pick_capital`；读档且仍在门闸 → 全员 `restore_lobby`。全员 Ready 后清 `awaitingReady`，才进入可推进模拟的 `playing`。
+
+### 3.4 准备 / 读档 / 组队嵌套类型（快照顶层携带）
+
+| 类型 | 字段 | 含义 |
+|------|------|------|
+| `TeamInvitePending` | `fromPlayerId`, `toPlayerId` | 自定义房待处理邀请 |
+| `AllyGarrisonRequest` | `id`, `fromPlayerId`, `unitId`, `buildingId`, `unitKind`, `unitU`, `createdAt` | 友方进驻审批（仅下发给建筑所有者） |
+| `RestoreIdentityOption` | `savePlayerId`, `name`, `hasCapital`, `claimed` | 读档身份选项（`inherit_identity`） |
+
+客户端切换 Ready / 放弃首都 / 继承身份等走事件型 `ClientToServer`（`set_ready`、`abandon_capital`、`inherit_identity`），**不**经 tick 上报；成功后房间立刻 `broadcastState()`（§7）。`export_save` / `save_export` 由 manager 处理加密下载，不进仿真 tick 流。
 
 ---
 
@@ -269,22 +298,25 @@ sequenceDiagram
 
 ## 5. 全量 vs 过滤（按玩家裁剪）
 
-`snapshotFor` 决定是否「全视」：
+`snapshotFor` 决定裁剪路径：
 
 ```ts
 const role = spectatorIds.has(player.id) ? "spectator" : "player";
+const restoreLobby = inRestoreLobby(); // restoreMode && awaitingReady
 const fullVision = role === "spectator" || phaseFor(player) === "ended";
 ```
 
 | 观众条件 | `buildings` / `liaisons` / `units` / `resourceSight` |
 |----------|------------------------------------------------------|
+| `restore_lobby` | **卫星门面**：建筑/联络线经 `satelliteFacade*`（HP/库存等清零，`visionLevel: "satellite"`）；`units = []`；`resourceSight` 全量（不过滤） |
 | `role === "spectator"` 或 `phase === "ended"` | 浅拷贝权威数组（全量） |
-| 普通 `player` | 分别调用 `filterBuildingsForViewer` / `filterLiaisonsForViewer` / `filterUnitsForViewer` / `filterResourceSightForViewer` |
+| 普通 `player` | 分别调用 `filterBuildingsForViewer` / `filterLiaisonsForViewer` / `filterUnitsForViewer` / `filterResourceSightForViewer`（传入 `teams`，友方按己方待遇） |
 
 **始终按玩家定制、但非「迷雾」的字段：**
 
-- `you`、`connectedBuildingIds`、`phase`、`role` — 本观众会话（`role` 在 bootstrap 与变化时上线，见 §3.0）
-- `players`、`roomId`、`tick` — 房间级，现实现仍每帧带
+- `you`、`connectedBuildingIds`、`phase`、`role` — 本观众会话（`role` 在 bootstrap 与变化时上线，见 §3.0）；`restore_lobby` 时 `connectedBuildingIds = []`
+- `teamInvites` / `allyGarrisonRequests` / Ready·读档 UI 字段 — 按本观众过滤或计算，现实现每帧带
+- `players`、`roomId`、`tick`、`teams`、`teamMode` — 房间级，现实现仍每帧带
 - `pollutionZones`、`resourceTerrain` — 房间级、不过滤；上线规则同 change-only（bootstrap + 变化，见 §3.0）
 - `map`、`terrainSeed`、`allowRespawn` — 房间级，但**仅 bootstrap 上线**（§3.0）
 
@@ -353,8 +385,11 @@ const fullVision = role === "spectator" || phaseFor(player) === "ended";
 |------|-------------|------|
 | 会话 | `hello` / `welcome`、`leave_room` | [client/networking.md](../client/networking.md)、[server/sessions.md](../server/sessions.md) |
 | 大厅 | `create_room`、`join_room`、`queue_match`、`room_ready`、`match_status`… | [manager/lobby-ws.md](../manager/lobby-ws.md) |
+| 准备 / 读档门闸 | `set_ready`、`abandon_capital`、`inherit_identity`；结果仍走 `state` | [types-protocol.md](./types-protocol.md)、[manager/save-load.md](../manager/save-load.md) |
+| 存档导出 | `export_save` → `save_export`（manager 加密；不进仿真 tick） | [manager/save-load.md](../manager/save-load.md) |
 | 定都/基建/训练/开火/单位命令 | `place_capital`、`build`、`move_units`… | [types-protocol.md](./types-protocol.md)、[server/networking.md](../server/networking.md) |
-| 反馈 | `error`、`action_result`、`chat` | 同上 + [debug.md](./debug.md) |
+| 组队 / 友方进驻 | `team_invite*`、`ally_garrison_*`；快照侧见 §3 | [types-protocol.md](./types-protocol.md) |
+| 反馈 | `error`、`action_result`、`chat`、`tip` | 同上 + [debug.md](./debug.md) |
 
 入房时：`welcome` 内嵌 bootstrap `state`（含 `map` / `terrainSeed` / `allowRespawn` 等），随后再发一条同内容普通 `state`（兼容只监听 `state` 的客户端）——这是**会话同步 / 再入房全量初始态**，不是时钟 tick。
 
@@ -364,9 +399,11 @@ const fullVision = role === "spectator" || phaseFor(player) === "ended";
 
 | 主题 | 路径 |
 |------|------|
-| `TICK_HZ` / `GameStateSnapshot` / `SnapshotListDelta` / `mergeGameStateSnapshot` / `applySnapshotListDelta` / 协议联合类型 | `core/shared/src/index.ts` |
+| `TICK_HZ` / `GamePhase` / `GameStateSnapshot` / `SnapshotListDelta` / `mergeGameStateSnapshot` / `applySnapshotListDelta` / 协议联合类型 | `core/shared/src/index.ts` |
+| 组队 / 友方进驻类型 | `core/shared/src/teams.ts` |
+| 读档身份选项 | `core/shared/src/save.ts`（`RestoreIdentityOption`） |
 | 嵌套实体类型 | `buildings/actions.ts`、`liaison.ts`、`pollution.ts`、`units/types.ts`、`terrain/types.ts`、`map.ts` |
 | 视野与快照裁剪 | `core/shared/src/vision/vision.ts`、`units/filter.ts` |
-| `snapshotFor` / `packWireSnapshot` / `broadcastState` / `tickRoom` | `core/server/src/room.ts` |
+| `snapshotFor` / `satelliteFacade*` / `packWireSnapshot` / `broadcastState` / `tickRoom` / `phaseFor` | `core/server/src/room.ts` |
 | 时钟调度 | `manager/src/rooms.ts`、`manager/src/gameBridge.ts`（`GAME_TICK_MS`） |
 | 客户端收包 / 合并 | `core/client/src/net/useGameSocket.ts`、`App.tsx`（`mergeGameStateSnapshot`） |
