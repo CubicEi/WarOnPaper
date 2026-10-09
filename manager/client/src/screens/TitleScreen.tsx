@@ -93,6 +93,7 @@ export function TitleScreen() {
           setStatusKind("ok");
           break;
         case "match_status":
+          setQueuing(true);
           setQueueInfo(
             msg.teamFormat
               ? `匹配中 ${msg.queued}/${msg.needed}（${msg.teamFormat}）`
@@ -124,10 +125,16 @@ export function TitleScreen() {
           setStatus(`房间已关闭（${roomClosedReason(msg.reason)}）`);
           setStatusKind("");
           break;
-        case "error":
+        case "error": {
+          const code = String(msg.code ?? "");
+          if (code === "BAD_QUEUE" || code === "ALREADY_IN_ROOM") {
+            setQueuing(false);
+            setQueueInfo("");
+          }
           setStatus(String(msg.message ?? msg.code ?? "错误"));
           setStatusKind("error");
           break;
+        }
         default:
           break;
       }
@@ -183,6 +190,7 @@ export function TitleScreen() {
 
   const startMatch = () => {
     rename();
+    setQueuing(true);
     if (teamFormat) {
       socket.send({ type: "queue_match", teamFormat });
     } else {
@@ -265,7 +273,8 @@ export function TitleScreen() {
                 id="teamFormat"
                 value={teamFormat}
                 disabled={queuing}
-                onChange={(e) =>
+                onChange={(e) => {
+                  if (queuing) return;
                   setTeamFormat(
                     e.target.value as
                       | ""
@@ -275,8 +284,8 @@ export function TitleScreen() {
                       | "2v2v2"
                       | "3v3v3"
                       | "2v2v2v2",
-                  )
-                }
+                  );
+                }}
               >
                 <option value="">无（自由混战）</option>
                 <option value="2v2">2v2 · 4 人</option>
@@ -294,7 +303,10 @@ export function TitleScreen() {
                   id="matchCount"
                   value={matchCount}
                   disabled={queuing}
-                  onChange={(e) => setMatchCount(Number(e.target.value))}
+                  onChange={(e) => {
+                    if (queuing) return;
+                    setMatchCount(Number(e.target.value));
+                  }}
                 >
                   {[2, 3, 4, 5].map((n) => (
                     <option key={n} value={n}>

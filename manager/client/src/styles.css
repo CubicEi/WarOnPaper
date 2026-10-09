@@ -136,6 +136,13 @@ button {
   box-shadow: 0 0 0 3px rgba(61, 107, 79, 0.2);
 }
 
+.field input:disabled,
+.field select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: rgba(232, 223, 208, 0.65);
+}
+
 .section {
   border-top: 1px solid var(--line);
   padding-top: 1.1rem;

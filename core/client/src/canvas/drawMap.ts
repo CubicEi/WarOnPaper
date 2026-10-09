@@ -1061,6 +1061,12 @@ function resolveCommUsedEdges(
   return cachedCommUsedEdges;
 }
 
+const LIAISON_DRAW_ORDER: Record<"own" | "ally" | "enemy", number> = {
+  enemy: 0,
+  ally: 1,
+  own: 2,
+};
+
 function drawLiaisons(
   ctx: CanvasRenderingContext2D,
   lines: readonly PlacedLiaison[],
@@ -1083,7 +1089,16 @@ function drawLiaisons(
       ? resolveCommUsedEdges(myPlayerId, buildings, lines, connectedIds)
       : null;
 
-  for (const line of lines) {
+  // Draw enemy under ally under own so overlapping edges show friendly colors.
+  const ordered = lines.length <= 1
+    ? lines
+    : [...lines].sort(
+        (a, b) =>
+          LIAISON_DRAW_ORDER[ownerRelation(a.ownerId, myPlayerId, teams)] -
+          LIAISON_DRAW_ORDER[ownerRelation(b.ownerId, myPlayerId, teams)],
+      );
+
+  for (const line of ordered) {
     const relation = ownerRelation(line.ownerId, myPlayerId, teams);
     const mine = relation === "own";
     let segmentColor:

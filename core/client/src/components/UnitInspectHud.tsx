@@ -163,13 +163,16 @@ export function UnitInspectHud({
     mine && isCarrierKind(unit.kind) && (unit.embarkedAirU ?? 0) > 0;
 
   const extras: string[] = [name, STATE_LABEL[unit.state]];
-  if (!mine) {
+  if (isAlly) extras.push("友军");
+  if (owned || isAlly) {
+    if (def.carryEMax != null) {
+      extras.push(`携行 ${unit.carriedE}/${def.carryEMax} E`);
+    }
+    if (isCarrierKind(unit.kind)) {
+      extras.push(carrierCapacityLabel(unit));
+    }
+  } else {
     extras.push(unit.visionLevel === "satellite" ? "卫星视野" : "直接视野");
-  } else if (def.carryEMax != null) {
-    extras.push(`携行 ${unit.carriedE}/${def.carryEMax} E`);
-  }
-  if (mine && isCarrierKind(unit.kind)) {
-    extras.push(carrierCapacityLabel(unit));
   }
 
   const fire = (action: UnitInspectAction, detail?: { airUnitId?: string }) => {
@@ -281,7 +284,7 @@ export function UnitInspectHud({
             )}
           </div>
         )}
-        {!mine && myPlayerId != null && (
+        {!mine && !isAlly && myPlayerId != null && (
           <div className="unit-inspect-ops">
             <UnitOpButton
               label="进攻"

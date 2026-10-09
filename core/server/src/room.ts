@@ -2106,7 +2106,26 @@ function tryBuild(
     existing = undefined;
   }
 
-  if (!islandToReplace && !canPlaceBuildingDef(def, ground)) {
+  // Land building already on open sea (ex-island platform): allow upgrades with the
+  // same medium-or-smaller / no-sea-only constraints; skip ocean ground reject.
+  const seaPlatform =
+    !!islandToReplace ||
+    (!!existing &&
+      ground === "ocean" &&
+      !BUILDING_BY_ID[existing.buildingId]?.flags?.seaOnly);
+
+  if (seaPlatform) {
+    if (def.flags?.seaOnly) {
+      sendError(session.ws, "invalid_on_island", "人工岛上不能建造海上建筑");
+      return;
+    }
+    if ((def.size ?? "small") === "large") {
+      sendError(session.ws, "too_large_for_island", "人工岛上只能建造中型及以下建筑");
+      return;
+    }
+  }
+
+  if (!seaPlatform && !canPlaceBuildingDef(def, ground)) {
     sendError(session.ws, "invalid_ground", "地形不符，无法建造");
     return;
   }

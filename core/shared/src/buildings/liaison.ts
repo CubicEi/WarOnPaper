@@ -1,5 +1,6 @@
 /** Liaison lines (线缆 / 公路 / 铁路) — rules §7.4 / 建造联络线. */
 
+import { isFriendly, type TeamRoster } from "../teams.js";
 import { durationSecToTicks } from "./actions.js";
 
 export type LiaisonKind = "fiber" | "road" | "railway";
@@ -280,20 +281,37 @@ export function distancePointToSegment(
 }
 
 /** Nearest liaison polyline within `radius` Du of (gx, gy). */
+/** Own > ally > enemy; used when several lines share the same edge distance. */
+function liaisonPickPriority(
+  ownerId: string,
+  viewerId: string | null | undefined,
+  teams?: TeamRoster | null,
+): number {
+  if (viewerId == null) return 0;
+  if (ownerId === viewerId) return 2;
+  if (isFriendly(teams, ownerId, viewerId)) return 1;
+  return 0;
+}
+
 export function findLiaisonNear(
   lines: readonly PlacedLiaison[],
   gx: number,
   gy: number,
   radius = 0.35,
+  viewerId?: string | null,
+  teams?: TeamRoster | null,
 ): PlacedLiaison | undefined {
   let best: PlacedLiaison | undefined;
   let bestD = radius;
+  let bestPri = -1;
   for (const line of lines) {
+    const pri = liaisonPickPriority(line.ownerId, viewerId, teams);
     for (let i = 1; i < line.nodes.length; i++) {
       const d = distancePointToSegment(gx, gy, line.nodes[i - 1], line.nodes[i]);
-      if (d <= bestD) {
+      if (d < bestD - 1e-9 || (d <= bestD + 1e-9 && pri > bestPri)) {
         bestD = d;
         best = line;
+        bestPri = pri;
       }
     }
   }
@@ -306,15 +324,20 @@ export function findLiaisonSegmentNear(
   gx: number,
   gy: number,
   radius = 0.35,
+  viewerId?: string | null,
+  teams?: TeamRoster | null,
 ): { line: PlacedLiaison; segmentIndex: number; dist: number } | undefined {
   let best: { line: PlacedLiaison; segmentIndex: number; dist: number } | undefined;
   let bestD = radius;
+  let bestPri = -1;
   for (const line of lines) {
+    const pri = liaisonPickPriority(line.ownerId, viewerId, teams);
     for (let i = 1; i < line.nodes.length; i++) {
       const d = distancePointToSegment(gx, gy, line.nodes[i - 1]!, line.nodes[i]!);
-      if (d <= bestD) {
+      if (d < bestD - 1e-9 || (d <= bestD + 1e-9 && pri > bestPri)) {
         bestD = d;
         best = { line, segmentIndex: i - 1, dist: d };
+        bestPri = pri;
       }
     }
   }
@@ -746,7 +769,7 @@ export interface LiaisonOverlapResolution {
   replace: Array<{ id: string; fragments: GridNode[][]; investedEEach: number[] }>;
   /** Total E refunded from trimmed/removed old segments. */
   refundE: number;
-  /** Error if blocked by enemy / should not happen after strip. */
+  /** Reserved for future validation failures. */
   error?: { code: string; message: string };
 }
 
@@ -756,7 +779,7 @@ export interface LiaisonOverlapResolution {
  * - Overlap with own equal-or-higher line: drop those segments from the new stroke.
  * - Overlap with own lower-tier line: remove only overlapping segments from the old line
  *   (split remainder), refund 80% of the removed share of invested E.
- * - Overlap with enemy line: error.
+ * - Overlap with another owner's line: allowed (multiple owners may share the same edge).
  */
 export function resolveLiaisonBuildOverlap(
   kind: LiaisonKind,
@@ -788,19 +811,15 @@ export function resolveLiaisonBuildOverlap(
   let refundE = 0;
 
   for (const old of existing) {
+    // Other owners may share the same grid edge; only own lines upgrade/strip.
+    if (old.ownerId !== ownerId) continue;
+
     const oldKeys = pathSegmentKeys(old.nodes);
     const overlap = new Set<string>();
     for (const k of strokeKeys) {
       if (oldKeys.has(k)) overlap.add(k);
     }
     if (overlap.size === 0) continue;
-
-    if (old.ownerId !== ownerId) {
-      return {
-        ...empty,
-        error: { code: "liaison_overlap_enemy", message: "与他人联络线重叠" },
-      };
-    }
 
     if (LIAISON_RANK[kind] <= LIAISON_RANK[old.kind]) {
       // Equal or lower than existing → don't redraw / don't charge those segments

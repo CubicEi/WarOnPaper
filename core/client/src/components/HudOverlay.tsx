@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import type { PlayerHudState } from "@wop/shared";
 import { CapitalHpRing } from "./CapitalHpRing";
 
@@ -6,6 +6,8 @@ interface Props {
   hud: PlayerHudState;
   /** Uncapped target from rules: max(window)/16. */
   windowHudSize: number;
+  /** Optional control under the capital HP ring (e.g. team button). */
+  belowRing?: ReactNode;
 }
 
 interface CapSize {
@@ -13,7 +15,7 @@ interface CapSize {
   h: number;
 }
 
-export function HudOverlay({ hud, windowHudSize }: Props) {
+export function HudOverlay({ hud, windowHudSize, belowRing }: Props) {
   // hud.energy / hud.organization are server-authoritative (from GameStateSnapshot.you).
   const resourcesRef = useRef<HTMLDivElement>(null);
   /** Natural size of energy/org block at scale 1 — permanent cap. */
@@ -53,11 +55,14 @@ export function HudOverlay({ hud, windowHudSize }: Props) {
 
   return (
     <div className="hud" style={hudStyle}>
-      <CapitalHpRing
-        diameter={hudSize}
-        hp={hud.capitalHp}
-        hpMax={hud.capitalHpMax}
-      />
+      <div className="hud-left-col">
+        <CapitalHpRing
+          diameter={hudSize}
+          hp={hud.capitalHp}
+          hpMax={hud.capitalHpMax}
+        />
+        {belowRing}
+      </div>
       <div className="hud-resources-slot" style={slotStyle}>
         <div className="hud-resources" ref={resourcesRef} style={resourcesStyle}>
           <div className="resource-row energy">

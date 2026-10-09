@@ -38,6 +38,8 @@ import {
   estimatePathTimeSec,
   findFreeUnitCoord,
   findNearestAllowedCoord,
+  isFoothillTerrain,
+  isMountainTerrain,
   planAirPath,
   planLandOrNavyPath,
   terrainAllowsKind,
@@ -175,6 +177,7 @@ function planFor(
     terrain: ctx.terrain,
     liaisons: ctx.liaisons,
     ownerId: unit.ownerId,
+    buildings: ctx.buildings,
     coverage,
     ignoreCoverage,
     ignoreTerrain,
@@ -194,6 +197,7 @@ function standAllow(
     terrainAllowsKind(unit.kind, ctx.terrain, gx, gy, {
       liaisons: ctx.liaisons,
       ownerId: unit.ownerId,
+      buildings: ctx.buildings,
     }) ||
     (isNavyKind(unit.kind) && isPortCell(gx, gy, ctx.buildings));
 }
@@ -632,35 +636,81 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
       );
       planToGx = dock.gx;
       planToGy = dock.gy;
+    } else if (
+      created.some((c) => c.id === unit.id) &&
+      (unit.kind === "infantry" || unit.kind === "armor")
+    ) {
+      // Coastal / mountain-cliff barracks: the building node can be standable while
+      // every inland step is pure mountain. Prefer the nearest non-building cell
+      // land units can march from before planning the order path.
+      const terrainOpts = {
+        liaisons: ctx.liaisons,
+        ownerId: unit.ownerId,
+        buildings: ctx.buildings,
+      };
+      const start = snapToUnitCoord(unit.gx, unit.gy);
+      const step = 0.2;
+      const maxRing = Math.ceil(12 / step);
+      const maxX = ctx.map.linesX - 1;
+      const maxY = ctx.map.linesY - 1;
+      let spawn: { gx: number; gy: number } | null = null;
+      for (let ring = 1; ring <= maxRing && !spawn; ring++) {
+        for (let dx = -ring; dx <= ring && !spawn; dx++) {
+          for (let dy = -ring; dy <= ring; dy++) {
+            if (Math.max(Math.abs(dx), Math.abs(dy)) !== ring) continue;
+            const p = snapToUnitCoord(start.gx + dx * step, start.gy + dy * step);
+            if (
+              p.gx < -1e-9 ||
+              p.gy < -1e-9 ||
+              p.gx > maxX + 1e-9 ||
+              p.gy > maxY + 1e-9
+            ) {
+              continue;
+            }
+            if (centers.has(unitCoordKey(p.gx, p.gy))) continue;
+            if (
+              !terrainAllowsKind(
+                unit.kind,
+                ctx.terrain,
+                p.gx,
+                p.gy,
+                terrainOpts,
+              )
+            ) {
+              continue;
+            }
+            // Armor: skip mountain-cliff coastline strips (standable but no inland step).
+            if (
+              unit.kind === "armor" &&
+              isMountainTerrain(ctx.terrain, p.gx, p.gy) &&
+              !isFoothillTerrain(ctx.terrain, p.gx, p.gy)
+            ) {
+              continue;
+            }
+            spawn = p;
+            break;
+          }
+        }
+      }
+      if (
+        !spawn &&
+        terrainAllowsKind(unit.kind, ctx.terrain, start.gx, start.gy, terrainOpts)
+      ) {
+        spawn = start;
+      }
+      if (!spawn) {
+        return fail("附近没有可部署的陆地，无法派出", buildings, units);
+      }
+      const ui = nextUnits.findIndex((x) => x.id === unit.id);
+      if (ui >= 0) {
+        nextUnits[ui] = { ...nextUnits[ui]!, gx: spawn.gx, gy: spawn.gy };
+        planUnit = nextUnits[ui]!;
+      } else {
+        planUnit = { ...unit, gx: spawn.gx, gy: spawn.gy };
+      }
     }
     const planned = planFor(planUnit, planToGx, planToGy, ctx, planOpts);
     if (planned.error || planned.path.length === 0) {
-      // #region agent log
-      fetch("http://127.0.0.1:7277/ingest/6741dc77-72e2-46ba-9a2a-c7dd9d84b7e9", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Debug-Session-Id": "676d95",
-        },
-        body: JSON.stringify({
-          sessionId: "676d95",
-          runId: "pre-fix",
-          hypothesisId: "F_G",
-          location: "orders.ts:applyUnitMove:planFail",
-          message: "unit plan failed",
-          data: {
-            kind: unit.kind,
-            unitGx: planUnit.gx,
-            unitGy: planUnit.gy,
-            dest: { gx: planToGx, gy: planToGy },
-            error: planned.error ?? "empty_path",
-            pathLen: planned.path.length,
-            homeBuildingId: unit.homeBuildingId ?? null,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-      // #endregion
       return fail(planned.error ?? "无法规划路径", buildings, units);
     }
     let path = planned.path;
@@ -1148,7 +1198,8 @@ const retreatClearPending = {
  *
  * - 停止：陆海军除交战、停泊外均可；原地结束当前行为；−20E −3O。退却中不可停止。
  *   空军停止 = 强制返航所属建筑入库（不能停泊），费用同停止。
- * - 撤退：任何时候都可以（含交战、停泊）；不耗 O/E；不检电台、地形、携行。
+ * - 撤退：任何时候都可以（含交战、停泊）；不耗 O/E；不检电台与携行。
+ *   陆军仍遵守地形（不得穿海）；海军/空军可忽略地形捷径。
  *   途中若进入封锁半径，由封锁结算应战。回到归属建筑入库前不能接受其他命令。
  */
 export function applyUnitStop(
@@ -1185,6 +1236,7 @@ export function applyUnitStop(
         terrainAllowsKind(u.kind, ctx.terrain, x, y, {
           liaisons: ctx.liaisons,
           ownerId: u.ownerId,
+          buildings,
         }) ||
         (isNavyKind(u.kind) && isPortCell(x, y, buildings)),
     );
@@ -1243,6 +1295,7 @@ export function applyUnitStop(
       else units[idx] = { ...u, u: 0 };
       return { ok: true };
     }
+    const landUnit = u.kind === "infantry" || u.kind === "armor";
     const planned = planFor(
       u,
       home.gx,
@@ -1253,10 +1306,21 @@ export function applyUnitStop(
         units,
         nextId: () => u.id,
       },
-      { ignoreCoverage: true, ignoreTerrain: true },
+      {
+        ignoreCoverage: true,
+        // Land must not cut across ocean; navy/air may still take a direct home path.
+        ignoreTerrain: !landUnit,
+        allowImpassableGoal: landUnit,
+      },
     );
     let path = planned.path;
     if (planned.error || path.length === 0) {
+      if (landUnit) {
+        return {
+          ok: false,
+          error: planned.error ?? "无法撤退（无路可回所属建筑）",
+        };
+      }
       const start = snapToUnitCoord(u.gx, u.gy);
       const end = snapToUnitCoord(home.gx, home.gy);
       path = [start, end];
@@ -1558,45 +1622,6 @@ export function previewUnitMove(
   paths: Array<Array<{ gx: number; gy: number }>>;
 } {
   const result = applyUnitMove(req, ctx);
-  // #region agent log
-  {
-    const srcKinds = (req.sources ?? [])
-      .map((s) => ctx.buildings.find((b) => b.id === s.buildingId)?.buildingId)
-      .filter(Boolean);
-    const unitKinds = (req.unitIds ?? [])
-      .map((id) => ctx.units.find((u) => u.id === id)?.kind)
-      .filter(Boolean);
-    const interesting =
-      srcKinds.includes("armor_barracks") || unitKinds.includes("armor");
-    if (interesting || result.error) {
-      fetch("http://127.0.0.1:7277/ingest/6741dc77-72e2-46ba-9a2a-c7dd9d84b7e9", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Debug-Session-Id": "676d95",
-        },
-        body: JSON.stringify({
-          sessionId: "676d95",
-          runId: "pre-fix",
-          hypothesisId: "F_G",
-          location: "orders.ts:previewUnitMove",
-          message: "move preview result",
-          data: {
-            ok: result.ok,
-            error: result.error ?? null,
-            gx: req.gx,
-            gy: req.gy,
-            srcKinds,
-            unitKinds,
-            sourceIds: (req.sources ?? []).map((s) => s.buildingId),
-            unitIds: req.unitIds ?? [],
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-    }
-  }
-  // #endregion
   const paths: Array<Array<{ gx: number; gy: number }>> = [];
   if (result.ok) {
     for (const u of result.units) {

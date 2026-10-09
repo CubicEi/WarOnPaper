@@ -27,8 +27,6 @@ import {
   snapToBuildNode,
   snapToIntegerNode,
   snapToUnitCoord,
-  canUnitStop,
-  isMovingState,
   previewUnitMove,
   previewTrainingDeliveryPath,
   applyAssignHome,
@@ -89,12 +87,10 @@ import { TrainPanel } from "../components/TrainPanel";
 import { BuildingInspectHud, type BuildingInspectAction } from "../components/BuildingInspectHud";
 import { UnitInspectHud, type UnitInspectAction } from "../components/UnitInspectHud";
 import { AllyRequestStack } from "../components/AllyRequestStack";
-import { TeamPanel, TeamPanelButton } from "../components/TeamPanel";
 import {
   isFriendly,
   sameTeam,
   type AllyGarrisonRequest,
-  type TeamInvitePending,
   type TeamRoster,
 } from "@wop/shared";
 import { ChatPanel, type ChatMessage } from "../components/ChatPanel";
@@ -119,12 +115,7 @@ interface Props {
   myPlayerId?: string | null;
   teams?: TeamRoster | null;
   teamMode?: boolean;
-  teamInvites?: readonly TeamInvitePending[];
   allyGarrisonRequests?: readonly AllyGarrisonRequest[];
-  onTeamInvite?: (toPlayerId: string) => void;
-  onTeamInviteAccept?: (fromPlayerId: string) => void;
-  onTeamInviteReject?: (fromPlayerId: string) => void;
-  onTeamLeave?: () => void;
   onAllyGarrisonRequest?: (unitId: string, buildingId: string) => void;
   onAllyGarrisonAccept?: (requestId: string) => void;
   onAllyGarrisonReject?: (requestId: string) => void;
@@ -225,6 +216,12 @@ interface SelectionView {
   unitId?: string;
   /** Multi-hit circular menu when kind === "radial_pick". */
   radialItems?: RadialPickItem[];
+  /**
+   * When true, show BuildingInspectHud / UnitInspectHud after focus settle.
+   * Direct map / radial picks set this; mobilize / train list-focus marks
+   * leave it unset so exclusivity does not close those command menus.
+   */
+  showInspect?: boolean;
 }
 
 /** Button centers sit just outside the half-ring along a right-side arc. */
@@ -345,12 +342,7 @@ export function GameCanvas({
   myPlayerId = null,
   teams = null,
   teamMode: _teamMode = false,
-  teamInvites = [],
   allyGarrisonRequests = [],
-  onTeamInvite,
-  onTeamInviteAccept,
-  onTeamInviteReject,
-  onTeamLeave,
   onAllyGarrisonRequest,
   onAllyGarrisonAccept,
   onAllyGarrisonReject,
@@ -400,6 +392,7 @@ export function GameCanvas({
   const pollutionZonesRef = useRef(pollutionZones);
   const unitsRef = useRef(units);
   const myPlayerIdRef = useRef(myPlayerId);
+  const teamsRef = useRef(teams);
   const showEnemyVisionRef = useRef(showEnemyVision);
   const showCommStatusRef = useRef(showCommStatus);
   const tickRef = useRef(tick);
@@ -467,7 +460,6 @@ export function GameCanvas({
   const [selectionUi, setSelectionUi] = useState<SelectionView | null>(null);
   /** Building inspect HUD waits until focus-to-center pan finishes. */
   const [inspectHudReady, setInspectHudReady] = useState(false);
-  const [teamPanelOpen, setTeamPanelOpen] = useState(false);
   const [buildMode, setBuildMode] = useState<{
     fromX: number;
     fromY: number;
@@ -555,6 +547,7 @@ export function GameCanvas({
   pollutionZonesRef.current = pollutionZones;
   unitsRef.current = units;
   myPlayerIdRef.current = myPlayerId;
+  teamsRef.current = teams;
   showEnemyVisionRef.current = showEnemyVision;
   showCommStatusRef.current = showCommStatus;
   tickRef.current = tick;
@@ -589,6 +582,8 @@ export function GameCanvas({
         pending.delete(b.id);
         continue;
       }
+      // Island → land-building conversion removes the island instance; not a destroy.
+      if (b.buildingId === "artificial_island") continue;
       if (me == null || b.ownerId !== me) continue;
       added.push({ gx: b.gx, gy: b.gy, expiresAt: now + 12_000 });
     }
@@ -920,6 +915,31 @@ export function GameCanvas({
     setFocusMarks([]);
   };
 
+  /** Open one overlay menu at a time: close mobilize / train / enemy-liaison attack. */
+  const closeCommandOverlays = () => {
+    setMobilize(null);
+    setTrainUi(null);
+    setFocusMarks([]);
+    setEnemyLiaison(null);
+  };
+
+  const openMobilize = (
+    next: NonNullable<typeof mobilize>,
+  ) => {
+    clearSelection();
+    setTrainUi(null);
+    setEnemyLiaison(null);
+    setFocusMarks([]);
+    setMobilize(next);
+  };
+
+  const openTrainUi = (next: NonNullable<typeof trainUi>) => {
+    clearSelection();
+    closeMobilize();
+    setEnemyLiaison(null);
+    setTrainUi(next);
+  };
+
   const planError = useMemo(() => {
     if (!mobilize || !map || !terrain || myPlayerId == null) return null;
     if (mobilize.mode === "attack" && mobilize.targetLiaisonId) return null;
@@ -1062,23 +1082,31 @@ export function GameCanvas({
       focusCenterLeft?: boolean;
       /** Animate building/unit to viewport center, then reveal inspect HUD. */
       focusCenter?: boolean;
+      /** Open inspect HUD (direct click / radial pick). Omit for command-target focus. */
+      showInspect?: boolean;
     },
   ) => {
     const m = mapRef.current;
     if (!m) return;
     const { width: w, height: h } = sizeRef.current;
     const kind = opts?.kind ?? "point";
+    const showInspect = !!opts?.showInspect && (kind === "building" || kind === "unit");
     const useFocusCenter =
-      !!opts?.focusCenter && (kind === "building" || kind === "unit");
+      showInspect && !!opts?.focusCenter && (kind === "building" || kind === "unit");
 
     cancelPendingBuildingFocus();
+    // Point / radial / explicit inspect displace mobilize / train / liaison-attack.
+    // Building/unit focus marks (e.g. mobilize row toggle) must not close those menus.
+    if (kind === "point" || kind === "radial_pick" || showInspect) {
+      closeCommandOverlays();
+    }
 
     if (!useFocusCenter) {
       cancelCameraAnim();
-      if (kind === "unit" && opts?.focusCenterLeft) {
+      if (showInspect && kind === "unit" && opts?.focusCenterLeft) {
         setInspectHudReady(true);
         panGridToScreen(gx, gy, w * UNIT_FOCUS_X_RATIO, h / 2);
-      } else if (kind === "building") {
+      } else if (showInspect && kind === "building") {
         setInspectHudReady(true);
       } else {
         setInspectHudReady(false);
@@ -1089,7 +1117,6 @@ export function GameCanvas({
     if (!screen) return;
     selectionRef.current =
       kind === "point" || kind === "radial_pick" ? { gx, gy } : null;
-    setEnemyLiaison(null);
     // Sync ref before any focus check: setState alone is not visible until re-render,
     // so a sync startFocusAnim would still see the previous selection (e.g. radial_pick)
     // and abort — leaving work-range rings with no camera tween / inspect HUD.
@@ -1102,6 +1129,7 @@ export function GameCanvas({
       buildingId: opts?.buildingId,
       unitId: opts?.unitId,
       radialItems: opts?.radialItems,
+      showInspect: showInspect || undefined,
     };
     selectionUiRef.current = nextUi;
     setSelectionUi(nextUi);
@@ -1113,10 +1141,12 @@ export function GameCanvas({
         const stillSelected =
           kind === "building"
             ? selectionUiRef.current?.kind === "building" &&
-              selectionUiRef.current.buildingId === opts?.buildingId
+              selectionUiRef.current.buildingId === opts?.buildingId &&
+              selectionUiRef.current.showInspect
             : kind === "unit"
               ? selectionUiRef.current?.kind === "unit" &&
-                selectionUiRef.current.unitId === opts?.unitId
+                selectionUiRef.current.unitId === opts?.unitId &&
+                selectionUiRef.current.showInspect
               : false;
         if (!stillSelected) return;
 
@@ -1131,10 +1161,12 @@ export function GameCanvas({
           const stillAfterAnim =
             kind === "building"
               ? selectionUiRef.current?.kind === "building" &&
-                selectionUiRef.current.buildingId === opts?.buildingId
+                selectionUiRef.current.buildingId === opts?.buildingId &&
+                selectionUiRef.current.showInspect
               : kind === "unit"
                 ? selectionUiRef.current?.kind === "unit" &&
-                  selectionUiRef.current.unitId === opts?.unitId
+                  selectionUiRef.current.unitId === opts?.unitId &&
+                  selectionUiRef.current.showInspect
                 : false;
           if (!stillAfterAnim) {
             setInspectHudReady(true);
@@ -1198,7 +1230,7 @@ export function GameCanvas({
     }
   };
 
-  /** Light-cyan ring + path fit + inspect HUD for panel row toggles. */
+  /** Light-cyan ring + path fit for panel row toggles (no inspect HUD). */
   const syncFocus = (
     id: string,
     gx: number,
@@ -1235,7 +1267,7 @@ export function GameCanvas({
     }
 
     const path = opts?.path;
-    const revealHud = () => {
+    const syncScreen = () => {
       const liveGx =
         opts?.kind === "unit" && opts.unitId
           ? (unitsRef.current.find((u) => u.id === opts.unitId)?.gx ?? gx)
@@ -1249,10 +1281,7 @@ export function GameCanvas({
             ? (buildingsRef.current.find((b) => b.id === opts.buildingId)?.gy ?? gy)
             : gy;
       const settled = gridScreenAt(liveGx, liveGy);
-      if (!settled) {
-        setInspectHudReady(true);
-        return;
-      }
+      if (!settled) return;
       setSelectionUi((cur) => {
         if (!cur) return cur;
         if (
@@ -1267,7 +1296,6 @@ export function GameCanvas({
         }
         return cur;
       });
-      setInspectHudReady(true);
     };
 
     if (opts?.kind === "building" && opts.buildingId) {
@@ -1283,10 +1311,9 @@ export function GameCanvas({
     }
 
     if (path && path.length >= 1) {
-      setInspectHudReady(false);
-      fitPathNodes(path, revealHud);
+      fitPathNodes(path, syncScreen);
     } else {
-      setInspectHudReady(true);
+      syncScreen();
     }
   };
 
@@ -1453,7 +1480,13 @@ export function GameCanvas({
     const ownedLiaisonAt = (clientX: number, clientY: number) => {
       const cursor = cursorGridAt(clientX, clientY);
       if (!cursor) return null;
-      const hit = findLiaisonNear(liaisonsRef.current, cursor.gx, cursor.gy, 0.4);
+      const hit = findLiaisonNear(
+        liaisonsRef.current,
+        cursor.gx,
+        cursor.gy,
+        0.4,
+        myPlayerIdRef.current,
+      );
       if (!hit) return null;
       const mine =
         myPlayerIdRef.current == null || hit.ownerId === myPlayerIdRef.current;
@@ -1495,7 +1528,13 @@ export function GameCanvas({
       if (!liaisonEditActiveRef.current) return false;
       const cursor = cursorGridAt(clientX, clientY);
       if (!cursor) return false;
-      const hit = findLiaisonNear(liaisonsRef.current, cursor.gx, cursor.gy, 0.4);
+      const hit = findLiaisonNear(
+        liaisonsRef.current,
+        cursor.gx,
+        cursor.gy,
+        0.4,
+        myPlayerIdRef.current,
+      );
       if (!hit) return false;
       const mine =
         myPlayerIdRef.current == null || hit.ownerId === myPlayerIdRef.current;
@@ -2095,9 +2134,22 @@ export function GameCanvas({
             );
             const hasBuildings = nearBuildings.length > 0;
             const hasUnits = nearUnits.length > 0;
+            // Mobilize / train: map click focuses a target without inspect / closing the menu.
+            const commandMenuActive =
+              mobilizeRef.current != null || trainUiRef.current != null;
 
             // 4: buildings+units → radial; 3: units only → radial
+            // While a command menu is open, skip radial — focus nearest unit as list mark.
             if (hasUnits) {
+              if (commandMenuActive) {
+                const focusU = nearUnits[0]!;
+                log.info("select", "unit focus (command)", focusU.kind, focusU.gx, focusU.gy);
+                setSelectionAt(focusU.gx, focusU.gy, {
+                  kind: "unit",
+                  unitId: focusU.id,
+                });
+                return;
+              }
               const radialItems = buildRadialPickItems(
                 hit.gx,
                 hit.gy,
@@ -2122,7 +2174,7 @@ export function GameCanvas({
               return;
             }
 
-            // 2: buildings only → focus center + BuildingInspectHud
+            // 2: buildings only → inspect HUD (or list focus while mobilize / train open)
             if (hasBuildings) {
               const focusB = nearBuildings[0]!;
               const mine =
@@ -2146,7 +2198,7 @@ export function GameCanvas({
                 }
                 shiftDbl = { id: focusB.id, at: now };
               }
-              // Shift+click: demolish dbl-window only — skip focus pan / inspect HUD.
+              // Shift+click: demolish dbl-window only — skip selection change.
               if (withShift) {
                 cancelPendingBuildingFocus();
                 return;
@@ -2155,7 +2207,9 @@ export function GameCanvas({
               setSelectionAt(focusB.gx, focusB.gy, {
                 kind: "building",
                 buildingId: focusB.id,
-                focusCenter: true,
+                ...(commandMenuActive
+                  ? {}
+                  : { showInspect: true, focusCenter: true }),
               });
               return;
             }
@@ -2168,7 +2222,7 @@ export function GameCanvas({
               return;
             }
           } else {
-            // Spectating / ended: inspect nearest unit then building (R=0.3 Du).
+            // Spectating / ended: nearest unit then building → readonly inspect HUD.
             const nearUnit = findUnitNear(
               unitsRef.current,
               hit.gx,
@@ -2180,6 +2234,7 @@ export function GameCanvas({
               setSelectionAt(nearUnit.gx, nearUnit.gy, {
                 kind: "unit",
                 unitId: nearUnit.id,
+                showInspect: true,
                 focusCenter: true,
               });
               return;
@@ -2194,6 +2249,7 @@ export function GameCanvas({
               setSelectionAt(nearB.gx, nearB.gy, {
                 kind: "building",
                 buildingId: nearB.id,
+                showInspect: true,
                 focusCenter: true,
               });
             }
@@ -2202,10 +2258,23 @@ export function GameCanvas({
         }
         if (phaseRef.current === "playing" && myPlayerIdRef.current) {
           const cursor = cursorGridAt(e.clientX, e.clientY);
+          const me = myPlayerIdRef.current;
           const seg = cursor
-            ? findLiaisonSegmentNear(liaisonsRef.current, cursor.gx, cursor.gy, 0.45)
+            ? findLiaisonSegmentNear(
+                liaisonsRef.current,
+                cursor.gx,
+                cursor.gy,
+                0.45,
+                me,
+                teamsRef.current,
+              )
             : undefined;
-          if (seg && seg.line.ownerId !== myPlayerIdRef.current) {
+          // Ally liaisons → half-ring point menu (same as own); only true enemies attack.
+          if (
+            seg &&
+            seg.line.ownerId !== me &&
+            !isFriendly(teamsRef.current, seg.line.ownerId, me)
+          ) {
             if ((seg.line.buildTicksRemaining ?? 0) > 0) {
               logLocalReject({
                 action: "attack_units",
@@ -2223,6 +2292,9 @@ export function GameCanvas({
                 selectionRef.current = null;
                 selectionUiRef.current = null;
                 setSelectionUi(null);
+                setMobilize(null);
+                setTrainUi(null);
+                setFocusMarks([]);
                 setEnemyLiaison({
                   id: seg.line.id,
                   ax: a.gx,
@@ -2457,6 +2529,7 @@ export function GameCanvas({
       ground,
     });
     clearSelection();
+    closeCommandOverlays();
     setBuildMode({
       fromX,
       fromY,
@@ -2530,13 +2603,13 @@ export function GameCanvas({
 
     if (id === "mobilize" && phaseRef.current === "playing") {
       const dest = snapToUnitCoord(selectionUi.gx, selectionUi.gy);
-      setMobilize({ mode: "move", gx: dest.gx, gy: dest.gy, sources: {}, unitIds: [] });
+      openMobilize({ mode: "move", gx: dest.gx, gy: dest.gy, sources: {}, unitIds: [] });
       return;
     }
 
     if (id === "lockdown" && phaseRef.current === "playing") {
       const dest = snapToUnitCoord(selectionUi.gx, selectionUi.gy);
-      setMobilize({ mode: "blockade", gx: dest.gx, gy: dest.gy, sources: {}, unitIds: [] });
+      openMobilize({ mode: "blockade", gx: dest.gx, gy: dest.gy, sources: {}, unitIds: [] });
       return;
     }
 
@@ -2593,6 +2666,7 @@ export function GameCanvas({
       : null;
   const inspectOpen =
     !!inspectedBuilding &&
+    !!selectionUi?.showInspect &&
     !buildMode &&
     (phase === "playing" || phase === "spectating" || phase === "ended");
   const canAct = phase === "playing";
@@ -2608,6 +2682,7 @@ export function GameCanvas({
   // Dim map while BuildingInspectHud / UnitInspectHud is showing (after focus settle).
   const unitInspectOpen =
     !!inspectedUnit &&
+    !!selectionUi?.showInspect &&
     inspectHudReady &&
     !buildMode &&
     (phase === "playing" || phase === "spectating" || phase === "ended");
@@ -2630,6 +2705,7 @@ export function GameCanvas({
       setSelectionAt(live.gx, live.gy, {
         kind: "building",
         buildingId: live.id,
+        showInspect: selectionUi.showInspect,
       });
     }
   }, [buildings, selectionUi?.buildingId]);
@@ -2670,6 +2746,7 @@ export function GameCanvas({
         screenX: screen.x,
         screenY: screen.y,
         unitId: live.id,
+        showInspect: selectionUi.showInspect,
       };
       selectionUiRef.current = nextUi;
       setSelectionUi(nextUi);
@@ -2969,6 +3046,7 @@ export function GameCanvas({
                 setSelectionAt(b.gx, b.gy, {
                   kind: "building",
                   buildingId: b.id,
+                  showInspect: true,
                   focusCenter: true,
                 });
                 return;
@@ -2980,6 +3058,7 @@ export function GameCanvas({
                 setSelectionAt(u.gx, u.gy, {
                   kind: "unit",
                   unitId: u.id,
+                  showInspect: true,
                   focusCenter: true,
                 });
               }
@@ -2988,6 +3067,7 @@ export function GameCanvas({
         )}
       {selectionUi &&
         selectionUi.kind === "building" &&
+        selectionUi.showInspect &&
         inspectedBuilding &&
         inspectHudReady &&
         !buildMode &&
@@ -3034,7 +3114,7 @@ export function GameCanvas({
                   return;
                 }
                 const dest = snapToUnitCoord(b.gx, b.gy);
-                setMobilize({
+                openMobilize({
                   mode: "attack",
                   gx: dest.gx,
                   gy: dest.gy,
@@ -3046,7 +3126,7 @@ export function GameCanvas({
               }
               if (action === "garrison") {
                 const dest = snapToUnitCoord(b.gx, b.gy);
-                setMobilize({
+                openMobilize({
                   mode: "hold",
                   gx: dest.gx,
                   gy: dest.gy,
@@ -3067,7 +3147,7 @@ export function GameCanvas({
               }
               if (action === "supply") {
                 const dest = snapToUnitCoord(b.gx, b.gy);
-                setMobilize({
+                openMobilize({
                   mode: "supply",
                   gx: dest.gx,
                   gy: dest.gy,
@@ -3172,8 +3252,7 @@ export function GameCanvas({
                   return;
                 }
                 const dest = snapToUnitCoord(b.gx, b.gy);
-                setFocusMarks([]);
-                setMobilize({
+                openMobilize({
                   mode: "assign",
                   gx: dest.gx,
                   gy: dest.gy,
@@ -3184,8 +3263,7 @@ export function GameCanvas({
                 return;
               }
               if (action === "train") {
-                setFocusMarks([]);
-                setTrainUi({
+                openTrainUi({
                   sourceId: b.id,
                   kind: "infantry",
                   u: 1,
@@ -3195,6 +3273,8 @@ export function GameCanvas({
               }
               if (action === "upgrade") {
                 const ground = groundAt(b.gx, b.gy);
+                clearSelection();
+                closeCommandOverlays();
                 setBuildMode({
                   fromX: selectionUi.screenX,
                   fromY: selectionUi.screenY,
@@ -3203,13 +3283,13 @@ export function GameCanvas({
                   currentBuildingId: b.buildingId,
                   ground,
                 });
-                clearSelection();
               }
             }}
           />
         )}
       {selectionUi &&
         selectionUi.kind === "unit" &&
+        selectionUi.showInspect &&
         inspectedUnit &&
         inspectHudReady &&
         !buildMode &&
@@ -3248,7 +3328,7 @@ export function GameCanvas({
                   return;
                 }
                 const dest = snapToUnitCoord(u.gx, u.gy);
-                setMobilize({
+                openMobilize({
                   mode: "attack",
                   gx: dest.gx,
                   gy: dest.gy,
@@ -3291,7 +3371,7 @@ export function GameCanvas({
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => {
                 e.stopPropagation();
-                setMobilize({
+                openMobilize({
                   mode: "attack",
                   gx: enemyLiaison.gx,
                   gy: enemyLiaison.gy,
@@ -3303,7 +3383,6 @@ export function GameCanvas({
                   liaisonBx: enemyLiaison.bx,
                   liaisonBy: enemyLiaison.by,
                 });
-                setEnemyLiaison(null);
               }}
             >
               <span className="point-action-icon" aria-hidden>
@@ -3450,33 +3529,6 @@ export function GameCanvas({
                 unitIds: has ? cur.unitIds.filter((x) => x !== id) : [...cur.unitIds, id],
               };
             });
-          }}
-          onStop={() => {
-            const pool =
-              mobilize.unitIds.length > 0
-                ? units.filter((u) => mobilize.unitIds.includes(u.id))
-                : units.filter(
-                    (u) =>
-                      isMovingState(u.state) ||
-                      u.state === "blockading" ||
-                      u.state === "holding",
-                  );
-            const stoppable = pool
-              .filter(
-                (u) =>
-                  myPlayerId != null &&
-                  u.ownerId === myPlayerId &&
-                  canUnitStop(u, { buildings, units }),
-              )
-              .map((u) => u.id);
-            if (stoppable.length > 0) onStopUnits?.(stoppable, false);
-            else {
-              logLocalReject({
-                action: "stop_units",
-                summary: "停止",
-                reason: "没有可停止的单位",
-              });
-            }
           }}
           onGo={() => {
             const sources = Object.entries(mobilize.sources).map(([buildingId, u]) => ({
@@ -3783,29 +3835,6 @@ export function GameCanvas({
           />
         </div>
       )}
-      <TeamPanelButton
-        visible={
-          phase === "pick_capital" &&
-          playerNames.length >= 3 &&
-          !!myPlayerId
-        }
-        onClick={() => setTeamPanelOpen(true)}
-      />
-      {myPlayerId ? (
-        <TeamPanel
-          open={teamPanelOpen}
-          onClose={() => setTeamPanelOpen(false)}
-          myPlayerId={myPlayerId}
-          players={playerNames}
-          teams={teams ?? {}}
-          invites={teamInvites}
-          frozen={buildings.some((b) => b.buildingId === "capital" && b.hp > 0)}
-          onInvite={(id) => onTeamInvite?.(id)}
-          onAccept={(id) => onTeamInviteAccept?.(id)}
-          onReject={(id) => onTeamInviteReject?.(id)}
-          onLeave={() => onTeamLeave?.()}
-        />
-      ) : null}
     </>
   );
 }

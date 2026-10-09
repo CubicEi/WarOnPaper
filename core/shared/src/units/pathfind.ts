@@ -7,8 +7,11 @@ import type { MapConfig } from "../map.js";
 import type { TerrainMap } from "../terrain/types.js";
 import { cellAt } from "../terrain/types.js";
 import { cellsTouchingUnitCoord } from "../terrain/capitalSite.js";
+import { BUILDING_BY_ID } from "../buildings/catalog.js";
 import {
   distancePointToSegment,
+  pathSegmentKeys,
+  segmentKey,
   type PlacedLiaison,
 } from "../buildings/liaison.js";
 import type { WorkRangeCircle } from "../buildings/workRange.js";
@@ -36,6 +39,24 @@ const NEIGHBOR_DIRS: Array<[number, number]> = [
 
 export type TransportKind = "road" | "railway" | null;
 
+/** Segment keys covered by this owner's liaisons (any kind / build state). */
+function ownLiaisonSegmentKeys(
+  liaisons: readonly PlacedLiaison[],
+  ownerId: string,
+): Set<string> {
+  const keys = new Set<string>();
+  for (const line of liaisons) {
+    if (line.ownerId !== ownerId || line.nodes.length < 2) continue;
+    for (const k of pathSegmentKeys(line.nodes)) keys.add(k);
+  }
+  return keys;
+}
+
+/**
+ * Transport under a unit coord.
+ * Own completed road/railway always counts; enemy completed roads count only when
+ * that road segment covers an own liaison edge (借道).
+ */
 export function transportAt(
   gx: number,
   gy: number,
@@ -44,17 +65,33 @@ export function transportAt(
 ): TransportKind {
   let best: TransportKind = null;
   let bestD = ON_TRANSPORT_EPS;
+  let ownKeys: Set<string> | null = null;
+
   for (const line of liaisons) {
-    if (line.ownerId !== ownerId) continue;
     if (line.buildTicksRemaining > 0) continue;
-    if (line.kind !== "road" && line.kind !== "railway") continue;
     if (line.nodes.length < 2) continue;
+
+    const isOwn = line.ownerId === ownerId;
+    if (isOwn) {
+      if (line.kind !== "road" && line.kind !== "railway") continue;
+    } else {
+      // 借道: only enemy roads that cover own liaison segments
+      if (line.kind !== "road") continue;
+      ownKeys ??= ownLiaisonSegmentKeys(liaisons, ownerId);
+      if (ownKeys.size === 0) continue;
+    }
+
     for (let i = 1; i < line.nodes.length; i++) {
-      const d = distancePointToSegment(gx, gy, line.nodes[i - 1]!, line.nodes[i]!);
+      const a = line.nodes[i - 1]!;
+      const b = line.nodes[i]!;
+      if (!isOwn) {
+        if (!ownKeys!.has(segmentKey(a, b))) continue;
+      }
+      const d = distancePointToSegment(gx, gy, a, b);
       if (d <= bestD) {
         bestD = d;
-        best = line.kind;
-        if (line.kind === "railway") return "railway";
+        best = line.kind === "railway" ? "railway" : "road";
+        if (best === "railway") return "railway";
       }
     }
   }
@@ -94,9 +131,21 @@ export function isFoothillTerrain(map: TerrainMap, gx: number, gy: number): bool
   return hasMountain && hasLand;
 }
 
-/** Pure mountain (山区): touches mountain and is not foothill. */
+/** Touches at least one ocean cell (海岸线节点 / 海崖). */
+function touchesOcean(map: TerrainMap, gx: number, gy: number): boolean {
+  return touchesGround(map, gx, gy, "ocean");
+}
+
+/**
+ * Pure mountain (山区): touches mountain, is not foothill, and is not coastline.
+ * Mountain+ocean cliffs count as coastline so armor can leave coastal barracks.
+ */
 export function isPureMountainTerrain(map: TerrainMap, gx: number, gy: number): boolean {
-  return isMountainTerrain(map, gx, gy) && !isFoothillTerrain(map, gx, gy);
+  return (
+    isMountainTerrain(map, gx, gy) &&
+    !isFoothillTerrain(map, gx, gy) &&
+    !touchesOcean(map, gx, gy)
+  );
 }
 
 export function isOceanTerrain(map: TerrainMap, gx: number, gy: number): boolean {
@@ -118,11 +167,38 @@ function isLandKind(kind: UnitKind): boolean {
 export interface TerrainAllowOpts {
   liaisons?: readonly PlacedLiaison[];
   ownerId?: string;
+  /**
+   * Own non-sea-only buildings act as land pads on open sea (artificial-island
+   * platforms) so land units can deploy / path onto those nodes.
+   */
+  buildings?: readonly {
+    gx: number;
+    gy: number;
+    ownerId: string;
+    buildingId: string;
+  }[];
+}
+
+function ownLandPadAt(
+  gx: number,
+  gy: number,
+  opts?: TerrainAllowOpts,
+): boolean {
+  const buildings = opts?.buildings;
+  const ownerId = opts?.ownerId;
+  if (!buildings || ownerId == null) return false;
+  const key = unitCoordKey(gx, gy);
+  return buildings.some(
+    (b) =>
+      b.ownerId === ownerId &&
+      unitCoordKey(b.gx, b.gy) === key &&
+      !BUILDING_BY_ID[b.buildingId]?.flags?.seaOnly,
+  );
 }
 
 /**
  * Walkability for a unit kind at a point.
- * Land may enter pure ocean only when standing on own completed road/railway.
+ * Land may enter pure ocean only on own land-pad buildings or completed road/railway.
  * Navy requires pure ocean (port coastline cells use allowImpassableStart/Goal).
  */
 export function terrainAllowsKind(
@@ -134,12 +210,13 @@ export function terrainAllowsKind(
 ): boolean {
   if (kind === "air") return true;
   const def = UNIT_BY_KIND[kind];
-  // Armor blocks 山区 only; foothill (山脚) remains passable for deploy/move.
+  // Armor blocks 山区 only; foothill (山脚) and coastline remain passable.
   if (def.mountainBlocked && isPureMountainTerrain(map, gx, gy)) return false;
   if (kind === "navy" || kind === "navy_carrier") {
     return isOceanTerrain(map, gx, gy);
   }
   if (isOceanTerrain(map, gx, gy)) {
+    if (ownLandPadAt(gx, gy, opts)) return true;
     const liaisons = opts?.liaisons;
     const ownerId = opts?.ownerId;
     if (!liaisons || ownerId == null) return false;
@@ -280,7 +357,7 @@ export type ActivityRangeLabel = "radio" | "port";
 /**
  * Minimum-time path on the 0.2 grid.
  * `ignoreCoverage` skips radio/port range checks (training delivery, retreat, reassignment).
- * `ignoreTerrain` skips walkability (retreat). Navy training embarks onto ocean then paths normally.
+ * `ignoreTerrain` skips walkability (legacy retreat shortcut; land retreat must not use it).
  * `allowImpassableStart` / `allowImpassableGoal` let navy use a coastline port cell.
  * Goals outside an active range are rejected (not clamped).
  */
@@ -295,9 +372,11 @@ export function planLandOrNavyPath(args: {
   liaisons: readonly PlacedLiaison[];
   ownerId: string;
   coverage: readonly WorkRangeCircle[];
+  /** Own buildings for ocean land-pad walkability. */
+  buildings?: TerrainAllowOpts["buildings"];
   /** Training delivery / retreat: skip radio or port range checks. */
   ignoreCoverage?: boolean;
-  /** Retreat: path across any terrain. */
+  /** Skip walkability (do not use for land retreat — ocean must stay blocked). */
   ignoreTerrain?: boolean;
   /** Port cell is a legal navy departure even when it is not pure ocean. */
   allowImpassableStart?: boolean;
@@ -322,7 +401,11 @@ export function planLandOrNavyPath(args: {
     : isLandKind(kind)
       ? "无法到达目标（地形、水域或通信范围）"
       : "无法到达目标（地形或通信范围）";
-  const terrainOpts: TerrainAllowOpts = { liaisons, ownerId };
+  const terrainOpts: TerrainAllowOpts = {
+    liaisons,
+    ownerId,
+    buildings: args.buildings,
+  };
 
   if (coverage.length > 0 && !isInsideAnyCircle(start.gx, start.gy, coverage)) {
     return { path: [], travelTimeSec: 0, error: startRangeError };
@@ -335,54 +418,6 @@ export function planLandOrNavyPath(args: {
   }
 
   const sameCell = unitCoordKey(start.gx, start.gy) === unitCoordKey(goal.gx, goal.gy);
-  // #region agent log
-  if (kind === "armor") {
-    const cells = cellsTouchingUnitCoord(terrain, start.gx, start.gy).map(
-      ({ x, y }) => ({
-        x,
-        y,
-        g: cellAt(terrain, x, y)?.ground ?? null,
-      }),
-    );
-    const anyMtn = isMountainTerrain(terrain, start.gx, start.gy);
-    const foothill = isFoothillTerrain(terrain, start.gx, start.gy);
-    const pureMtn = isPureMountainTerrain(terrain, start.gx, start.gy);
-    const allows = terrainAllowsKind(
-      kind,
-      terrain,
-      start.gx,
-      start.gy,
-      terrainOpts,
-    );
-    fetch("http://127.0.0.1:7277/ingest/6741dc77-72e2-46ba-9a2a-c7dd9d84b7e9", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "676d95",
-      },
-      body: JSON.stringify({
-        sessionId: "676d95",
-        runId: "pre-fix",
-        hypothesisId: "A_B_C",
-        location: "pathfind.ts:planLandOrNavyPath:armorStart",
-        message: "armor path start classify",
-        data: {
-          start,
-          goal,
-          anyMtn,
-          foothill,
-          pureMtn,
-          allows,
-          oldWouldBlock: anyMtn,
-          hasLand: cells.some((c) => c.g === "land"),
-          hasOcean: cells.some((c) => c.g === "ocean"),
-          cells,
-        },
-        timestamp: Date.now(),
-      }),
-    }).catch(() => {});
-  }
-  // #endregion
   const startOk =
     ignoreTerrain ||
     allowImpassableStart ||
@@ -392,45 +427,6 @@ export function planLandOrNavyPath(args: {
       isLandKind(kind) && isOceanTerrain(terrain, start.gx, start.gy)
         ? LAND_WATER_ERROR
         : "起点地形不可通行";
-    // #region agent log
-    {
-      const cells = cellsTouchingUnitCoord(terrain, start.gx, start.gy).map(
-        ({ x, y }) => ({
-          x,
-          y,
-          g: cellAt(terrain, x, y)?.ground ?? null,
-        }),
-      );
-      fetch("http://127.0.0.1:7277/ingest/6741dc77-72e2-46ba-9a2a-c7dd9d84b7e9", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Debug-Session-Id": "676d95",
-        },
-        body: JSON.stringify({
-          sessionId: "676d95",
-          runId: "pre-fix",
-          hypothesisId: "D_E",
-          location: "pathfind.ts:planLandOrNavyPath:reject",
-          message: "start terrain rejected",
-          data: {
-            kind,
-            start,
-            goal,
-            err,
-            ignoreTerrain,
-            allowImpassableStart,
-            anyMtn: isMountainTerrain(terrain, start.gx, start.gy),
-            foothill: isFoothillTerrain(terrain, start.gx, start.gy),
-            pureMtn: isPureMountainTerrain(terrain, start.gx, start.gy),
-            ocean: isOceanTerrain(terrain, start.gx, start.gy),
-            cells,
-          },
-          timestamp: Date.now(),
-        }),
-      }).catch(() => {});
-    }
-    // #endregion
     return { path: [], travelTimeSec: 0, error: err };
   }
   const goalOk =

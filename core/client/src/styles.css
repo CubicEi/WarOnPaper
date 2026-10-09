@@ -49,11 +49,18 @@ body,
   top: 16px;
   left: 16px;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
   z-index: 2;
   pointer-events: none;
   user-select: none;
+}
+
+.hud-left-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  flex: 0 0 auto;
 }
 
 .hp-ring {
@@ -638,10 +645,12 @@ body,
   position: absolute;
   left: 16px;
   top: 72px;
+  bottom: 16px;
   z-index: 5;
   width: 240px;
-  max-height: 50vh;
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: rgba(22, 22, 22, 0.92);
   color: #f2f2f2;
   border: 1px solid #5a5a5a;
@@ -656,6 +665,7 @@ body,
   justify-content: space-between;
   gap: 8px;
   flex-wrap: wrap;
+  flex: 0 0 auto;
 }
 
 .mobilize-error {
@@ -667,10 +677,29 @@ body,
   list-style: none;
   margin: 8px 0;
   padding: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .mobilize-list li {
   margin: 4px 0;
+}
+
+.mobilize-section {
+  margin: 10px 0 4px !important;
+  padding-top: 6px;
+  border-top: 1px solid #4a4a4a;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: #9a958c;
+  pointer-events: none;
+}
+
+.mobilize-section:first-child {
+  margin-top: 0 !important;
+  padding-top: 0;
+  border-top: none;
 }
 
 .mobilize-list label {
@@ -2177,22 +2206,32 @@ body,
 
 /* —— Team mode —— */
 .team-panel-fab {
-  position: absolute;
-  top: 12px;
-  left: 12px;
-  z-index: 40;
-  width: 44px;
-  height: 44px;
-  padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  border-radius: 8px;
-  background: rgba(20, 22, 28, 0.88);
+  pointer-events: auto;
   cursor: pointer;
-  display: grid;
-  place-items: center;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin-top: 8px;
+  background: #ffffff;
+  border: 1px solid #c8c4bc;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
 }
 .team-panel-fab img {
-  display: block;
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+.team-panel-fab:hover {
+  border-color: #9a958c;
+}
+.team-panel-fab:active {
+  transform: translateY(1px);
 }
 .team-panel-backdrop {
   position: absolute;

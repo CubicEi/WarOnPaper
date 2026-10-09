@@ -2,8 +2,6 @@ import {
   BUILDING_BY_ID,
   UNIT_BY_KIND,
   UNIT_MOVE_O_COST,
-  UNIT_STOP_E_COST,
-  UNIT_STOP_O_COST,
   UNIT_BLOCKADE_O_COST,
   UNIT_BLOCKADE_ENTER_E_PER_U,
   UNIT_SUPPLY_O_COST,
@@ -11,7 +9,6 @@ import {
   UNIT_HOLD_ENTER_E_PER_U,
   UNIT_ATTACK_LAND_O_COST,
   UNIT_ATTACK_AIR_NAVY_O_COST,
-  canUnitStop,
   isMovingState,
   unitKindFromBuilding,
   usesCarriedSupply,
@@ -35,7 +32,6 @@ interface Props {
   unitIds: string[];
   onToggleSource: (buildingId: string, u: number) => void;
   onToggleUnit: (id: string) => void;
-  onStop: () => void;
   onGo: () => void;
   onEndBlockade?: () => void;
   onEndHold?: () => void;
@@ -44,6 +40,15 @@ interface Props {
   assignBuildingId?: string;
   /** Path / room error from a dry-run of the current selection. */
   planError?: string | null;
+}
+
+function distTo(
+  gx: number,
+  gy: number,
+  destGx: number,
+  destGy: number,
+): number {
+  return Math.hypot(gx - destGx, gy - destGy);
 }
 
 export function MobilizePanel({
@@ -59,7 +64,6 @@ export function MobilizePanel({
   unitIds,
   onToggleSource,
   onToggleUnit,
-  onStop,
   onGo,
   onEndBlockade,
   onEndHold,
@@ -78,27 +82,40 @@ export function MobilizePanel({
   const assignKind = assignBuilding
     ? unitKindFromBuilding(assignBuilding.buildingId)
     : null;
-  const garrison = isAssign
-    ? []
-    : buildings.filter((b) => {
-    if (myPlayerId == null || b.ownerId !== myPlayerId) return false;
-    if ((b.u ?? 0) < 1) return false;
-    const kind = unitKindFromBuilding(b.buildingId);
-    if (!kind) return false;
-    if (isSupply && !usesCarriedSupply(kind)) return false;
-    if (b.buildTicksRemaining > 0) return false;
-    if (garrisonLockedInBuilding(b.buildingId)) return false;
-    return true;
-  });
-  const fielded = units.filter((u) => {
-    if (myPlayerId == null || u.ownerId !== myPlayerId) return false;
-    if (isSupply && !usesCarriedSupply(u.kind)) return false;
-    if (isAssign) {
-      if (!assignKind || u.kind !== assignKind) return false;
-      if (u.state === "training" || u.retreating) return false;
-    }
-    return true;
-  });
+  const garrison = (
+    isAssign
+      ? []
+      : buildings.filter((b) => {
+          if (myPlayerId == null || b.ownerId !== myPlayerId) return false;
+          if ((b.u ?? 0) < 1) return false;
+          const kind = unitKindFromBuilding(b.buildingId);
+          if (!kind) return false;
+          if (isSupply && !usesCarriedSupply(kind)) return false;
+          if (b.buildTicksRemaining > 0) return false;
+          if (garrisonLockedInBuilding(b.buildingId)) return false;
+          return true;
+        })
+  )
+    .slice()
+    .sort(
+      (a, b) =>
+        distTo(a.gx, a.gy, destGx, destGy) - distTo(b.gx, b.gy, destGx, destGy),
+    );
+  const fielded = units
+    .filter((u) => {
+      if (myPlayerId == null || u.ownerId !== myPlayerId) return false;
+      if (isSupply && !usesCarriedSupply(u.kind)) return false;
+      if (isAssign) {
+        if (!assignKind || u.kind !== assignKind) return false;
+        if (u.state === "training" || u.retreating) return false;
+      }
+      return true;
+    })
+    .slice()
+    .sort(
+      (a, b) =>
+        distTo(a.gx, a.gy, destGx, destGy) - distTo(b.gx, b.gy, destGx, destGy),
+    );
   const blockadingSelected = fielded.filter(
     (u) => unitIds.includes(u.id) && u.state === "blockading",
   );
@@ -143,74 +160,60 @@ export function MobilizePanel({
     selected &&
     !planError &&
     organization >= orgCost &&
-    ((isBlockade || isHold) ? energy >= enterE : true);
-  const dock = { buildings, units };
-  const canStop =
-    (unitIds.length > 0
-      ? unitIds.some((id) => {
-          const u = units.find((x) => x.id === id);
-          return !!u && u.ownerId === myPlayerId && canUnitStop(u, dock);
-        })
-      : fielded.some(
-          (u) =>
-            canUnitStop(u, dock) &&
-            (isMovingState(u.state) ||
-              u.state === "blockading" ||
-              u.state === "holding"),
-        )) &&
-    organization >= UNIT_STOP_O_COST &&
-    energy >= UNIT_STOP_E_COST;
+    (isBlockade || isHold ? energy >= enterE : true);
   const canEndBlockade = isBlockade && blockadingSelected.length > 0;
   const canEndHold = isHold && holdingSelected.length > 0;
 
   const title = isAssign
     ? "部署归属"
     : isSupply
-    ? "补给"
-    : isHold
-      ? "驻守"
-      : isAttack
-        ? "进攻"
-        : isBlockade
-          ? "封锁"
-          : "调动";
+      ? "补给"
+      : isHold
+        ? "驻守"
+        : isAttack
+          ? "进攻"
+          : isBlockade
+            ? "封锁"
+            : "调动";
   const goLabel = isAssign
     ? "归属"
     : isSupply
-    ? "补给"
-    : isHold
-      ? "驻守"
-      : isAttack
-        ? "进攻"
-        : isBlockade
-          ? "封锁"
-          : "出发";
+      ? "补给"
+      : isHold
+        ? "驻守"
+        : isAttack
+          ? "进攻"
+          : isBlockade
+            ? "封锁"
+            : "出发";
   const emptyLabel = isAssign
     ? "没有外出的同类型单位"
     : isSupply
-    ? "没有可补给的陆海军单位"
-    : isHold
-      ? "没有可驻守的单位"
-      : isAttack
-        ? "没有可进攻的单位"
-        : isBlockade
-          ? "没有可封锁的单位"
-          : "没有可调动的单位";
+      ? "没有可补给的陆海军单位"
+      : isHold
+        ? "没有可驻守的单位"
+        : isAttack
+          ? "没有可进攻的单位"
+          : isBlockade
+            ? "没有可封锁的单位"
+            : "没有可调动的单位";
   const costLabel = isAssign
     ? selected
       ? `归属 ${orgCost} O（${groupCount} 组，无视电台）`
       : `归属 ${UNIT_MOVE_O_COST} O/组`
     : isSupply
-    ? `${orgCost} O（到达后从站内补携行）`
-    : isHold
-      ? `进入 ${orgCost} O + ${enterE} E`
-      : isAttack
-        ? `进攻 ${orgCost} O（陆/火箭 ${UNIT_ATTACK_LAND_O_COST} · 空/海 ${UNIT_ATTACK_AIR_NAVY_O_COST}）`
-        : isBlockade
-          ? `进入 ${orgCost} O + ${enterE} E`
-          : selected
-            ? `出发 ${orgCost} O（${groupCount} 组）`
-            : `出发 ${UNIT_MOVE_O_COST} O/组`;
+      ? `${orgCost} O（到达后从站内补携行）`
+      : isHold
+        ? `进入 ${orgCost} O + ${enterE} E`
+        : isAttack
+          ? `进攻 ${orgCost} O（陆/火箭 ${UNIT_ATTACK_LAND_O_COST} · 空/海 ${UNIT_ATTACK_AIR_NAVY_O_COST}）`
+          : isBlockade
+            ? `进入 ${orgCost} O + ${enterE} E`
+            : selected
+              ? `出发 ${orgCost} O（${groupCount} 组）`
+              : `出发 ${UNIT_MOVE_O_COST} O/组`;
+
+  const empty = garrison.length === 0 && fielded.length === 0;
 
   return (
     <div className="mobilize-panel" onPointerDown={(e) => e.stopPropagation()}>
@@ -223,6 +226,38 @@ export function MobilizePanel({
         </button>
       </div>
       <ul className="mobilize-list">
+        {fielded.length > 0 && (
+          <li className="mobilize-section" aria-hidden>
+            野外单位
+          </li>
+        )}
+        {fielded.map((u) => {
+          const on = unitIds.includes(u.id);
+          const stateLabel =
+            u.state === "fighting"
+              ? " · 交战中"
+              : u.state === "blockading"
+                ? " · 封锁中"
+                : u.state === "holding"
+                  ? " · 驻守中"
+                  : isMovingState(u.state)
+                    ? " · 移动中"
+                    : "";
+          return (
+            <li key={u.id}>
+              <label>
+                <input type="checkbox" checked={on} onChange={() => onToggleUnit(u.id)} />
+                已派出 {UNIT_BY_KIND[u.kind].name} {u.u}U
+                {stateLabel}
+              </label>
+            </li>
+          );
+        })}
+        {garrison.length > 0 && (
+          <li className="mobilize-section" aria-hidden>
+            建筑驻军
+          </li>
+        )}
         {garrison.map((b) => {
           const name = BUILDING_BY_ID[b.buildingId]?.name ?? b.buildingId;
           const kind = unitKindFromBuilding(b.buildingId);
@@ -241,29 +276,7 @@ export function MobilizePanel({
             </li>
           );
         })}
-        {fielded.map((u) => {
-          const on = unitIds.includes(u.id);
-          const stateLabel =
-            u.state === "fighting"
-              ? " · 交战中"
-              : u.state === "blockading"
-              ? " · 封锁中"
-              : u.state === "holding"
-                ? " · 驻守中"
-                : isMovingState(u.state)
-                  ? " · 移动中"
-                  : "";
-          return (
-            <li key={u.id}>
-              <label>
-                <input type="checkbox" checked={on} onChange={() => onToggleUnit(u.id)} />
-                已派出 {UNIT_BY_KIND[u.kind].name} {u.u}U
-                {stateLabel}
-              </label>
-            </li>
-          );
-        })}
-        {garrison.length === 0 && fielded.length === 0 && <li>{emptyLabel}</li>}
+        {empty && <li>{emptyLabel}</li>}
       </ul>
       <div className="mobilize-foot">
         <span>{costLabel}</span>
@@ -281,14 +294,6 @@ export function MobilizePanel({
             结束驻守
           </button>
         ) : null}
-        <button
-          type="button"
-          disabled={!canStop}
-          onClick={onStop}
-          title={`停止 ${UNIT_STOP_E_COST}E ${UNIT_STOP_O_COST}O`}
-        >
-          停止
-        </button>
       </div>
     </div>
   );

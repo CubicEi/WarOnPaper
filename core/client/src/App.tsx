@@ -14,6 +14,7 @@ import { GameCanvas } from "./canvas/GameCanvas";
 import { DebugOverlay, type DebugErrorEntry } from "./components/DebugOverlay";
 import { ErrorToast } from "./components/ErrorToast";
 import { HudOverlay } from "./components/HudOverlay";
+import { TeamPanel, TeamPanelButton } from "./components/TeamPanel";
 import { useGameSocket } from "./net/useGameSocket";
 import { log } from "./net/log";
 import { logLocalReject } from "./debug/playerActionLog";
@@ -95,6 +96,7 @@ export function App() {
   const [debugOpen, setDebugOpen] = useState(false);
   const [showEnemyVision, setShowEnemyVision] = useState(false);
   const [showCommStatus, setShowCommStatus] = useState(false);
+  const [teamPanelOpen, setTeamPanelOpen] = useState(false);
   const [errorLog, setErrorLog] = useState<DebugErrorEntry[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastKey, setToastKey] = useState(0);
@@ -536,16 +538,7 @@ export function App() {
         myPlayerId={playerId}
         teams={state?.teams ?? null}
         teamMode={!!state?.teamMode}
-        teamInvites={state?.teamInvites ?? []}
         allyGarrisonRequests={state?.allyGarrisonRequests ?? []}
-        onTeamInvite={(toPlayerId) => send({ type: "team_invite", toPlayerId })}
-        onTeamInviteAccept={(fromPlayerId) =>
-          send({ type: "team_invite_accept", fromPlayerId })
-        }
-        onTeamInviteReject={(fromPlayerId) =>
-          send({ type: "team_invite_reject", fromPlayerId })
-        }
-        onTeamLeave={() => send({ type: "team_leave" })}
         onAllyGarrisonRequest={(unitId, buildingId) =>
           send({ type: "ally_garrison_request", unitId, buildingId })
         }
@@ -595,8 +588,35 @@ export function App() {
         <HudOverlay
           hud={state.you}
           windowHudSize={windowHudSize}
+          belowRing={
+            <TeamPanelButton
+              visible={
+                phase === "pick_capital" &&
+                (state.players?.length ?? 0) >= 3 &&
+                !!playerId
+              }
+              onClick={() => setTeamPanelOpen(true)}
+            />
+          }
         />
       )}
+      {playerId && state ? (
+        <TeamPanel
+          open={teamPanelOpen}
+          onClose={() => setTeamPanelOpen(false)}
+          myPlayerId={playerId}
+          players={state.players ?? []}
+          teams={state.teams ?? {}}
+          invites={state.teamInvites ?? []}
+          frozen={(state.buildings ?? []).some(
+            (b) => b.buildingId === "capital" && b.hp > 0,
+          )}
+          onInvite={(id) => send({ type: "team_invite", toPlayerId: id })}
+          onAccept={(id) => send({ type: "team_invite_accept", fromPlayerId: id })}
+          onReject={(id) => send({ type: "team_invite_reject", fromPlayerId: id })}
+          onLeave={() => send({ type: "team_leave" })}
+        />
+      ) : null}
       <ErrorToast
         message={toastMessage}
         toastKey={toastKey}

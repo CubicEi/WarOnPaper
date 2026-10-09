@@ -489,6 +489,7 @@ function nudgeOffBuildingCenters(
     return terrainAllowsKind(unit.kind, terrain, x, y, {
       liaisons,
       ownerId: unit.ownerId,
+      buildings,
     });
   });
   unit.gx = free.gx;
@@ -573,6 +574,7 @@ function yieldOffBuildingCenters(
       return terrainAllowsKind(unit.kind, terrain, x, y, {
         liaisons,
         ownerId: unit.ownerId,
+        buildings,
       });
     });
     const nextKey = unitCoordKey(free.gx, free.gy);

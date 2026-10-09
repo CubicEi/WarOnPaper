@@ -111,6 +111,8 @@ export function BuildingInspectHud({
 }: Props) {
   const owned = myPlayerId != null && building.ownerId === myPlayerId;
   const mine = !readOnly && !isAlly && owned;
+  /** Own or ally: full inspect info (ally stays readonly via `mine`). */
+  const friendlyInfo = owned || isAlly;
   const polluted = !!building.polluted;
   const vision =
     building.visionLevel ?? (owned || isAlly ? "direct" : "satellite");
@@ -124,13 +126,16 @@ export function BuildingInspectHud({
 
   const def = BUILDING_BY_ID[building.buildingId];
   const name = def?.name ?? building.buildingId;
-  const storeEMax = mine ? (def?.storeEMax ?? 0) : 0;
-  const ammoMax = mine ? (def?.ammoMax ?? 0) : 0;
+  const storeEMax = friendlyInfo ? (def?.storeEMax ?? 0) : 0;
+  const ammoMax = friendlyInfo ? (def?.ammoMax ?? 0) : 0;
   const uMax =
-    mine && storeEMax <= 0 && ammoMax <= 0 ? effectiveUmax(building) : 0;
+    friendlyInfo && storeEMax <= 0 && ammoMax <= 0 ? effectiveUmax(building) : 0;
   const isTrainingGround = building.buildingId === "training_ground";
   const showUBar =
-    mine && storeEMax <= 0 && ammoMax <= 0 && (uMax > 0 || isTrainingGround);
+    friendlyInfo &&
+    storeEMax <= 0 &&
+    ammoMax <= 0 &&
+    (uMax > 0 || isTrainingGround);
   const inProgress = building.buildTicksRemaining > 0;
   const repairing = isRepairing(building);
   const continueBuild = needsContinueBuild(building);
@@ -195,7 +200,7 @@ export function BuildingInspectHud({
           ? "按修复费用继续建造，用时为修复公式 ×2"
           : undefined;
 
-  const showHp = mine || (enemyDirect && building.hpMax > 0);
+  const showHp = friendlyInfo || (enemyDirect && building.hpMax > 0);
   const hpRatio =
     building.hpMax > 0
       ? Math.max(0, Math.min(1, building.hp / building.hpMax))
@@ -353,7 +358,8 @@ export function BuildingInspectHud({
         : `HP ${Math.floor(building.hp)}/${building.hpMax}`;
 
   const extras: string[] = [name];
-  if (mine) {
+  if (friendlyInfo) {
+    if (isAlly) extras.push("友军");
     if (polluted) extras.push("污染区内 · 仅可拆除");
     if (supportsLinearUpgrade(building.buildingId)) {
       extras.push(`等级 ${romanLevelLabel(buildingLevel(building))}`);
@@ -370,12 +376,12 @@ export function BuildingInspectHud({
   } else if (enemyDirect) {
     extras.push("直接视野");
   }
-  if (mine && inProgress && continueBuild) {
+  if (friendlyInfo && inProgress && continueBuild) {
     extras.push("受击中断 · 接入通信后可继续建造");
-  } else if (mine && inProgress && building.buildPaused) {
+  } else if (friendlyInfo && inProgress && building.buildPaused) {
     extras.push("须在直接视野内或经公路/铁路连入视野");
   }
-  if (mine && isTrainingGround) {
+  if (friendlyInfo && isTrainingGround) {
     const q = building.trainingQueue ?? [];
     if (q.length > 0) {
       const head = q[0]!;
@@ -389,7 +395,7 @@ export function BuildingInspectHud({
       extras.push("训练空闲");
     }
   }
-  if (mine && cooldownLabel && (isLauncher || isAntiAir)) {
+  if (friendlyInfo && cooldownLabel && (isLauncher || isAntiAir)) {
     extras.push(cooldownLabel);
   }
 
@@ -400,7 +406,7 @@ export function BuildingInspectHud({
     onAction?.(action, building, detail);
   };
 
-  const inMutualDefense = mine && !!building.mutualDefensePartnerId;
+  const inMutualDefense = friendlyInfo && !!building.mutualDefensePartnerId;
 
   return (
     <div className="building-inspect" aria-label={`${name} 信息`}>
@@ -422,7 +428,7 @@ export function BuildingInspectHud({
             </div>
           )}
 
-          {mine && storeEMax > 0 && (
+          {friendlyInfo && storeEMax > 0 && (
             <div className="building-inspect-box is-energy">
               <div className="building-inspect-box-label">
                 能源 {storeECur}/{storeEMax}
@@ -436,7 +442,7 @@ export function BuildingInspectHud({
             </div>
           )}
 
-          {mine && ammoMax > 0 && (
+          {friendlyInfo && ammoMax > 0 && (
             <div className="building-inspect-box is-ammo">
               <div className="building-inspect-box-label">
                 弹药 {ammoCur}/{ammoMax}
@@ -574,66 +580,66 @@ export function BuildingInspectHud({
           </div>
         )}
 
-        <div className="building-inspect-ops">
-          {mine ? (
-            <>
+        {mine ? (
+          <div className="building-inspect-ops">
+            <OpButton
+              label="驻守"
+              icon={OP_DEFENSE}
+              disabled={polluted || !commsLinked}
+              title={polluted ? "污染区内建筑已失效" : undefined}
+              onFire={() => fire("garrison")}
+            />
+            {isSupply ? (
               <OpButton
-                label="驻守"
-                icon={OP_DEFENSE}
+                label="补给"
+                icon={SUPPLY_ICON}
                 disabled={polluted || !commsLinked}
                 title={polluted ? "污染区内建筑已失效" : undefined}
-                onFire={() => fire("garrison")}
+                onFire={() => fire("supply")}
               />
-              {isSupply ? (
-                <OpButton
-                  label="补给"
-                  icon={SUPPLY_ICON}
-                  disabled={polluted || !commsLinked}
-                  title={polluted ? "污染区内建筑已失效" : undefined}
-                  onFire={() => fire("supply")}
-                />
-              ) : isLauncher ? (
-                <OpButton
-                  label={onCooldown ? `冷却 ${cooldownRemSec}s` : "发射"}
-                  icon={def?.icon ?? OP_MUTUAL}
-                  disabled={launchDisabled}
-                  title={launchTitle}
-                  onFire={() => fire("fire")}
-                />
-              ) : isAntiAir ? (
-                <OpButton
-                  label={onCooldown ? `冷却 ${cooldownRemSec}s` : "防空"}
-                  icon={def?.icon ?? OP_MUTUAL}
-                  disabled
-                  title={
-                    onCooldown
-                      ? cooldownLabel ?? "发射冷却中"
-                      : "自动拦截导弹 / 接敌交战"
-                  }
-                  onFire={() => {}}
-                />
-              ) : inMutualDefense ? (
-                <OpButton
-                  label="解除互防"
-                  icon={OP_STOP}
-                  disabled={polluted || !commsLinked}
-                  title={polluted ? "污染区内建筑已失效" : "解除互防"}
-                  onFire={() => fire("end_mutual_defense")}
-                />
-              ) : (
-                <OpButton
-                  label="互防"
-                  icon={OP_MUTUAL}
-                  disabled={polluted || !commsLinked}
-                  title={polluted ? "污染区内建筑已失效" : undefined}
-                  onFire={() => fire("mutual_defense")}
-                />
-              )}
-            </>
-          ) : (
+            ) : isLauncher ? (
+              <OpButton
+                label={onCooldown ? `冷却 ${cooldownRemSec}s` : "发射"}
+                icon={def?.icon ?? OP_MUTUAL}
+                disabled={launchDisabled}
+                title={launchTitle}
+                onFire={() => fire("fire")}
+              />
+            ) : isAntiAir ? (
+              <OpButton
+                label={onCooldown ? `冷却 ${cooldownRemSec}s` : "防空"}
+                icon={def?.icon ?? OP_MUTUAL}
+                disabled
+                title={
+                  onCooldown
+                    ? cooldownLabel ?? "发射冷却中"
+                    : "自动拦截导弹 / 接敌交战"
+                }
+                onFire={() => {}}
+              />
+            ) : inMutualDefense ? (
+              <OpButton
+                label="解除互防"
+                icon={OP_STOP}
+                disabled={polluted || !commsLinked}
+                title={polluted ? "污染区内建筑已失效" : "解除互防"}
+                onFire={() => fire("end_mutual_defense")}
+              />
+            ) : (
+              <OpButton
+                label="互防"
+                icon={OP_MUTUAL}
+                disabled={polluted || !commsLinked}
+                title={polluted ? "污染区内建筑已失效" : undefined}
+                onFire={() => fire("mutual_defense")}
+              />
+            )}
+          </div>
+        ) : isAlly ? null : (
+          <div className="building-inspect-ops">
             <OpButton label="进攻" icon={OP_ATTACK} onFire={() => fire("attack")} />
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </div>
   );

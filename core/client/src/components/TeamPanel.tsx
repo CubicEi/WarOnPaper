@@ -143,7 +143,7 @@ export function TeamPanelButton({
       title="组队"
       aria-label="组队"
     >
-      <img src={TEAM_ICON} alt="" width={32} height={32} />
+      <img src={TEAM_ICON} alt="" draggable={false} />
     </button>
   );
 }

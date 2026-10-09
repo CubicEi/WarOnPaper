@@ -87,17 +87,24 @@ export function BuildModeOverlay({
   const liaisonTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closingRef = useRef(false);
 
-  // Building on an artificial island: same layout as empty land, but limited to
-  // small/medium buildings and excluding sea-only structures.
+  // Artificial island / former-island platforms: land tree capped at medium,
+  // no sea-only entries. Upgrades on ocean pads must keep the same filter
+  // (otherwise large settlement/command tiers appear incorrectly).
   const onIsland = currentBuildingId === "artificial_island";
+  const onSeaPlatform =
+    onIsland ||
+    (ground === "ocean" &&
+      currentBuildingId != null &&
+      !BUILDING_BY_ID[currentBuildingId]?.flags?.seaOnly);
+  const platformOpts = { maxSize: "medium" as const, excludeSeaOnly: true };
 
-  const roots = useMemo(
-    () =>
-      onIsland
-        ? getBuildTree(null, "land", { maxSize: "medium", excludeSeaOnly: true })
-        : getBuildTree(currentBuildingId, ground),
-    [currentBuildingId, ground, onIsland],
-  );
+  const roots = useMemo(() => {
+    if (onIsland) return getBuildTree(null, "land", platformOpts);
+    if (onSeaPlatform) {
+      return getBuildTree(currentBuildingId, "land", platformOpts);
+    }
+    return getBuildTree(currentBuildingId, ground);
+  }, [currentBuildingId, ground, onIsland, onSeaPlatform]);
 
   const currentLabel = onIsland
     ? "人工岛"
