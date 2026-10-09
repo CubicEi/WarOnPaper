@@ -143,8 +143,9 @@
 | `WOP_BUILD` | `manager/start.js` | 未设 | `"1"` 时强制 rebuild |
 | `WOP_DEBUG_ROOM_ID` | `core/server/src/index.ts` | `"DEBUG1"` | 调试房间 ID |
 | `VITE_WS_URL` | `core/client` `useGameSocket` | 未设则用 `ws(s)://当前 host/ws` | 覆盖 WebSocket URL（例如直连 `:8787`） |
+| `WOP_SAVE_KEY` | `manager/src/saveCrypto.ts` | **必填才可存档** | AES-256-GCM 密钥材料；缺失则拒绝导出/读档（见 [manager/save-load.md](./manager/save-load.md)） |
 
-`.gitignore` 忽略 `.env`、`.env.*`（保留 `!.env.example` 模式）；仓库中是否存在示例文件以实际检出为准。未发现其它业务必需的密钥类环境变量。
+`.gitignore` 忽略 `.env`、`.env.*`（保留 `!.env.example` 模式）；仓库中是否存在示例文件以实际检出为准。
 
 ### 5.2 浏览器 localStorage（对局 client）
 

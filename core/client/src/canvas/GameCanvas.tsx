@@ -111,6 +111,8 @@ interface Props {
   width: number;
   height: number;
   phase?: GamePhase;
+  /** When false, restore_lobby hides capital-pick radial (holder / already mapped). */
+  allowCapitalPick?: boolean;
   /** Local player id for own vs enemy building icon colors. */
   myPlayerId?: string | null;
   teams?: TeamRoster | null;
@@ -339,6 +341,7 @@ export function GameCanvas({
   width,
   height,
   phase = "need_init",
+  allowCapitalPick,
   myPlayerId = null,
   teams = null,
   teamMode: _teamMode = false,
@@ -648,6 +651,8 @@ export function GameCanvas({
 
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+  const allowCapitalPickRef = useRef(allowCapitalPick ?? true);
+  allowCapitalPickRef.current = allowCapitalPick ?? true;
 
   // Hide ring / actions when terrain is (re)generated; keep build mode if mid-pick
   useEffect(() => {
@@ -1371,7 +1376,10 @@ export function GameCanvas({
         myPlayerId: myPlayerIdRef.current,
         teams,
         connectedBuildingIds: connectedIdsRef.current,
-        showCapitalExclusion: phaseRef.current === "pick_capital",
+        showCapitalExclusion:
+          phaseRef.current === "pick_capital" ||
+          (phaseRef.current === "restore_lobby" &&
+            allowCapitalPickRef.current),
         workRanges: workRangeRef.current,
         units: unitsRef.current,
         selectedUnitId:
@@ -1964,6 +1972,7 @@ export function GameCanvas({
           !aiming &&
           (phaseNow === "playing" ||
             phaseNow === "pick_capital" ||
+            phaseNow === "restore_lobby" ||
             phaseNow === "spectating" ||
             phaseNow === "ended") &&
           zoomRef.current < MAP_CLICK_ZOOM_GATE
@@ -3019,7 +3028,12 @@ export function GameCanvas({
             screenX={selectionUi.screenX}
             screenY={selectionUi.screenY}
             arcRadius={ACTION_ARC_RADIUS}
-            actions={phase === "pick_capital" ? CAPITAL_PICK_ACTIONS : POINT_ACTIONS}
+            actions={
+              phase === "pick_capital" ||
+              (phase === "restore_lobby" && (allowCapitalPick ?? true))
+                ? CAPITAL_PICK_ACTIONS
+                : POINT_ACTIONS
+            }
             onAction={onPointAction}
           />
         )}

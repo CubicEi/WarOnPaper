@@ -274,6 +274,25 @@ export function useGameSocket(
         } else if (msg.type === "tip") {
           log.info("net", "← tip", msg.message);
           setLastTip(msg.message);
+        } else if (msg.type === "save_export") {
+          try {
+            const bin = Uint8Array.from(atob(msg.blob), (c) => c.charCodeAt(0));
+            const url = URL.createObjectURL(
+              new Blob([bin], { type: "application/octet-stream" }),
+            );
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = msg.filename || "war-on-paper.wopsave";
+            a.click();
+            URL.revokeObjectURL(url);
+            log.info("net", "← save_export downloaded", msg.filename);
+          } catch (err) {
+            log.error("net", "save_export download failed", err);
+            setLastError({
+              message: "存档下载失败",
+              raw: "save_export_download",
+            });
+          }
         } else if (msg.type === "pong") {
           // quiet
         } else {

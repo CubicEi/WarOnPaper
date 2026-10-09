@@ -61,6 +61,130 @@ body,
   flex-direction: column;
   align-items: center;
   flex: 0 0 auto;
+  /* Align download/team column with corner-tools (left: 12px; hud left: 16px → nudge). */
+  margin-left: -4px;
+}
+
+.hud-below-ring {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  width: 36px;
+}
+
+.save-download-btn {
+  pointer-events: auto;
+  cursor: pointer;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: #1a1a1a;
+  background: #ffffff;
+  border: 1px solid #c8c4bc;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+.save-download-btn:hover:not(:disabled) {
+  border-color: #9a958c;
+}
+
+.save-download-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.save-download-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.save-download-btn__glyph {
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.restore-lobby-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  max-width: min(520px, 92vw);
+  padding: 10px 14px;
+  background: rgba(20, 22, 28, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: #e8e4dc;
+  pointer-events: auto;
+}
+
+.restore-lobby-hint {
+  font-size: 12px;
+  text-align: center;
+  color: #b0aaa0;
+  line-height: 1.35;
+}
+
+.restore-lobby-count {
+  color: #e8e4dc;
+  font-variant-numeric: tabular-nums;
+}
+
+.restore-lobby-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.restore-lobby-btn {
+  pointer-events: auto;
+  cursor: pointer;
+  min-height: 36px;
+  padding: 0 14px;
+  font-size: 13px;
+  color: #1a1a1a;
+  background: #ffffff;
+  border: 1px solid #c8c4bc;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);
+}
+
+.restore-lobby-btn.btn-accent {
+  background: #e8e4dc;
+  border-color: #9a958c;
+  font-weight: 600;
+}
+
+.restore-lobby-btn.is-ready {
+  background: #2a2f38;
+  color: #e8e4dc;
+  border-color: #5a5f68;
+}
+
+.restore-lobby-inherit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #b0aaa0;
+}
+
+.restore-lobby-inherit select {
+  min-height: 32px;
+  max-width: 160px;
+  background: #1c1f26;
+  color: #eee;
+  border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
 .hp-ring {
@@ -2215,7 +2339,7 @@ body,
   width: 36px;
   height: 36px;
   padding: 0;
-  margin-top: 8px;
+  margin-top: 0;
   background: #ffffff;
   border: 1px solid #c8c4bc;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18);

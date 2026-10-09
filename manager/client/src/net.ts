@@ -9,6 +9,8 @@ export type ClientMsg =
       seed?: number | string;
       allowRespawn: boolean;
       maxPlayers: number;
+      /** Base64 encrypted `.wopsave` for restore-only create. */
+      saveBlob?: string;
     }
   | { type: "join_room"; roomId: string }
   | {

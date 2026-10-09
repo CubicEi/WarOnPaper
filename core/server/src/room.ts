@@ -121,6 +121,11 @@ import {
   type AllyGarrisonRequest,
   type TeamInvitePending,
   type TeamRoster,
+  type SaveDocument,
+  type SavePlayerSnapshot,
+  type RestoreIdentityOption,
+  SAVE_FORMAT_VERSION,
+  applyResourceTerrainSync,
 } from "@wop/shared";
 import type { WebSocket } from "ws";
 import {
@@ -145,6 +150,7 @@ import {
   handleEmbarkAir,
   handleDisembarkAir,
 } from "./units.js";
+import { cloneSaveWorld, remapOwnerId, recomputeIdMap } from "./saveRestore.js";
 
 
 export const DEFAULT_ROOM_IDLE_MS = ROOM_IDLE_MS;
@@ -159,6 +165,12 @@ export interface CreateRoomOptions {
   idleMs?: number;
   teams?: TeamRoster;
   teamMode?: boolean;
+  /** Decrypt plaintext from manager — restore-only create path. */
+  restore?: SaveDocument;
+  /** Live player id of the save-file holder (inherits saver). */
+  holderPlayerId?: string;
+  /** Stamped into exportPlainSave (`version.json`). */
+  gameVersion?: string;
 }
 
 export type RoomSend = (msg: ServerToClient) => void;
@@ -221,13 +233,32 @@ export interface GameRoom {
   getPlayerIds(): string[];
   getSpectatorIds(): string[];
   playerCount(): number;
+  /**
+   * Full authoritative dump for the requester (manager encrypts).
+   * Null when room closed / requester not seated.
+   */
+  exportPlainSave(requesterId: string): SaveDocument | null;
 }
 
 /** Create an isolated match room. Terrain is generated immediately (room-driven init). */
 export function createRoom(options: CreateRoomOptions): GameRoom {
   const roomId = options.roomId;
-  const maxPlayers = Math.max(2, Math.min(10, Math.floor(options.maxPlayers) || 2));
-  const allowRespawn = !!options.allowRespawn;
+  const restoreDoc = options.restore ?? null;
+  const restoreMode = restoreDoc != null;
+  const holderPlayerId = options.holderPlayerId ?? null;
+  const gameVersionStamp = options.gameVersion ?? "unknown";
+  const maxPlayers = Math.max(
+    2,
+    Math.min(
+      10,
+      Math.floor(
+        restoreDoc?.maxPlayers ?? options.maxPlayers ?? 2,
+      ) || 2,
+    ),
+  );
+  const allowRespawn = restoreDoc
+    ? !!restoreDoc.allowRespawn
+    : !!options.allowRespawn;
   const idleMs = options.idleMs ?? ROOM_IDLE_MS;
   const listeners = new Set<GameRoomListener>();
 
@@ -246,10 +277,36 @@ export function createRoom(options: CreateRoomOptions): GameRoom {
   let sawMultipleCapitals = false;
 
   /** playerId → teamId (custom invites + matchmaking). */
-  let teams: TeamRoster = { ...(options.teams ?? {}) };
-  let teamMode = !!options.teamMode || hasMultiPlayerTeam(teams);
+  let teams: TeamRoster = {
+    ...(restoreDoc?.teams ?? options.teams ?? {}),
+  };
+  let teamMode =
+    !!options.teamMode ||
+    !!(restoreDoc?.teamMode) ||
+    hasMultiPlayerTeam(teams);
   const teamInvites: TeamInvitePending[] = [];
   const allyGarrisonRequests: AllyGarrisonRequest[] = [];
+
+  /** Restore lobby: still waiting for all-ready before playing. */
+  let restoreLobbyActive = restoreMode;
+  const readyPlayerIds = new Set<string>();
+  /** liveId → saveId from auto + manual inherit. */
+  let liveToSave = new Map<string, string>();
+  /** Manual inherit_identity bindings (preserved across recompute). */
+  const manualInherits = new Map<string, string>();
+  /** Save roster (immutable ids from document). */
+  const savePlayers: SavePlayerSnapshot[] = restoreDoc
+    ? structuredClone(restoreDoc.players)
+    : [];
+  const savePlayerIds = savePlayers.map((p) => p.playerId);
+  const saverPlayerId = restoreDoc?.saverPlayerId ?? null;
+  /** HUD templates keyed by *current* owner id after remaps. */
+  const restoreHudByOwner = new Map<string, PlayerHudState>();
+  if (restoreDoc) {
+    for (const p of restoreDoc.players) {
+      restoreHudByOwner.set(p.playerId, { ...p.hud });
+    }
+  }
 
   function teamsFrozen(): boolean {
     return buildings.some((b) => b.buildingId === "capital" && b.hp > 0);
@@ -440,8 +497,99 @@ function phaseFor(session: PlayerSession): GamePhase {
   if (closed || winnerId) return "ended";
   if (spectatorIds.has(session.id)) return "spectating";
   if (!terrain) return "need_init";
+  if (restoreLobbyActive) return "restore_lobby";
   if (!findPlayerCapital(session.id)) return "pick_capital";
   return "playing";
+}
+
+function isRestoreHolder(playerId: string): boolean {
+  return (
+    restoreLobbyActive &&
+    holderPlayerId != null &&
+    playerId === holderPlayerId
+  );
+}
+
+function hasMappedSave(playerId: string): boolean {
+  return liveToSave.has(playerId);
+}
+
+function canPickCapitalNow(playerId: string): boolean {
+  if (!restoreLobbyActive) return !findPlayerCapital(playerId);
+  if (isRestoreHolder(playerId)) return false;
+  if (spectatorIds.has(playerId)) return false;
+  return !findPlayerCapital(playerId);
+}
+
+function canAbandonCapitalNow(playerId: string): boolean {
+  if (!restoreLobbyActive) return false;
+  if (isRestoreHolder(playerId)) return false;
+  if (!hasMappedSave(playerId)) return false;
+  return !!findPlayerCapital(playerId);
+}
+
+function buildRestoreIdentities(): RestoreIdentityOption[] {
+  if (!restoreLobbyActive) return [];
+  const claimed = new Set(liveToSave.values());
+  return savePlayers.map((p) => ({
+    savePlayerId: p.playerId,
+    name: p.name,
+    hasCapital: buildings.some(
+      (b) => b.ownerId === p.playerId && b.buildingId === "capital" && b.hp > 0,
+    ) ||
+      // After remap, capital ownerId is live id — check reverse map
+      [...liveToSave.entries()].some(
+        ([live, save]) =>
+          save === p.playerId &&
+          buildings.some(
+            (b) =>
+              b.ownerId === live && b.buildingId === "capital" && b.hp > 0,
+          ),
+      ),
+    claimed: claimed.has(p.playerId),
+  }));
+}
+
+/** Satellite-only facade for restore_lobby (no direct vision until playing). */
+function satelliteFacadeBuildings(): PlacedBuilding[] {
+  return buildings
+    .filter((b) => {
+      // Show all buildings that satellite would see, plus all for restore overview
+      return true;
+    })
+    .map((b) => {
+      const facadeId = b.satelliteBuildingId ?? b.buildingId;
+      return {
+        id: b.id,
+        buildingId: facadeId,
+        ownerId: b.ownerId,
+        gx: b.gx,
+        gy: b.gy,
+        hp: 0,
+        hpMax: 0,
+        u: 0,
+        storeE: 0,
+        ammo: 0,
+        investedE: 0,
+        buildTicksRemaining: 0,
+        buildTicksTotal: 0,
+        visionLevel: "satellite" as const,
+      };
+    });
+}
+
+function satelliteFacadeLiaisons(): PlacedLiaison[] {
+  return liaisons.map((line) => ({
+    id: line.id,
+    kind: line.kind,
+    ownerId: line.ownerId,
+    nodes: line.nodes.map((n) => ({ ...n })),
+    investedE: 0,
+    buildTicksRemaining:
+      line.kind === "railway" ? line.buildTicksRemaining : 0,
+    buildTicksTotal: line.kind === "railway" ? line.buildTicksTotal : 0,
+    visionLevel: "satellite" as const,
+  }));
 }
 
 function rejectIfNotPlaying(session: PlayerSession): boolean {
@@ -453,6 +601,14 @@ function rejectIfNotPlaying(session: PlayerSession): boolean {
   }
   if (p === "ended") {
     sendError(session.ws, "ended", "对局已结束");
+    return true;
+  }
+  if (p === "restore_lobby") {
+    sendError(
+      session.ws,
+      "restore_lobby",
+      "读档准备中：仅可选都 / 继承身份 / 准备",
+    );
     return true;
   }
   sendError(
@@ -476,18 +632,21 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
   syncCapitalHud(player);
   const linked = teamLinkedIds(player.id);
   const role: SnapshotRole = spectatorIds.has(player.id) ? "spectator" : "player";
-  const fullVision = role === "spectator" || phaseFor(player) === "ended";
+  const inRestoreLobby = restoreLobbyActive;
+  const fullVision =
+    role === "spectator" || phaseFor(player) === "ended";
   const allSight = terrain ? collectResourceSight(terrain) : [];
-  const resourceSight = fullVision
-    ? allSight
-    : filterResourceSightForViewer(
-        allSight,
-        player.id,
-        buildings,
-        units,
-        linked,
-        teams,
-      );
+  const resourceSight =
+    fullVision || inRestoreLobby
+      ? allSight
+      : filterResourceSightForViewer(
+          allSight,
+          player.id,
+          buildings,
+          units,
+          linked,
+          teams,
+        );
   const myAllyReqs = allyGarrisonRequests.filter((r) => {
     const b = buildings.find((x) => x.id === r.buildingId);
     return b?.ownerId === player.id;
@@ -499,30 +658,36 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
     tick,
     map: MAP,
     you: { ...player.hud },
-    buildings: fullVision
-      ? buildings.map((b) => ({ ...b }))
-      : filterBuildingsForViewer(
-          buildings,
-          player.id,
-          liaisons,
-          linked,
-          units,
-          teams,
-        ),
-    liaisons: fullVision
-      ? liaisons.map((l) => ({ ...l, nodes: l.nodes.map((n) => ({ ...n })) }))
-      : filterLiaisonsForViewer(
-          liaisons,
-          buildings,
-          player.id,
-          linked,
-          units,
-          teams,
-        ),
-    units: fullVision
-      ? units.map((u) => ({ ...u }))
-      : filterUnitsForViewer(units, player.id, buildings, linked, teams),
-    connectedBuildingIds: linked,
+    buildings: inRestoreLobby
+      ? satelliteFacadeBuildings()
+      : fullVision
+        ? buildings.map((b) => ({ ...b }))
+        : filterBuildingsForViewer(
+            buildings,
+            player.id,
+            liaisons,
+            linked,
+            units,
+            teams,
+          ),
+    liaisons: inRestoreLobby
+      ? satelliteFacadeLiaisons()
+      : fullVision
+        ? liaisons.map((l) => ({ ...l, nodes: l.nodes.map((n) => ({ ...n })) }))
+        : filterLiaisonsForViewer(
+            liaisons,
+            buildings,
+            player.id,
+            linked,
+            units,
+            teams,
+          ),
+    units: inRestoreLobby
+      ? [] // satellite lobby: buildings/liaisons only; units reveal after playing
+      : fullVision
+        ? units.map((u) => ({ ...u }))
+        : filterUnitsForViewer(units, player.id, buildings, linked, teams),
+    connectedBuildingIds: inRestoreLobby ? [] : linked,
     pollutionZones: pollutionZones.map((z) => ({ ...z })),
     phase: phaseFor(player),
     terrainSeed: terrain?.seed ?? null,
@@ -543,6 +708,14 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
     teamMode,
     teamInvites: myInvites.map((i) => ({ ...i })),
     allyGarrisonRequests: myAllyReqs.map((r) => ({ ...r })),
+    ready: readyPlayerIds.has(player.id),
+    readyPlayerIds: [...readyPlayerIds],
+    restoreMode: restoreLobbyActive,
+    restoreHolder: isRestoreHolder(player.id),
+    mappedSaveId: liveToSave.get(player.id) ?? null,
+    canPickCapital: canPickCapitalNow(player.id),
+    canAbandonCapital: canAbandonCapitalNow(player.id),
+    restoreIdentities: buildRestoreIdentities(),
   };
 }
 
@@ -1017,7 +1190,7 @@ function generateRoomTerrain(seedRaw?: number | string): void {
   sawMultipleCapitals = false;
   const seed = parseTerrainSeed(seedRaw);
   terrain = generateTerrain({ map: MAP, seed });
-  phase = "pick_capital";
+  phase = restoreLobbyActive ? "restore_lobby" : "pick_capital";
   tick = 0;
   slog("init", "room terrain", {
     roomId,
@@ -1025,6 +1198,274 @@ function generateRoomTerrain(seedRaw?: number | string): void {
     map: MAP.id,
     deposits: terrain.deposits.length,
   });
+}
+
+function applyRestoreDocument(doc: SaveDocument): void {
+  MAP = MAP_SIZES[isMapSizeId(doc.mapSize) ? doc.mapSize : DEFAULT_MAP_SIZE_ID];
+  generateRoomTerrain(doc.terrainSeed);
+  const world = cloneSaveWorld(doc);
+  buildings.length = 0;
+  buildings.push(...world.buildings);
+  liaisons.length = 0;
+  liaisons.push(...world.liaisons);
+  units.length = 0;
+  units.push(...world.units);
+  pollutionZones.length = 0;
+  pollutionZones.push(...world.pollutionZones);
+  connectedByOwner.clear();
+  for (const [k, v] of world.connectedByOwner) {
+    connectedByOwner.set(k, v);
+  }
+  knownCapitalOwners.clear();
+  for (const id of world.knownCapitalOwners) knownCapitalOwners.add(id);
+  spectatorIds.clear();
+  for (const id of world.spectatorIds) spectatorIds.add(id);
+  teams = world.teams;
+  teamMode = !!doc.teamMode || hasMultiPlayerTeam(teams);
+  tick = doc.tick;
+  phase = "restore_lobby";
+  restoreLobbyActive = true;
+  if (terrain) {
+    applyResourceTerrainSync(terrain, doc.resourceTerrain);
+    clearedResourceCells.clear();
+    for (const c of doc.resourceTerrain.cleared) {
+      clearedResourceCells.add(`${c.x},${c.y}`);
+    }
+  }
+  restoreHudByOwner.clear();
+  for (const p of doc.players) {
+    restoreHudByOwner.set(p.playerId, { ...p.hud });
+  }
+  syncPollutionFlags();
+  noteCapitalCounts();
+  slog("restore", "applied save", {
+    roomId,
+    tick,
+    buildings: buildings.length,
+    players: doc.players.length,
+    saver: doc.saverPlayerId.slice(0, 8),
+  });
+}
+
+/**
+ * Apply newly discovered live→save bindings by remapping world owners.
+ * Returns save ids that were newly bound this call.
+ */
+function applyIdMapDelta(next: Map<string, string>): string[] {
+  const newly: string[] = [];
+  for (const [live, save] of next) {
+    const prev = liveToSave.get(live);
+    if (prev === save) continue;
+    // Remap world from save id (or previous live that held save assets) → live
+    const fromId = prev ?? save;
+    if (fromId !== live) {
+      remapOwnerId(fromId, live, {
+        buildings,
+        liaisons,
+        units,
+        connectedByOwner,
+        knownCapitalOwners,
+        spectatorIds,
+        teams,
+      });
+      const hud = restoreHudByOwner.get(fromId) ?? restoreHudByOwner.get(save);
+      if (hud) {
+        restoreHudByOwner.delete(fromId);
+        restoreHudByOwner.set(live, { ...hud });
+      }
+    }
+    newly.push(save);
+  }
+  liveToSave = next;
+  return newly;
+}
+
+function refreshPlayerMapping(): void {
+  if (!restoreMode || !saverPlayerId || !holderPlayerId) return;
+  const next = recomputeIdMap({
+    holderPlayerId,
+    saverPlayerId,
+    liveIds: [...players.keys()],
+    savePlayerIds,
+    manual: manualInherits,
+  });
+  applyIdMapDelta(next);
+  // Apply HUD / spectator for mapped seated players
+  for (const [live, save] of liveToSave) {
+    const session = players.get(live);
+    if (!session) continue;
+    const hud = restoreHudByOwner.get(live) ?? restoreHudByOwner.get(save);
+    if (hud) {
+      session.hud = { ...hud };
+      syncCapitalHud(session);
+    }
+    const saveSnap = savePlayers.find((p) => p.playerId === save);
+    if (saveSnap?.spectator) {
+      spectatorIds.add(live);
+    }
+  }
+}
+
+function tryStartPlayingFromRestore(): void {
+  if (!restoreLobbyActive) return;
+  if (players.size < 2) return;
+  for (const p of players.values()) {
+    if (!readyPlayerIds.has(p.id)) return;
+    if (spectatorIds.has(p.id)) continue;
+    if (isRestoreHolder(p.id)) continue;
+    if (!findPlayerCapital(p.id)) return;
+  }
+  restoreLobbyActive = false;
+  phase = "playing";
+  beginCommWaves();
+  advanceCommWaves();
+  noteCapitalCounts();
+  slog("restore", "all ready → playing", {
+    players: players.size,
+    tick,
+  });
+  broadcastState();
+}
+
+function handleSetReady(session: PlayerSession, ready: boolean): void {
+  if (!restoreLobbyActive) {
+    sendError(session.ws, "not_restore_lobby", "仅读档准备阶段可切换准备状态");
+    return;
+  }
+  if (ready) {
+    if (
+      !isRestoreHolder(session.id) &&
+      !spectatorIds.has(session.id) &&
+      !findPlayerCapital(session.id)
+    ) {
+      sendError(session.ws, "need_capital", "请先选定或继承首都后再准备");
+      return;
+    }
+    readyPlayerIds.add(session.id);
+  } else {
+    readyPlayerIds.delete(session.id);
+  }
+  touchInteraction();
+  tryStartPlayingFromRestore();
+  if (restoreLobbyActive) broadcastState();
+}
+
+function handleInheritIdentity(
+  session: PlayerSession,
+  savePlayerId: string,
+): void {
+  if (!restoreLobbyActive) {
+    sendError(session.ws, "not_restore_lobby", "仅读档准备阶段可继承身份");
+    return;
+  }
+  if (isRestoreHolder(session.id)) {
+    sendError(session.ws, "holder_locked", "存档持有者已继承保存人，无法更换");
+    return;
+  }
+  if (!savePlayerIds.includes(savePlayerId)) {
+    sendError(session.ws, "bad_identity", "存档中无此玩家");
+    return;
+  }
+  if (savePlayerId === saverPlayerId) {
+    sendError(session.ws, "identity_taken", "保存人身份已由持有者占用");
+    return;
+  }
+  if ([...liveToSave.values()].includes(savePlayerId)) {
+    sendError(session.ws, "identity_taken", "该存档身份已被占用");
+    return;
+  }
+  if (liveToSave.has(session.id)) {
+    sendError(
+      session.ws,
+      "already_mapped",
+      "已继承身份；可先放弃首都后再选其他身份",
+    );
+    return;
+  }
+  manualInherits.set(session.id, savePlayerId);
+  refreshPlayerMapping();
+  readyPlayerIds.delete(session.id);
+  touchInteraction();
+  broadcastState();
+}
+
+function handleAbandonCapital(session: PlayerSession): void {
+  if (!canAbandonCapitalNow(session.id)) {
+    sendError(session.ws, "cannot_abandon", "当前无法放弃首都");
+    return;
+  }
+  for (let i = buildings.length - 1; i >= 0; i--) {
+    const b = buildings[i]!;
+    if (b.ownerId === session.id && b.buildingId === "capital") {
+      buildings.splice(i, 1);
+    }
+  }
+  knownCapitalOwners.delete(session.id);
+  connectedByOwner.delete(session.id);
+  // Unbind mapping so they may inherit another identity or place new capital
+  const saveId = liveToSave.get(session.id);
+  if (saveId) {
+    manualInherits.delete(session.id);
+    liveToSave.delete(session.id);
+    // Return remaining assets ownership to save id for others to claim
+    remapOwnerId(session.id, saveId, {
+      buildings,
+      liaisons,
+      units,
+      connectedByOwner,
+      knownCapitalOwners,
+      spectatorIds,
+      teams,
+    });
+    const hud = restoreHudByOwner.get(session.id);
+    if (hud) {
+      restoreHudByOwner.delete(session.id);
+      restoreHudByOwner.set(saveId, hud);
+    }
+  }
+  session.hud = createHud();
+  readyPlayerIds.delete(session.id);
+  refreshPlayerMapping();
+  touchInteraction();
+  broadcastState();
+}
+
+function buildExportDocument(requesterId: string): SaveDocument | null {
+  const session = players.get(requesterId);
+  if (!session || closed || !terrain) return null;
+  const connected: Record<string, string[]> = {};
+  for (const [oid, set] of connectedByOwner) {
+    connected[oid] = [...set];
+  }
+  return {
+    formatVersion: SAVE_FORMAT_VERSION,
+    gameVersion: gameVersionStamp,
+    savedAt: Date.now(),
+    saverPlayerId: session.id,
+    saverName: session.name,
+    roomId,
+    mapSize: MAP.id,
+    maxPlayers,
+    terrainSeed: terrain.seed,
+    tick,
+    allowRespawn,
+    teamMode,
+    teams: { ...teams },
+    buildings: structuredClone(buildings),
+    liaisons: structuredClone(liaisons),
+    units: structuredClone(units),
+    pollutionZones: structuredClone(pollutionZones),
+    resourceTerrain: collectResourceTerrainSync(terrain, clearedResourceCells),
+    connectedByOwner: connected,
+    knownCapitalOwners: [...knownCapitalOwners],
+    spectatorIds: [...spectatorIds],
+    players: [...players.values()].map((p) => ({
+      playerId: p.id,
+      name: p.name,
+      hud: { ...p.hud },
+      spectator: spectatorIds.has(p.id),
+    })),
+  };
 }
 
 function tryBuildLiaison(
@@ -1255,12 +1696,38 @@ function handlePlaceCapital(session: PlayerSession, gx: number, gy: number): voi
     );
     return;
   }
+  if (restoreLobbyActive && isRestoreHolder(session.id)) {
+    sendError(session.ws, "holder_no_pick", "存档持有者无需选都，请直接准备");
+    return;
+  }
   if (findPlayerCapital(session.id)) {
     sendError(session.ws, "already_capital", "已经选定首都");
     return;
   }
 
   const node = snapToBuildNode(gx, gy, MAP);
+  const occupiedEarly = findBuildingAt(buildings, node.gx, node.gy);
+  // Restore lobby: clicking an unclaimed capital inherits that identity
+  if (
+    restoreLobbyActive &&
+    occupiedEarly &&
+    occupiedEarly.buildingId === "capital" &&
+    !liveToSave.has(session.id) &&
+    !isRestoreHolder(session.id)
+  ) {
+    const saveId =
+      [...liveToSave.entries()].find(
+        ([live]) => live === occupiedEarly.ownerId,
+      )?.[1] ??
+      (savePlayerIds.includes(occupiedEarly.ownerId)
+        ? occupiedEarly.ownerId
+        : null);
+    if (saveId && ![...liveToSave.values()].includes(saveId)) {
+      handleInheritIdentity(session, saveId);
+      return;
+    }
+  }
+
   const reason = capitalSiteRejectReason(terrain, node.gx, node.gy);
   if (reason) {
     sendError(session.ws, "invalid_capital_site", capitalSiteRejectMessage(reason));
@@ -1312,14 +1779,25 @@ function handlePlaceCapital(session: PlayerSession, gx: number, gy: number): voi
   session.hud.energy = STARTING_ENERGY;
   session.hud.organization = STARTING_ORGANIZATION;
   syncCapitalHud(session);
-  if (phase !== "playing") tick = 0;
-  phase = "playing";
   spectatorIds.delete(session.id);
   knownCapitalOwners.add(session.id);
-  beginCommWaves();
-  advanceCommWaves();
   touchInteraction();
   noteCapitalCounts();
+
+  if (restoreLobbyActive) {
+    readyPlayerIds.delete(session.id);
+    slog("capital", "placed (restore lobby)", {
+      player: session.id.slice(0, 8),
+      node,
+    });
+    broadcastState();
+    return;
+  }
+
+  if (phase !== "playing") tick = 0;
+  phase = "playing";
+  beginCommWaves();
+  advanceCommWaves();
 
   slog("capital", "placed", {
     player: session.id.slice(0, 8),
@@ -2634,6 +3112,24 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     return;
   }
 
+  if (msg.type === "set_ready") {
+    handleSetReady(session, !!msg.ready);
+    return;
+  }
+  if (msg.type === "inherit_identity") {
+    handleInheritIdentity(session, String(msg.savePlayerId ?? ""));
+    return;
+  }
+  if (msg.type === "abandon_capital") {
+    handleAbandonCapital(session);
+    return;
+  }
+  if (msg.type === "export_save") {
+    // Manager intercepts export_save for encryption; core ignores if forwarded.
+    sendError(session.ws, "export_via_manager", "请通过大厅导出存档");
+    return;
+  }
+
   if (msg.type === "place_capital") {
     slog("msg", "place_capital", msg);
     handlePlaceCapital(session, msg.gx, msg.gy);
@@ -2993,14 +3489,26 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
 }
 
 
-  // Room-driven map generation at create time.
-  generateRoomTerrain(options.seed);
+  // Room-driven map generation at create time (or restore from save).
+  if (restoreDoc) {
+    applyRestoreDocument(restoreDoc);
+  } else {
+    generateRoomTerrain(options.seed);
+  }
   touchInteraction();
 
   function tickRoom(): void {
     if (closed) return;
     if (winnerId) {
       broadcastState();
+      return;
+    }
+    // Restore lobby: no sim ticks until all ready → playing
+    if (restoreLobbyActive) {
+      broadcastState();
+      if (isIdleNow()) {
+        destroyRoom("idle");
+      }
       return;
     }
     // Global phase gate: run sim once anyone is playing (or always after terrain)
@@ -3106,11 +3614,16 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
         existing.name = opts.name.slice(0, 24) || existing.name;
         existing.ws = makeSocket(opts.send);
         touchInteraction();
+        if (restoreLobbyActive) refreshPlayerMapping();
         const state = syncPlayerOnJoin(existing);
         return { ok: true, playerId: existing.id, state };
       }
       if (players.size >= maxPlayers) {
         return { ok: false, code: "room_full", message: "房间已满" };
+      }
+      if (restoreLobbyActive === false && restoreMode) {
+        // After restore match started, reject brand-new seats (rejoin OK above).
+        return { ok: false, code: "restore_started", message: "读档对局已开始，无法加入" };
       }
       const session: PlayerSession = {
         id: opts.playerId,
@@ -3120,7 +3633,12 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       };
       players.set(session.id, session);
       touchInteraction();
+      if (restoreLobbyActive) {
+        refreshPlayerMapping();
+        readyPlayerIds.delete(session.id);
+      }
       const state = syncPlayerOnJoin(session);
+      if (restoreLobbyActive) broadcastState();
       slog("conn", "join", roomId, session.id.slice(0, 8), "players=", players.size);
       return { ok: true, playerId: session.id, state };
     },
@@ -3134,6 +3652,9 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       if (!players.has(playerId)) return;
       players.delete(playerId);
       delete teams[playerId];
+      readyPlayerIds.delete(playerId);
+      manualInherits.delete(playerId);
+      liveToSave.delete(playerId);
       purgeAllyRequestsFor({ fromPlayerId: playerId });
       for (let i = teamInvites.length - 1; i >= 0; i--) {
         const inv = teamInvites[i]!;
@@ -3143,6 +3664,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       }
       slog("conn", "leave", roomId, playerId.slice(0, 8), "players=", players.size);
       emit({ type: "player_left", roomId, playerId });
+      if (restoreLobbyActive) refreshPlayerMapping();
       if (!closed) broadcastState();
     },
     dispatch(playerId: string, msg: ClientToServer): void {
@@ -3189,6 +3711,9 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     },
     playerCount(): number {
       return players.size;
+    },
+    exportPlainSave(requesterId: string): SaveDocument | null {
+      return buildExportDocument(requesterId);
     },
   };
 

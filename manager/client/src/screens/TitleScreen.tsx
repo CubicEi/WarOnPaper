@@ -50,6 +50,8 @@ export function TitleScreen() {
   const [createMap, setCreateMap] = useState<MapSizeId>("89x59");
   const [createSeed, setCreateSeed] = useState("");
   const [allowRespawn, setAllowRespawn] = useState(true);
+  const [saveFileName, setSaveFileName] = useState<string | null>(null);
+  const [saveBlobB64, setSaveBlobB64] = useState<string | null>(null);
 
   const [joinCode, setJoinCode] = useState("");
 
@@ -202,6 +204,45 @@ export function TitleScreen() {
     socket.send({ type: "cancel_queue" });
   };
 
+  const onSaveFile = (file: File | null) => {
+    if (!file) {
+      setSaveFileName(null);
+      setSaveBlobB64(null);
+      return;
+    }
+    if (!file.name.toLowerCase().endsWith(".wopsave")) {
+      setStatus("请选择 .wopsave 存档文件");
+      setStatusKind("error");
+      setSaveFileName(null);
+      setSaveBlobB64(null);
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const buf = reader.result;
+      if (!(buf instanceof ArrayBuffer)) {
+        setStatus("无法读取存档文件");
+        setStatusKind("error");
+        return;
+      }
+      const bytes = new Uint8Array(buf);
+      let binary = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      }
+      setSaveBlobB64(btoa(binary));
+      setSaveFileName(file.name);
+      setStatus(`已选择存档：${file.name}`);
+      setStatusKind("ok");
+    };
+    reader.onerror = () => {
+      setStatus("读取存档失败");
+      setStatusKind("error");
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
   const createRoom = () => {
     rename();
     const seed = createSeed.trim();
@@ -210,7 +251,8 @@ export function TitleScreen() {
       mapSize: createMap,
       allowRespawn,
       maxPlayers: createMax,
-      ...(seed ? { seed } : {}),
+      ...(seed && !saveBlobB64 ? { seed } : {}),
+      ...(saveBlobB64 ? { saveBlob: saveBlobB64 } : {}),
     });
   };
 
@@ -352,6 +394,7 @@ export function TitleScreen() {
                 min={2}
                 max={10}
                 value={createMax}
+                disabled={!!saveBlobB64}
                 onChange={(e) => setCreateMax(Number(e.target.value))}
               />
             </div>
@@ -360,6 +403,7 @@ export function TitleScreen() {
               <select
                 id="mapSize"
                 value={createMap}
+                disabled={!!saveBlobB64}
                 onChange={(e) => setCreateMap(e.target.value as MapSizeId)}
               >
                 <option value="89x59">小型 89×59</option>
@@ -373,6 +417,7 @@ export function TitleScreen() {
               id="seed"
               value={createSeed}
               placeholder="留空则随机"
+              disabled={!!saveBlobB64}
               onChange={(e) => setCreateSeed(e.target.value)}
             />
           </div>
@@ -380,10 +425,48 @@ export function TitleScreen() {
             <input
               type="checkbox"
               checked={allowRespawn}
+              disabled={!!saveBlobB64}
               onChange={(e) => setAllowRespawn(e.target.checked)}
             />
             首都沦陷后允许重生
+            {saveBlobB64 ? "（读档时沿用存档）" : ""}
           </label>
+          <div className="field">
+            <label htmlFor="saveFile">读档（可选 · .wopsave）</label>
+            <div className="row">
+              <input
+                id="saveFile"
+                type="file"
+                accept=".wopsave,application/octet-stream"
+                onChange={(e) => onSaveFile(e.target.files?.[0] ?? null)}
+              />
+              {saveFileName ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => {
+                    setSaveFileName(null);
+                    setSaveBlobB64(null);
+                    const input = document.getElementById(
+                      "saveFile",
+                    ) as HTMLInputElement | null;
+                    if (input) input.value = "";
+                  }}
+                >
+                  清除
+                </button>
+              ) : null}
+            </div>
+            {saveFileName ? (
+              <p className="status ok" style={{ marginTop: "0.35rem" }}>
+                将以此存档恢复：{saveFileName}
+              </p>
+            ) : (
+              <p style={{ marginTop: "0.35rem", opacity: 0.75, fontSize: "0.85rem" }}>
+                仅创建房间时可上传；对局中不可读档。需服务器配置 WOP_SAVE_KEY。
+              </p>
+            )}
+          </div>
           <div className="row" style={{ marginTop: "0.85rem" }}>
             <button
               type="button"
@@ -391,7 +474,7 @@ export function TitleScreen() {
               disabled={conn !== "open"}
               onClick={createRoom}
             >
-              创建并进入
+              {saveBlobB64 ? "读档创建并进入" : "创建并进入"}
             </button>
           </div>
         </section>

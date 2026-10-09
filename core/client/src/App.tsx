@@ -15,6 +15,7 @@ import { DebugOverlay, type DebugErrorEntry } from "./components/DebugOverlay";
 import { ErrorToast } from "./components/ErrorToast";
 import { HudOverlay } from "./components/HudOverlay";
 import { TeamPanel, TeamPanelButton } from "./components/TeamPanel";
+import { RestoreLobbyBar } from "./components/RestoreLobbyBar";
 import { useGameSocket } from "./net/useGameSocket";
 import { log } from "./net/log";
 import { logLocalReject } from "./debug/playerActionLog";
@@ -435,41 +436,58 @@ export function App() {
         });
         return;
       }
-      const reason = capitalSiteRejectReason(terrain, gx, gy);
-      if (reason) {
-        const msg = capitalSiteRejectMessage(reason);
-        log.warn("app", "invalid capital site", reason, msg);
-        pushError(msg, msg);
-        logLocalReject({
-          action: "place_capital",
-          summary: `定都 (${gx}, ${gy})`,
-          reason: msg,
-          playerId,
-        });
-        return;
-      }
-      const tooClose = capitalExclusionRejectReason(
-        gx,
-        gy,
-        state?.buildings ?? [],
-        playerId,
+      const onExistingCapital = (state?.buildings ?? []).find(
+        (b) =>
+          b.buildingId === "capital" &&
+          b.gx === gx &&
+          b.gy === gy &&
+          b.ownerId !== playerId,
       );
-      if (tooClose) {
-        const msg = capitalSiteRejectMessage(tooClose);
-        log.warn("app", "capital too close", msg);
-        pushError(msg, msg);
-        logLocalReject({
-          action: "place_capital",
-          summary: `定都 (${gx}, ${gy})`,
-          reason: msg,
+      // Restore lobby: clicking an unclaimed capital inherits that identity (server).
+      const inheritExisting =
+        state?.phase === "restore_lobby" &&
+        !!state.canPickCapital &&
+        !!onExistingCapital;
+      if (!inheritExisting) {
+        const reason = capitalSiteRejectReason(terrain, gx, gy);
+        if (reason) {
+          const msg = capitalSiteRejectMessage(reason);
+          log.warn("app", "invalid capital site", reason, msg);
+          pushError(msg, msg);
+          logLocalReject({
+            action: "place_capital",
+            summary: `定都 (${gx}, ${gy})`,
+            reason: msg,
+            playerId,
+          });
+          return;
+        }
+      }
+      const skipExclusion = inheritExisting;
+      if (!skipExclusion) {
+        const tooClose = capitalExclusionRejectReason(
+          gx,
+          gy,
+          state?.buildings ?? [],
           playerId,
-        });
-        return;
+        );
+        if (tooClose) {
+          const msg = capitalSiteRejectMessage(tooClose);
+          log.warn("app", "capital too close", msg);
+          pushError(msg, msg);
+          logLocalReject({
+            action: "place_capital",
+            summary: `定都 (${gx}, ${gy})`,
+            reason: msg,
+            playerId,
+          });
+          return;
+        }
       }
       log.info("app", "place_capital", { gx, gy });
       send({ type: "place_capital", gx, gy });
     },
-    [send, terrain, state?.buildings, playerId, pushError],
+    [send, terrain, state?.buildings, state?.phase, state?.canPickCapital, playerId, pushError],
   );
 
   const buildingCount = state?.buildings?.length ?? 0;
@@ -478,26 +496,34 @@ export function App() {
   const role = state?.role ?? "player";
 
   const foreignCapital =
-    phase === "pick_capital" &&
+    (phase === "pick_capital" || phase === "restore_lobby") &&
     (state?.buildings ?? []).some(
       (b) => b.buildingId === "capital" && b.ownerId !== playerId,
     );
   const phaseHint =
     phase === "need_init"
       ? "等待房间地图…"
-      : phase === "pick_capital"
-        ? foreignCapital
-          ? "请选择首都位置（红圈内不能设都）"
-          : "请选择首都位置"
-        : phase === "spectating"
-          ? "观战中（不可操作）"
-          : phase === "ended"
-            ? state?.winnerNames && state.winnerNames.length > 1
-              ? `对局结束 · ${state.winnerNames.join("、")} 队伍获胜`
-              : state?.winnerName
-                ? `对局结束 · ${state.winnerName} 获胜`
-                : "对局结束"
-            : null;
+      : phase === "restore_lobby"
+        ? state?.restoreHolder
+          ? "读档准备 · 你已继承保存人，请准备"
+          : state?.canPickCapital
+            ? foreignCapital
+              ? "读档准备 · 选都或继承身份（红圈内不能设都）"
+              : "读档准备 · 选都或继承身份"
+            : "读档准备 · 可放弃首都后重选"
+        : phase === "pick_capital"
+          ? foreignCapital
+            ? "请选择首都位置（红圈内不能设都）"
+            : "请选择首都位置"
+          : phase === "spectating"
+            ? "观战中（不可操作）"
+            : phase === "ended"
+              ? state?.winnerNames && state.winnerNames.length > 1
+                ? `对局结束 · ${state.winnerNames.join("、")} 队伍获胜`
+                : state?.winnerName
+                  ? `对局结束 · ${state.winnerName} 获胜`
+                  : "对局结束"
+              : null;
 
   const statusLine =
     (status === "connected" ? `tick ${state?.tick ?? 0}` : status) +
@@ -535,6 +561,10 @@ export function App() {
         width={viewport.w}
         height={viewport.h}
         phase={phase}
+        allowCapitalPick={
+          phase === "pick_capital" ||
+          (phase === "restore_lobby" && !!state?.canPickCapital)
+        }
         myPlayerId={playerId}
         teams={state?.teams ?? null}
         teamMode={!!state?.teamMode}
@@ -589,17 +619,47 @@ export function App() {
           hud={state.you}
           windowHudSize={windowHudSize}
           belowRing={
-            <TeamPanelButton
-              visible={
-                phase === "pick_capital" &&
-                (state.players?.length ?? 0) >= 3 &&
-                !!playerId
-              }
-              onClick={() => setTeamPanelOpen(true)}
-            />
+            <div className="hud-below-ring">
+              <button
+                type="button"
+                className="save-download-btn"
+                title="下载存档"
+                aria-label="下载存档"
+                disabled={phase === "need_init" || phase === "ended"}
+                onClick={() => send({ type: "export_save" })}
+              >
+                <span className="save-download-btn__glyph" aria-hidden>
+                  ↓
+                </span>
+              </button>
+              <TeamPanelButton
+                visible={
+                  (phase === "pick_capital" || phase === "restore_lobby") &&
+                  (state.players?.length ?? 0) >= 3 &&
+                  !!playerId
+                }
+                onClick={() => setTeamPanelOpen(true)}
+              />
+            </div>
           }
         />
       )}
+      {phase === "restore_lobby" && state ? (
+        <RestoreLobbyBar
+          ready={!!state.ready}
+          readyCount={state.readyPlayerIds?.length ?? 0}
+          playerCount={state.players?.length ?? 0}
+          canPickCapital={!!state.canPickCapital}
+          canAbandonCapital={!!state.canAbandonCapital}
+          restoreHolder={!!state.restoreHolder}
+          identities={state.restoreIdentities ?? []}
+          onSetReady={(ready) => send({ type: "set_ready", ready })}
+          onAbandon={() => send({ type: "abandon_capital" })}
+          onInherit={(savePlayerId) =>
+            send({ type: "inherit_identity", savePlayerId })
+          }
+        />
+      ) : null}
       {playerId && state ? (
         <TeamPanel
           open={teamPanelOpen}

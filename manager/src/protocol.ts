@@ -18,7 +18,10 @@ export type LobbyClientMessage =
       seed?: number | string;
       allowRespawn: boolean;
       maxPlayers: number;
+      /** Base64 encrypted `.wopsave` (restore-only create). */
+      saveBlob?: string;
     }
+  | { type: "export_save" }
   | { type: "join_room"; roomId: string }
   | {
       type: "queue_match";
@@ -38,6 +41,11 @@ export type LobbyServerMessage =
     }
   | { type: "pong"; t: number }
   | { type: "error"; code: string; message: string }
+  | {
+      type: "save_export";
+      blob: string;
+      filename?: string;
+    }
   | { type: "room_ready"; roomId: string }
   | {
       type: "match_status";
@@ -66,10 +74,25 @@ export function isLobbyClientMessage(msg: unknown): msg is LobbyClientMessage {
     t === "hello" ||
     t === "ping" ||
     t === "create_room" ||
+    t === "export_save" ||
     t === "join_room" ||
     t === "queue_match" ||
     t === "cancel_queue" ||
     t === "leave_room"
+  );
+}
+
+/** Minimal SaveDocument shape check (mirrors @wop/shared isSaveDocument). */
+export function looksLikeSaveDocument(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const d = value as Record<string, unknown>;
+  return (
+    typeof d.formatVersion === "number" &&
+    typeof d.saverPlayerId === "string" &&
+    (d.mapSize === "89x59" || d.mapSize === "119x79") &&
+    typeof d.terrainSeed === "number" &&
+    Array.isArray(d.buildings) &&
+    Array.isArray(d.players)
   );
 }
 

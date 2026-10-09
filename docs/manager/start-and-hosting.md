@@ -49,12 +49,13 @@ flowchart TD
 |------|------|
 | `PORT` | 传给子进程；`index.ts` 默认 `"4358"` |
 | `WOP_BUILD` | `"1"` 强制重建 |
+| `WOP_SAVE_KEY` | `.wopsave` AES 密钥；仅由 `start.cmd` / `start.sh` 设置（见 [save-load.md](./save-load.md)） |
 
 启动日志前缀：`[wop-start]`。
 
 ## 2. `start.sh`
 
-Bash 包装：检查 `node` 与同目录 `start.js`，`export PORT="${PORT:-4358}"`，`exec node start.js "$@"`。逻辑全部在 `start.js`。
+Bash 包装：检查 `node` 与同目录 `start.js`，`export PORT` 与示例 `WOP_SAVE_KEY`，`exec node start.js "$@"`。构建/安装逻辑在 `start.js`。
 
 ## 3. `paths.ts` — 运行时路径
 

@@ -12,7 +12,8 @@
 |--------|------|------|
 | `hello` | `playerId?`, `name?` | 身份握手 / 改名 |
 | `ping` | `t: number` | 延迟探测 |
-| `create_room` | `mapSize`, `seed?`, `allowRespawn`, `maxPlayers` | 自定义建房 |
+| `create_room` | `mapSize`, `seed?`, `allowRespawn`, `maxPlayers`, `saveBlob?` | 自定义建房；`saveBlob` 为 base64 `.wopsave`（读档） |
+| `export_save` | — | 对局中导出加密存档（需 `WOP_SAVE_KEY`） |
 | `join_room` | `roomId` | 按房间码加入 |
 | `queue_match` | `playerCount?`, `teamFormat?` | FFA：`playerCount` 2–5；组队：`teamFormat`（`2v2`…）隐含座位数 |
 | `cancel_queue` | — | 取消匹配 |
@@ -28,6 +29,7 @@
 | `welcome` | `playerId`, `name`, `activeRoomId?` |
 | `pong` | `t` |
 | `error` | `code`, `message` |
+| `save_export` | `blob`, `filename?` | 加密存档下载 |
 | `room_ready` | `roomId` |
 | `room_status` | `roomId`, `players`, `maxPlayers`, `mapSize`, `allowRespawn`, `teamMode?` |
 | `room_closed` | `roomId`, `reason` |

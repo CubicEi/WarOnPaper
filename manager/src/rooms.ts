@@ -108,6 +108,9 @@ export class RoomRegistry {
     preferredId?: string;
     teams?: Record<string, string>;
     teamMode?: boolean;
+    restore?: unknown;
+    holderPlayerId?: string;
+    gameVersion?: string;
   }): Promise<RoomMeta> {
     const maxPlayers = clampInt(opts.maxPlayers, 2, 10);
     let roomId = opts.preferredId
@@ -131,6 +134,9 @@ export class RoomRegistry {
       seed: opts.seed,
       teams: opts.teams,
       teamMode,
+      restore: opts.restore,
+      holderPlayerId: opts.holderPlayerId,
+      gameVersion: opts.gameVersion,
     });
 
     const meta: RoomMeta = {
@@ -237,6 +243,13 @@ export class RoomRegistry {
     if (!meta || meta.game.closed) return false;
     meta.game.dispatch(playerId, msg);
     return true;
+  }
+
+  /** Room the player is seated in (for export_save). */
+  metaForPlayer(playerId: string): RoomMeta | undefined {
+    const rid = this.playerRoom.get(playerId);
+    if (!rid) return undefined;
+    return this.rooms.get(rid);
   }
 
   async destroyRoom(roomId: string, reason: string): Promise<void> {

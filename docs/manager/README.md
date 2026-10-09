@@ -11,6 +11,7 @@
 | [game-bridge.md](./game-bridge.md) | `gameBridge`：加载 `room.js`、`GameRoomHandle` 契约、tick 常量 |
 | [lobby-ws.md](./lobby-ws.md) | 协议、身份、匹配队列、`RoomRegistry`、WS 消息分流 |
 | [title-spa.md](./title-spa.md) | `manager/client` 标题大厅 SPA |
+| [save-load.md](./save-load.md) | `.wopsave` 加解密、`WOP_SAVE_KEY`、读档准备大厅 |
 
 ## 源码一览
 
@@ -29,6 +30,7 @@ manager/
     lobby.ts                # MatchQueues：2–5 人匹配
     identity.ts             # UUID↔昵称；7 天 TTL；JSON 持久化
     protocol.ts             # 大厅消息类型与类型守卫
+    saveCrypto.ts           # AES-GCM `.wopsave` 封包 / 解包
   client/                   # @wop/manager-client（独立 Vite 包）
     package.json
     vite.config.ts          # :5174；代理 /ws /play /assets → :4358

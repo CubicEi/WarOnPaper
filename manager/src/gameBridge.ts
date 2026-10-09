@@ -15,6 +15,10 @@ export interface GameRoomCreateOptions {
   idleMs?: number;
   teams?: Record<string, string>;
   teamMode?: boolean;
+  /** Plain SaveDocument from decrypted .wopsave */
+  restore?: unknown;
+  holderPlayerId?: string;
+  gameVersion?: string;
 }
 
 export type RoomSend = (msg: unknown) => void;
@@ -73,6 +77,8 @@ export interface GameRoomHandle {
   getPlayerIds(): string[];
   getSpectatorIds(): string[];
   playerCount(): number;
+  /** Authoritative plaintext save dump; manager encrypts. */
+  exportPlainSave?(requesterId: string): unknown | null;
 }
 
 export type GameRoomFactory = (opts: GameRoomCreateOptions) => GameRoomHandle;

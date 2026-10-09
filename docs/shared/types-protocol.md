@@ -29,6 +29,7 @@
 |----|------|
 | `need_init` | 房间待初始化地图 |
 | `pick_capital` | 选首都（含允许重生时的再选） |
+| `restore_lobby` | 读档开局前：卫星全图 + 准备门闸（见 [save-load.md](../manager/save-load.md)） |
 | `playing` | 对局中 |
 | `spectating` | 观战 |
 | `ended` | 结束 |
@@ -85,7 +86,9 @@
 |--------|------|
 | `hello` | 可选 `playerId`、`name`；服务端可新发 UUID |
 | `ping` | 延迟探测，带 `t` |
-| `create_room` | `mapSize`、`seed?`、`allowRespawn`、`maxPlayers` 2–10 |
+| `create_room` | `mapSize`、`seed?`、`allowRespawn`、`maxPlayers` 2–10、`saveBlob?`（base64 `.wopsave`，仅建房读档） |
+| `export_save` | 请求加密存档下载 |
+| `set_ready` / `inherit_identity` / `abandon_capital` | 读档准备大厅 |
 | `join_room` | `roomId` |
 | `queue_match` | FFA：`playerCount` 2–5；或 `teamFormat` 组队匹配 |
 | `team_invite` / `accept` / `reject` / `team_leave` | 自定义房组队 |
@@ -146,6 +149,7 @@
 | `pong` | 回显 `t` |
 | `error` | `code` + `message` |
 | `tip` | 提示文案 |
+| `save_export` | 加密存档 base64（`blob` / `filename?`） |
 | `room_ready` / `room_status` / `match_status` | 房间与匹配 |
 | `game_over` / `room_closed` | 终局与关房；`game_over` 可带 `winnerTeamId` / `winnerPlayerIds` / `winnerNames` |
 | `team_invite_pending` | 自定义房邀请推送 |

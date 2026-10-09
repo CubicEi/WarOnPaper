@@ -12,11 +12,21 @@ import {
 import {
   isLobbyClientMessage,
   isMapSizeId,
+  looksLikeSaveDocument,
   type LobbyServerMessage,
+  type MapSizeId,
 } from "./protocol.js";
 import { RoomRegistry, normalizeRoomId } from "./rooms.js";
 import { handleStatic } from "./httpStatic.js";
 import { resolveGameRoomFactory } from "./gameBridge.js";
+import {
+  SaveDecryptError,
+  SaveKeyMissingError,
+  decryptSaveBlobBase64,
+  encryptSaveDocumentBase64,
+  hasSaveKey,
+  readGameVersion,
+} from "./saveCrypto.js";
 
 const PORT = Number(process.env.PORT ?? "4358");
 
@@ -185,22 +195,78 @@ async function main(): Promise<void> {
             sendError(session.ws, "ALREADY_IN_ROOM", "请先离开当前房间");
             return;
           }
-          if (!isMapSizeId(msg.mapSize)) {
+          const saveBlob =
+            typeof (msg as { saveBlob?: unknown }).saveBlob === "string"
+              ? (msg as { saveBlob: string }).saveBlob.trim()
+              : "";
+          let restoreDoc: Record<string, unknown> | null = null;
+          if (saveBlob) {
+            if (!hasSaveKey()) {
+              sendError(
+                session.ws,
+                "SAVE_KEY_MISSING",
+                "服务器未配置 WOP_SAVE_KEY，无法读档建房",
+              );
+              return;
+            }
+            try {
+              const plain = decryptSaveBlobBase64(saveBlob);
+              if (!looksLikeSaveDocument(plain)) {
+                sendError(session.ws, "BAD_SAVE", "存档内容无效");
+                return;
+              }
+              restoreDoc = plain as Record<string, unknown>;
+            } catch (err) {
+              if (err instanceof SaveKeyMissingError) {
+                sendError(
+                  session.ws,
+                  "SAVE_KEY_MISSING",
+                  "服务器未配置 WOP_SAVE_KEY，无法读档建房",
+                );
+              } else if (err instanceof SaveDecryptError) {
+                sendError(session.ws, "BAD_SAVE", err.message);
+              } else {
+                console.error("[manager] save decrypt failed", err);
+                sendError(session.ws, "BAD_SAVE", "存档解密失败");
+              }
+              return;
+            }
+          }
+          const mapSize: MapSizeId = restoreDoc
+            ? isMapSizeId(restoreDoc.mapSize)
+              ? restoreDoc.mapSize
+              : "89x59"
+            : msg.mapSize;
+          if (!isMapSizeId(mapSize)) {
             sendError(session.ws, "BAD_MAP", "地图尺寸须为 89x59 或 119x79");
             return;
           }
-          const maxPlayers = Number(msg.maxPlayers);
+          const maxPlayers = restoreDoc
+            ? Number(restoreDoc.maxPlayers) || Number(msg.maxPlayers)
+            : Number(msg.maxPlayers);
           if (!Number.isFinite(maxPlayers) || maxPlayers < 2 || maxPlayers > 10) {
             sendError(session.ws, "BAD_MAX", "人数上限须为 2–10");
             return;
           }
+          const allowRespawn = restoreDoc
+            ? Boolean(restoreDoc.allowRespawn)
+            : Boolean(msg.allowRespawn);
           matchQueues.remove(session.playerId!);
           try {
             const meta = await rooms.createRoom({
               maxPlayers,
-              allowRespawn: Boolean(msg.allowRespawn),
-              mapSize: msg.mapSize,
-              seed: msg.seed,
+              allowRespawn,
+              mapSize,
+              seed: restoreDoc
+                ? (restoreDoc.terrainSeed as number)
+                : msg.seed,
+              restore: restoreDoc ?? undefined,
+              holderPlayerId: restoreDoc ? session.playerId! : undefined,
+              gameVersion: readGameVersion(),
+              teamMode: restoreDoc ? Boolean(restoreDoc.teamMode) : undefined,
+              teams: restoreDoc
+                ? (restoreDoc.teams as Record<string, string>)
+                : undefined,
             });
             const joined = rooms.join(
               meta.roomId,
@@ -226,6 +292,59 @@ async function main(): Promise<void> {
           } catch (err) {
             console.error("[manager] create_room failed", err);
             sendError(session.ws, "CREATE_FAILED", "无法创建房间");
+          }
+          return;
+        }
+        case "export_save": {
+          if (!requireIdentity(session)) return;
+          if (!session.roomId) {
+            sendError(session.ws, "NOT_IN_ROOM", "当前不在房间内");
+            return;
+          }
+          if (!hasSaveKey()) {
+            sendError(
+              session.ws,
+              "SAVE_KEY_MISSING",
+              "服务器未配置 WOP_SAVE_KEY，无法导出存档",
+            );
+            return;
+          }
+          const meta = rooms.metaForPlayer(session.playerId!);
+          if (!meta || meta.game.closed) {
+            sendError(session.ws, "NOT_IN_ROOM", "当前不在房间内");
+            return;
+          }
+          const exportFn = meta.game.exportPlainSave;
+          if (typeof exportFn !== "function") {
+            sendError(session.ws, "EXPORT_UNSUPPORTED", "当前房间不支持存档导出");
+            return;
+          }
+          try {
+            const plain = exportFn.call(meta.game, session.playerId!);
+            if (!plain || typeof plain !== "object") {
+              sendError(session.ws, "EXPORT_FAILED", "无法生成存档");
+              return;
+            }
+            const doc = plain as {
+              roomId?: string;
+              tick?: number;
+              gameVersion?: string;
+            };
+            doc.gameVersion = readGameVersion();
+            const blob = encryptSaveDocumentBase64(doc);
+            const filename = `wop-${doc.roomId ?? meta.roomId}-t${doc.tick ?? 0}.wopsave`;
+            send(session.ws, { type: "save_export", blob, filename });
+          } catch (err) {
+            if (err instanceof SaveKeyMissingError) {
+              sendError(
+                session.ws,
+                "SAVE_KEY_MISSING",
+                "服务器未配置 WOP_SAVE_KEY，无法导出存档",
+              );
+            } else {
+              console.error("[manager] export_save failed", err);
+              sendError(session.ws, "EXPORT_FAILED", "存档加密失败");
+            }
           }
           return;
         }

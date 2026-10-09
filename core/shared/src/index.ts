@@ -20,9 +20,24 @@ export const STARTING_ORGANIZATION = 10;
 export type GamePhase =
   | "need_init"
   | "pick_capital"
+  | "restore_lobby"
   | "playing"
   | "spectating"
   | "ended";
+
+export type {
+  SaveDocument,
+  SavePlayerSnapshot,
+  SavePlayerHud,
+  RestoreIdentityOption,
+} from "./save.js";
+export {
+  SAVE_FORMAT_VERSION,
+  WOPSAVE_MAGIC,
+  WOPSAVE_IV_BYTES,
+  WOPSAVE_TAG_BYTES,
+  isSaveDocument,
+} from "./save.js";
 
 export type SnapshotRole = "player" | "spectator";
 
@@ -240,6 +255,24 @@ export interface GameStateSnapshot {
    * Wire: full list when changed; omit when unchanged (client caches).
    */
   allyGarrisonRequests?: import("./teams.js").AllyGarrisonRequest[];
+  /**
+   * Restore-from-save lobby: player marked ready. Wire when changed / bootstrap.
+   */
+  ready?: boolean;
+  /** All player ids currently ready (restore lobby). */
+  readyPlayerIds?: string[];
+  /** True while room is in restore_lobby (before all-ready → playing). */
+  restoreMode?: boolean;
+  /** This viewer is the save-file holder (inherits saver; never picks capital). */
+  restoreHolder?: boolean;
+  /** Save identity this live player is mapped to (if any). */
+  mappedSaveId?: string | null;
+  /** Unmapped / abandoned: may place or inherit a capital. */
+  canPickCapital?: boolean;
+  /** Mapped with capital: may abandon and re-pick. */
+  canAbandonCapital?: boolean;
+  /** Available save identities for inherit_identity. */
+  restoreIdentities?: import("./save.js").RestoreIdentityOption[];
 }
 
 function mergeEntityListField<T extends { id: string }>(
@@ -306,6 +339,31 @@ export function mergeGameStateSnapshot(
       next.allyGarrisonRequests !== undefined
         ? next.allyGarrisonRequests
         : prev?.allyGarrisonRequests,
+    ready: next.ready !== undefined ? next.ready : prev?.ready,
+    readyPlayerIds:
+      next.readyPlayerIds !== undefined
+        ? next.readyPlayerIds
+        : prev?.readyPlayerIds,
+    restoreMode:
+      next.restoreMode !== undefined ? next.restoreMode : prev?.restoreMode,
+    restoreHolder:
+      next.restoreHolder !== undefined
+        ? next.restoreHolder
+        : prev?.restoreHolder,
+    mappedSaveId:
+      next.mappedSaveId !== undefined ? next.mappedSaveId : prev?.mappedSaveId,
+    canPickCapital:
+      next.canPickCapital !== undefined
+        ? next.canPickCapital
+        : prev?.canPickCapital,
+    canAbandonCapital:
+      next.canAbandonCapital !== undefined
+        ? next.canAbandonCapital
+        : prev?.canAbandonCapital,
+    restoreIdentities:
+      next.restoreIdentities !== undefined
+        ? next.restoreIdentities
+        : prev?.restoreIdentities,
     pollutionZones:
       next.pollutionZones !== undefined
         ? next.pollutionZones
@@ -332,6 +390,29 @@ export type ClientToServer =
       allowRespawn: boolean;
       /** 2–10 */
       maxPlayers: number;
+      /**
+       * Base64 encrypted `.wopsave` blob (manager decrypts).
+       * Restore only at custom room create — never mid-game.
+       */
+      saveBlob?: string;
+    }
+  | {
+      /** Request encrypted save download (manager packs AES-GCM). */
+      type: "export_save";
+    }
+  | {
+      /** Restore lobby ready toggle. */
+      type: "set_ready";
+      ready: boolean;
+    }
+  | {
+      /** Claim an unmapped save identity (and its world assets). */
+      type: "inherit_identity";
+      savePlayerId: string;
+    }
+  | {
+      /** Abandon current capital in restore lobby to re-pick / inherit. */
+      type: "abandon_capital";
     }
   | { type: "join_room"; roomId: string }
   | {
@@ -550,6 +631,15 @@ export type ServerToClient =
   | { type: "pong"; t: number }
   | { type: "error"; code: string; message: string }
   | { type: "tip"; message: string }
+  | {
+      /**
+       * Encrypted `.wopsave` as base64 (manager). Client downloads as file.
+       */
+      type: "save_export";
+      blob: string;
+      /** Suggested filename, e.g. `room-tick.wopsave`. */
+      filename?: string;
+    }
   | { type: "room_ready"; roomId: string }
   | {
       type: "match_status";

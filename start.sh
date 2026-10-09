@@ -5,9 +5,11 @@
 #   ./start.sh
 #   PORT=4358 ./start.sh
 #   WOP_BUILD=1 ./start.sh          # force rebuild core + manager
+#   WOP_SAVE_KEY=… ./start.sh       # override save crypto key
 #
 # Delegates to manager/start.sh so Linux servers have one entry at the
 # repo root and the real wrapper next to start.js.
+# Default WOP_SAVE_KEY (example) is set only in manager/start.sh.
 
 set -euo pipefail
 

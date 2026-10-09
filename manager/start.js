@@ -11,6 +11,7 @@
  * Optional env:
  *   PORT=4358          (default)
  *   WOP_BUILD=1        force rebuild core + manager before start
+ *   WOP_SAVE_KEY=…     set by start.cmd / start.sh (not defaulted here)
  */
 
 import { spawn } from "node:child_process";
