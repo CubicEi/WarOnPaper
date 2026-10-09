@@ -28,7 +28,8 @@
 | 值 | 含义 |
 |----|------|
 | `need_init` | 房间待初始化地图 |
-| `pick_capital` | 选首都（含允许重生时的再选） |
+| `pick_capital` | 选首都（新开局首步；含允许重生时的再选） |
+| `ready_lobby` | 新开局选都后：准备门闸（与读档同一套 Ready UI；可放弃重选） |
 | `restore_lobby` | 读档开局前：卫星全图 + 准备门闸（见 [save-load.md](../manager/save-load.md)） |
 | `playing` | 对局中 |
 | `spectating` | 观战 |

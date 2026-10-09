@@ -6,7 +6,7 @@
 
 ```text
 WarOnPaper/
-├── version.json              # 产品版本号（标题页 / F2）
+├── config.json               # 产品版本号 + saveKey（标题页 / F2 / 存档）
 ├── build.cmd                 # 一键构建 core + manager
 ├── start.cmd                 # Windows：node manager/start.js
 ├── start.sh                  # Unix：转调 manager/start.sh
@@ -83,8 +83,8 @@ core/
 |------|------|
 | `index.html` | 对局页；标题「纸上谈兵 4」 |
 | `package.json` | `@wop/client`；Vite + React 19；依赖 `@wop/shared` |
-| `vite.config.ts` | `@wop/shared`→源码、`@version.json`、`publicDir`→`../assets`、代理 `/ws`→`:4358` |
-| `tsconfig.json` | `noEmit`；路径 `@version.json` |
+| `vite.config.ts` | `@wop/shared`→源码、`@config.json`、`publicDir`→`../assets`、代理 `/ws`→`:4358` |
+| `tsconfig.json` | `noEmit`；路径 `@config.json` |
 | `src/main.tsx` | React 挂载 |
 | `src/App.tsx` | 状态枢纽：快照、地形、命令转发、回标题 |
 | `src/styles.css` | 全局样式 |
@@ -143,7 +143,7 @@ manager/
 | `package.json` | `@wop/manager-client`；Vite + React 19（**不**依赖 `@wop/shared`） |
 | `vite.config.ts` | 端口 `5174`；代理 `/ws`、`/play`、`/assets` → manager |
 | `src/App.tsx` | 渲染 `TitleScreen` |
-| `src/screens/TitleScreen.tsx` | 标题 / 建房 / 加入 / 匹配；展示 `version.json` |
+| `src/screens/TitleScreen.tsx` | 标题 / 建房 / 加入 / 匹配；展示 `config.json` 版本 |
 | `src/net.ts` | `LobbySocket`；大厅消息类型 |
 | `src/storage.ts` | 本地身份等存储 |
 | `src/styles.css` | 标题页样式 |

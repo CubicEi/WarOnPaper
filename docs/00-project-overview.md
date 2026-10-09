@@ -16,7 +16,7 @@ WarOnPaper（产品名「纸上谈兵 4」）是一个 **Node.js + TypeScript** 
 - `start.cmd` / `start.sh` → `manager/start.js`（缺构建则先构建再监听）
 - `build.cmd` → 依次构建 core 全套 + manager 服务端 + manager 标题客户端
 
-产品展示版本在根目录 `version.json`（字段 `version`），由两个 Vite 客户端通过 `@version.json` 别名读取。
+产品展示版本在根目录 `config.json`（字段 `version`；另含存档 `saveKey`），由两个 Vite 客户端通过 `@config.json` 别名读取版本号。
 
 ## 2. 包与职责
 
@@ -167,14 +167,14 @@ cd manager/client && npm run dev   # Vite :5174，代理 /ws、/play、/assets �
 
 | 文件 | 要点 |
 |------|------|
-| `/version.json` | `{ "version": "…" }` 产品版本字符串 |
+| `/config.json` | `{ "version": "…", "saveKey": "…" }` 产品配置（客户端仅用版本展示） |
 | `/build.cmd`、`/start.cmd`、`/start.sh` | 跨包构建与启动 |
 | `core/package.json` | workspaces：`shared` / `server` / `client`；`dev` / `build` |
 | `core/*/package.json` | 各包脚本与依赖（见 [02](./02-config-and-tooling.md)） |
 | `core/*/tsconfig.json` | shared：出声明到 `dist`；server：NodeNext；client：`noEmit` + Vite |
 | `core/client/vite.config.ts` | `@wop/shared` 源码别名、`publicDir`→`../assets`、代理 `/ws` |
 | `manager/package.json` | 服务端构建 / 启动；依赖 `ws` |
-| `manager/client/vite.config.ts` | `@version.json`、端口 5174、代理 `/ws` `/play` `/assets` |
+| `manager/client/vite.config.ts` | `@config.json`、端口 5174、代理 `/ws` `/play` `/assets` |
 | `.gitignore` | `node_modules`、`dist`、`manager/data/`、`.env*` 等 |
 
 ## 6. 地图与匹配（与架构相关的约定）

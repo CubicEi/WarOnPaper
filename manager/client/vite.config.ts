@@ -2,24 +2,48 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readFileSync } from "node:fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const versionJsonPath = path.resolve(__dirname, "../../version.json");
+const configJsonPath = path.resolve(__dirname, "../../config.json");
+const CONFIG_PUBLIC_ID = "\0wop-config-public";
+
+/** Client-safe slice of config.json (never ship saveKey to the browser). */
+function loadPublicConfigModule(): string {
+  try {
+    const raw = JSON.parse(readFileSync(configJsonPath, "utf8")) as {
+      version?: string;
+    };
+    return `export default ${JSON.stringify({ version: raw.version ?? "unknown" })}`;
+  } catch {
+    return `export default ${JSON.stringify({ version: "unknown" })}`;
+  }
+}
 
 export default defineConfig({
   plugins: [
     react(),
     {
-      name: "watch-version-json",
+      name: "wop-config-public",
+      resolveId(id) {
+        if (id === "@config.json") return CONFIG_PUBLIC_ID;
+      },
+      load(id) {
+        if (id === CONFIG_PUBLIC_ID) return loadPublicConfigModule();
+      },
       configureServer(server) {
-        server.watcher.add(versionJsonPath);
+        server.watcher.add(configJsonPath);
+        server.watcher.on("change", (file) => {
+          if (path.resolve(file) === configJsonPath) {
+            const mod = server.moduleGraph.getModuleById(CONFIG_PUBLIC_ID);
+            if (mod) void server.reloadModule(mod);
+          }
+        });
       },
     },
   ],
   resolve: {
-    alias: {
-      "@version.json": versionJsonPath,
-    },
+    alias: {},
   },
   server: {
     host: true,

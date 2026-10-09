@@ -205,7 +205,7 @@ async function main(): Promise<void> {
               sendError(
                 session.ws,
                 "SAVE_KEY_MISSING",
-                "服务器未配置 WOP_SAVE_KEY，无法读档建房",
+                "服务器未配置 config.json saveKey，无法读档建房",
               );
               return;
             }
@@ -221,7 +221,7 @@ async function main(): Promise<void> {
                 sendError(
                   session.ws,
                   "SAVE_KEY_MISSING",
-                  "服务器未配置 WOP_SAVE_KEY，无法读档建房",
+                  "服务器未配置 config.json saveKey，无法读档建房",
                 );
               } else if (err instanceof SaveDecryptError) {
                 sendError(session.ws, "BAD_SAVE", err.message);
@@ -305,7 +305,7 @@ async function main(): Promise<void> {
             sendError(
               session.ws,
               "SAVE_KEY_MISSING",
-              "服务器未配置 WOP_SAVE_KEY，无法导出存档",
+              "服务器未配置 config.json saveKey，无法导出存档",
             );
             return;
           }
@@ -339,7 +339,7 @@ async function main(): Promise<void> {
               sendError(
                 session.ws,
                 "SAVE_KEY_MISSING",
-                "服务器未配置 WOP_SAVE_KEY，无法导出存档",
+                "服务器未配置 config.json saveKey，无法导出存档",
               );
             } else {
               console.error("[manager] export_save failed", err);

@@ -9,8 +9,9 @@
 # Optional env:
 #   PORT          listen port (default 4358; passed through to start.js)
 #   WOP_BUILD     set to 1 to force rebuild before start
-#   WOP_SAVE_KEY  AES key for .wopsave (default example below if unset)
+#   WOP_SAVE_KEY  optional override of config.json saveKey
 #
+# Save AES key primary source: repo-root config.json → saveKey
 # Build / install / serve logic lives in start.js — this wrapper only
 # resolves paths and invokes Node on Linux.
 
@@ -32,7 +33,5 @@ if [[ ! -f "$SCRIPT_DIR/start.js" ]]; then
 fi
 
 export PORT="${PORT:-4358}"
-# Example AES-256 key (base64 32 bytes). Override by exporting WOP_SAVE_KEY before start.
-export WOP_SAVE_KEY="${WOP_SAVE_KEY:-jvFkO2ewJA5Sp5Gu674V3djdkFs9IOePd1JmK/SwuiY=}"
 
 exec node start.js "$@"

@@ -5,7 +5,7 @@ import {
   PLAYER_ACTION_STATUS_LABEL,
   formatActionStamp,
 } from "@wop/shared";
-import versionJson from "@version.json";
+import configJson from "@config.json";
 
 export interface DebugErrorEntry {
   id: number;
@@ -21,8 +21,8 @@ interface Props {
   errors: DebugErrorEntry[];
 }
 
-/** Shown at the top of the F2 panel; sourced from repo-root version.json. */
-export const DEBUG_BUILD_VERSION = versionJson.version;
+/** Shown at the top of the F2 panel; sourced from repo-root config.json. */
+export const DEBUG_BUILD_VERSION = configJson.version;
 
 function shortPlayer(id: string | null): string {
   if (!id) return "";

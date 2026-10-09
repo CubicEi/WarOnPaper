@@ -101,9 +101,9 @@
 |----|-----------------|------|------|
 | shared | `ESNext` + `bundler` | `dist/` + `declaration` | `strict` |
 | server | `NodeNext` | `dist/` | `esModuleInterop` |
-| client | `ESNext` + `bundler` | **`noEmit: true`**（由 Vite 打包） | `jsx: react-jsx`；`paths["@version.json"]` |
+| client | `ESNext` + `bundler` | **`noEmit: true`**（由 Vite 打包） | `jsx: react-jsx`；`paths["@config.json"]` |
 | manager | `NodeNext` | `dist/` + `declaration` + `sourceMap` | |
-| manager-client | 同 client | `noEmit` | `paths["@version.json"]` |
+| manager-client | 同 client | `noEmit` | `paths["@config.json"]` |
 
 各包 `target` 均为 `ES2022`，均开启 `strict`。
 
@@ -113,21 +113,21 @@
 
 | 项 | 值 / 含义 |
 |----|-----------|
-| 插件 | `@vitejs/plugin-react`；`watch-version-json` 监听根 `version.json` |
+| 插件 | `@vitejs/plugin-react`；`wop-config-public`（`@config.json` → 仅 `version`） |
 | `resolve.alias["@wop/shared"]` | `../shared/src/index.ts`（开发直连源码） |
-| `resolve.alias["@version.json"]` | 仓库根 `version.json` |
+| `@config.json` | 虚拟模块：只导出 `{ version }`，不把 `saveKey` 打进浏览器 |
 | `server.port` | `5173` |
 | `server.host` | `true` |
 | `server.proxy["/ws"]` | `ws://localhost:4358` |
 | `publicDir` | `../assets`（即 `core/assets`） |
-| `fs.allow` | 上溯到仓库根（读 `version.json` 等） |
+| `fs.allow` | 上溯到仓库根（读 `config.json` 等） |
 | `watch.ignored` | `assets` 下 jpg、`__pycache__`（避免文件锁） |
 
 ### 4.2 `manager/client/vite.config.ts`
 
 | 项 | 值 / 含义 |
 |----|-----------|
-| `alias["@version.json"]` | 仓库根 `version.json` |
+| `@config.json` | 同 core client：仅暴露 `version` |
 | `server.port` | `5174` |
 | 代理 | `/ws`、`/play`、`/assets` → `http(s)://localhost:4358` |
 | `build.outDir` | `dist`；`emptyOutDir: true` |
@@ -143,7 +143,7 @@
 | `WOP_BUILD` | `manager/start.js` | 未设 | `"1"` 时强制 rebuild |
 | `WOP_DEBUG_ROOM_ID` | `core/server/src/index.ts` | `"DEBUG1"` | 调试房间 ID |
 | `VITE_WS_URL` | `core/client` `useGameSocket` | 未设则用 `ws(s)://当前 host/ws` | 覆盖 WebSocket URL（例如直连 `:8787`） |
-| `WOP_SAVE_KEY` | `manager/src/saveCrypto.ts` | **必填才可存档** | AES-256-GCM 密钥材料；缺失则拒绝导出/读档（见 [manager/save-load.md](./manager/save-load.md)） |
+| `WOP_SAVE_KEY` | `manager/src/saveCrypto.ts` | 可选覆盖 | 覆盖 `config.json` 的 `saveKey`；二者皆空则拒绝导出/读档（见 [manager/save-load.md](./manager/save-load.md)） |
 
 `.gitignore` 忽略 `.env`、`.env.*`（保留 `!.env.example` 模式）；仓库中是否存在示例文件以实际检出为准。
 
@@ -167,20 +167,27 @@ Manager 标题客户端另有 `manager/client/src/storage.ts` 做大厅侧持久
 
 目录已 gitignore，首次运行由 `IdentityStore` 创建。
 
-## 6. 版本号
+## 6. 根配置 `config.json`
 
-根目录 `version.json`：
+根目录 `config.json`：
 
 ```json
 {
-  "version": "beta1.4.5_261002"
+  "version": "",
+  "saveKey": ""
 }
 ```
 
+| 字段 | 用途 |
+|------|------|
+| `version` | 产品展示版本（标题页 / F2） |
+| `saveKey` | `.wopsave` AES 密钥材料（manager `saveCrypto`；永不下发客户端） |
+
 | 消费者 | 用法 |
 |--------|------|
-| `manager/client` `TitleScreen` | 标题页展示 `versionJson.version` |
+| `manager/client` `TitleScreen` | 标题页展示 `configJson.version` |
 | `core/client` `DebugOverlay` | F2 调试面板顶部展示 |
+| `manager/src/saveCrypto.ts` | 读取 `saveKey`（可用 `WOP_SAVE_KEY` 覆盖） |
 
 各客户端 `package.json` 内的 `"version": "0.1.0"` 是 npm 包版本，**不是**面向玩家的产品版本字符串。
 

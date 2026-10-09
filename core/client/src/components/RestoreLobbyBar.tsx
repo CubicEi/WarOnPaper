@@ -1,6 +1,8 @@
 import type { RestoreIdentityOption } from "@wop/shared";
 
 interface Props {
+  /** restore = satellite restore lobby; ready = new-game post-capital ready. */
+  mode?: "restore" | "ready";
   ready: boolean;
   readyCount: number;
   playerCount: number;
@@ -13,8 +15,9 @@ interface Props {
   onInherit: (savePlayerId: string) => void;
 }
 
-/** Bottom-centered ready / identity controls for restore_lobby. */
+/** Bottom-centered ready / identity controls for restore_lobby and ready_lobby. */
 export function RestoreLobbyBar({
+  mode = "restore",
   ready,
   readyCount,
   playerCount,
@@ -27,14 +30,21 @@ export function RestoreLobbyBar({
   onInherit,
 }: Props) {
   const available = identities.filter((i) => !i.claimed && i.hasCapital);
+  const hint =
+    mode === "ready"
+      ? canAbandonCapital
+        ? "已选定首都 · 可放弃后重选 · 全员准备后开始"
+        : "请先选定首都，再点击准备"
+      : restoreHolder
+        ? "你是存档持有者（继承保存人）· 全图卫星预览 · 全员准备后开始"
+        : canPickCapital
+          ? "全图卫星预览 · 请选都、继承未占用身份，或准备"
+          : "全图卫星预览 · 可放弃首都后重选 · 全员准备后开始";
+
   return (
     <div className="restore-lobby-bar">
       <div className="restore-lobby-hint">
-        {restoreHolder
-          ? "你是存档持有者（继承保存人）· 全图卫星预览 · 全员准备后开始"
-          : canPickCapital
-            ? "全图卫星预览 · 请选都、继承未占用身份，或准备"
-            : "全图卫星预览 · 可放弃首都后重选 · 全员准备后开始"}
+        {hint}
         <span className="restore-lobby-count">
           {" "}
           准备 {readyCount}/{playerCount}
@@ -43,10 +53,10 @@ export function RestoreLobbyBar({
       <div className="restore-lobby-actions">
         {canAbandonCapital ? (
           <button type="button" className="btn restore-lobby-btn" onClick={onAbandon}>
-            放弃首都
+            {mode === "ready" ? "放弃首都，重新选择" : "放弃首都"}
           </button>
         ) : null}
-        {canPickCapital && available.length > 0 ? (
+        {mode === "restore" && canPickCapital && available.length > 0 ? (
           <label className="restore-lobby-inherit">
             继承身份
             <select

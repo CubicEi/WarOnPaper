@@ -11,7 +11,7 @@
 | [game-bridge.md](./game-bridge.md) | `gameBridge`：加载 `room.js`、`GameRoomHandle` 契约、tick 常量 |
 | [lobby-ws.md](./lobby-ws.md) | 协议、身份、匹配队列、`RoomRegistry`、WS 消息分流 |
 | [title-spa.md](./title-spa.md) | `manager/client` 标题大厅 SPA |
-| [save-load.md](./save-load.md) | `.wopsave` 加解密、`WOP_SAVE_KEY`、读档准备大厅 |
+| [save-load.md](./save-load.md) | `.wopsave` 加解密、`config.json` saveKey、开局/读档准备大厅 |
 
 ## 源码一览
 

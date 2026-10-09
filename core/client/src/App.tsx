@@ -496,7 +496,9 @@ export function App() {
   const role = state?.role ?? "player";
 
   const foreignCapital =
-    (phase === "pick_capital" || phase === "restore_lobby") &&
+    (phase === "pick_capital" ||
+      phase === "ready_lobby" ||
+      phase === "restore_lobby") &&
     (state?.buildings ?? []).some(
       (b) => b.buildingId === "capital" && b.ownerId !== playerId,
     );
@@ -511,19 +513,21 @@ export function App() {
               ? "读档准备 · 选都或继承身份（红圈内不能设都）"
               : "读档准备 · 选都或继承身份"
             : "读档准备 · 可放弃首都后重选"
-        : phase === "pick_capital"
-          ? foreignCapital
-            ? "请选择首都位置（红圈内不能设都）"
-            : "请选择首都位置"
-          : phase === "spectating"
-            ? "观战中（不可操作）"
-            : phase === "ended"
-              ? state?.winnerNames && state.winnerNames.length > 1
-                ? `对局结束 · ${state.winnerNames.join("、")} 队伍获胜`
-                : state?.winnerName
-                  ? `对局结束 · ${state.winnerName} 获胜`
-                  : "对局结束"
-              : null;
+        : phase === "ready_lobby"
+          ? "准备阶段 · 可放弃首都后重选 · 全员准备后开始"
+          : phase === "pick_capital"
+            ? foreignCapital
+              ? "请选择首都位置（红圈内不能设都）"
+              : "请选择首都位置"
+            : phase === "spectating"
+              ? "观战中（不可操作）"
+              : phase === "ended"
+                ? state?.winnerNames && state.winnerNames.length > 1
+                  ? `对局结束 · ${state.winnerNames.join("、")} 队伍获胜`
+                  : state?.winnerName
+                    ? `对局结束 · ${state.winnerName} 获胜`
+                    : "对局结束"
+                : null;
 
   const statusLine =
     (status === "connected" ? `tick ${state?.tick ?? 0}` : status) +
@@ -634,7 +638,9 @@ export function App() {
               </button>
               <TeamPanelButton
                 visible={
-                  (phase === "pick_capital" || phase === "restore_lobby") &&
+                  (phase === "pick_capital" ||
+                    phase === "ready_lobby" ||
+                    phase === "restore_lobby") &&
                   (state.players?.length ?? 0) >= 3 &&
                   !!playerId
                 }
@@ -644,8 +650,9 @@ export function App() {
           }
         />
       )}
-      {phase === "restore_lobby" && state ? (
+      {(phase === "restore_lobby" || phase === "ready_lobby") && state ? (
         <RestoreLobbyBar
+          mode={phase === "ready_lobby" ? "ready" : "restore"}
           ready={!!state.ready}
           readyCount={state.readyPlayerIds?.length ?? 0}
           playerCount={state.players?.length ?? 0}

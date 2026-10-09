@@ -169,7 +169,7 @@ export interface CreateRoomOptions {
   restore?: SaveDocument;
   /** Live player id of the save-file holder (inherits saver). */
   holderPlayerId?: string;
-  /** Stamped into exportPlainSave (`version.json`). */
+  /** Stamped into exportPlainSave (`config.json` version). */
   gameVersion?: string;
 }
 
@@ -287,9 +287,16 @@ export function createRoom(options: CreateRoomOptions): GameRoom {
   const teamInvites: TeamInvitePending[] = [];
   const allyGarrisonRequests: AllyGarrisonRequest[] = [];
 
-  /** Restore lobby: still waiting for all-ready before playing. */
-  let restoreLobbyActive = restoreMode;
+  /**
+   * Pregame ready gate (new game + restore): true until all ready → playing.
+   * Restore-specific satellite / inherit UI uses `inRestoreLobby()`.
+   */
+  let awaitingReady = true;
   const readyPlayerIds = new Set<string>();
+
+  function inRestoreLobby(): boolean {
+    return restoreMode && awaitingReady;
+  }
   /** liveId → saveId from auto + manual inherit. */
   let liveToSave = new Map<string, string>();
   /** Manual inherit_identity bindings (preserved across recompute). */
@@ -497,14 +504,18 @@ function phaseFor(session: PlayerSession): GamePhase {
   if (closed || winnerId) return "ended";
   if (spectatorIds.has(session.id)) return "spectating";
   if (!terrain) return "need_init";
-  if (restoreLobbyActive) return "restore_lobby";
+  if (inRestoreLobby()) return "restore_lobby";
+  if (awaitingReady) {
+    // New game: pick capital first, then ready_lobby (same ready gate as restore).
+    return findPlayerCapital(session.id) ? "ready_lobby" : "pick_capital";
+  }
   if (!findPlayerCapital(session.id)) return "pick_capital";
   return "playing";
 }
 
 function isRestoreHolder(playerId: string): boolean {
   return (
-    restoreLobbyActive &&
+    inRestoreLobby() &&
     holderPlayerId != null &&
     playerId === holderPlayerId
   );
@@ -515,21 +526,29 @@ function hasMappedSave(playerId: string): boolean {
 }
 
 function canPickCapitalNow(playerId: string): boolean {
-  if (!restoreLobbyActive) return !findPlayerCapital(playerId);
-  if (isRestoreHolder(playerId)) return false;
-  if (spectatorIds.has(playerId)) return false;
+  if (!awaitingReady) return !findPlayerCapital(playerId);
+  if (inRestoreLobby()) {
+    if (isRestoreHolder(playerId)) return false;
+    if (spectatorIds.has(playerId)) return false;
+  }
   return !findPlayerCapital(playerId);
 }
 
 function canAbandonCapitalNow(playerId: string): boolean {
-  if (!restoreLobbyActive) return false;
-  if (isRestoreHolder(playerId)) return false;
-  if (!hasMappedSave(playerId)) return false;
-  return !!findPlayerCapital(playerId);
+  if (!awaitingReady) return false;
+  if (!findPlayerCapital(playerId)) return false;
+  if (inRestoreLobby()) {
+    // Restore: holder locked; only mapped seats may abandon to re-pick / inherit.
+    if (isRestoreHolder(playerId)) return false;
+    if (!hasMappedSave(playerId)) return false;
+    return true;
+  }
+  // New-game ready_lobby: abandon + reselect allowed (teamMode only blocks mid-game respawn).
+  return true;
 }
 
 function buildRestoreIdentities(): RestoreIdentityOption[] {
-  if (!restoreLobbyActive) return [];
+  if (!inRestoreLobby()) return [];
   const claimed = new Set(liveToSave.values());
   return savePlayers.map((p) => ({
     savePlayerId: p.playerId,
@@ -611,6 +630,14 @@ function rejectIfNotPlaying(session: PlayerSession): boolean {
     );
     return true;
   }
+  if (p === "ready_lobby") {
+    sendError(
+      session.ws,
+      "ready_lobby",
+      "准备中：仅可放弃首都重选 / 准备",
+    );
+    return true;
+  }
   sendError(
     session.ws,
     "not_playing",
@@ -632,12 +659,12 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
   syncCapitalHud(player);
   const linked = teamLinkedIds(player.id);
   const role: SnapshotRole = spectatorIds.has(player.id) ? "spectator" : "player";
-  const inRestoreLobby = restoreLobbyActive;
+  const restoreLobby = inRestoreLobby();
   const fullVision =
     role === "spectator" || phaseFor(player) === "ended";
   const allSight = terrain ? collectResourceSight(terrain) : [];
   const resourceSight =
-    fullVision || inRestoreLobby
+    fullVision || restoreLobby
       ? allSight
       : filterResourceSightForViewer(
           allSight,
@@ -658,7 +685,7 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
     tick,
     map: MAP,
     you: { ...player.hud },
-    buildings: inRestoreLobby
+    buildings: restoreLobby
       ? satelliteFacadeBuildings()
       : fullVision
         ? buildings.map((b) => ({ ...b }))
@@ -670,7 +697,7 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
             units,
             teams,
           ),
-    liaisons: inRestoreLobby
+    liaisons: restoreLobby
       ? satelliteFacadeLiaisons()
       : fullVision
         ? liaisons.map((l) => ({ ...l, nodes: l.nodes.map((n) => ({ ...n })) }))
@@ -682,12 +709,12 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
             units,
             teams,
           ),
-    units: inRestoreLobby
+    units: restoreLobby
       ? [] // satellite lobby: buildings/liaisons only; units reveal after playing
       : fullVision
         ? units.map((u) => ({ ...u }))
         : filterUnitsForViewer(units, player.id, buildings, linked, teams),
-    connectedBuildingIds: inRestoreLobby ? [] : linked,
+    connectedBuildingIds: restoreLobby ? [] : linked,
     pollutionZones: pollutionZones.map((z) => ({ ...z })),
     phase: phaseFor(player),
     terrainSeed: terrain?.seed ?? null,
@@ -710,7 +737,7 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
     allyGarrisonRequests: myAllyReqs.map((r) => ({ ...r })),
     ready: readyPlayerIds.has(player.id),
     readyPlayerIds: [...readyPlayerIds],
-    restoreMode: restoreLobbyActive,
+    restoreMode: restoreLobby,
     restoreHolder: isRestoreHolder(player.id),
     mappedSaveId: liveToSave.get(player.id) ?? null,
     canPickCapital: canPickCapitalNow(player.id),
@@ -1190,7 +1217,7 @@ function generateRoomTerrain(seedRaw?: number | string): void {
   sawMultipleCapitals = false;
   const seed = parseTerrainSeed(seedRaw);
   terrain = generateTerrain({ map: MAP, seed });
-  phase = restoreLobbyActive ? "restore_lobby" : "pick_capital";
+  phase = inRestoreLobby() ? "restore_lobby" : "pick_capital";
   tick = 0;
   slog("init", "room terrain", {
     roomId,
@@ -1224,7 +1251,7 @@ function applyRestoreDocument(doc: SaveDocument): void {
   teamMode = !!doc.teamMode || hasMultiPlayerTeam(teams);
   tick = doc.tick;
   phase = "restore_lobby";
-  restoreLobbyActive = true;
+  awaitingReady = true;
   if (terrain) {
     applyResourceTerrainSync(terrain, doc.resourceTerrain);
     clearedResourceCells.clear();
@@ -1306,8 +1333,8 @@ function refreshPlayerMapping(): void {
   }
 }
 
-function tryStartPlayingFromRestore(): void {
-  if (!restoreLobbyActive) return;
+function tryStartPlayingFromLobby(): void {
+  if (!awaitingReady) return;
   if (players.size < 2) return;
   for (const p of players.values()) {
     if (!readyPlayerIds.has(p.id)) return;
@@ -1315,12 +1342,12 @@ function tryStartPlayingFromRestore(): void {
     if (isRestoreHolder(p.id)) continue;
     if (!findPlayerCapital(p.id)) return;
   }
-  restoreLobbyActive = false;
+  awaitingReady = false;
   phase = "playing";
   beginCommWaves();
   advanceCommWaves();
   noteCapitalCounts();
-  slog("restore", "all ready → playing", {
+  slog(restoreMode ? "restore" : "ready", "all ready → playing", {
     players: players.size,
     tick,
   });
@@ -1328,8 +1355,8 @@ function tryStartPlayingFromRestore(): void {
 }
 
 function handleSetReady(session: PlayerSession, ready: boolean): void {
-  if (!restoreLobbyActive) {
-    sendError(session.ws, "not_restore_lobby", "仅读档准备阶段可切换准备状态");
+  if (!awaitingReady) {
+    sendError(session.ws, "not_ready_lobby", "仅开局准备阶段可切换准备状态");
     return;
   }
   if (ready) {
@@ -1346,15 +1373,15 @@ function handleSetReady(session: PlayerSession, ready: boolean): void {
     readyPlayerIds.delete(session.id);
   }
   touchInteraction();
-  tryStartPlayingFromRestore();
-  if (restoreLobbyActive) broadcastState();
+  tryStartPlayingFromLobby();
+  if (awaitingReady) broadcastState();
 }
 
 function handleInheritIdentity(
   session: PlayerSession,
   savePlayerId: string,
 ): void {
-  if (!restoreLobbyActive) {
+  if (!inRestoreLobby()) {
     sendError(session.ws, "not_restore_lobby", "仅读档准备阶段可继承身份");
     return;
   }
@@ -1696,7 +1723,7 @@ function handlePlaceCapital(session: PlayerSession, gx: number, gy: number): voi
     );
     return;
   }
-  if (restoreLobbyActive && isRestoreHolder(session.id)) {
+  if (inRestoreLobby() && isRestoreHolder(session.id)) {
     sendError(session.ws, "holder_no_pick", "存档持有者无需选都，请直接准备");
     return;
   }
@@ -1709,7 +1736,7 @@ function handlePlaceCapital(session: PlayerSession, gx: number, gy: number): voi
   const occupiedEarly = findBuildingAt(buildings, node.gx, node.gy);
   // Restore lobby: clicking an unclaimed capital inherits that identity
   if (
-    restoreLobbyActive &&
+    inRestoreLobby() &&
     occupiedEarly &&
     occupiedEarly.buildingId === "capital" &&
     !liveToSave.has(session.id) &&
@@ -1784,16 +1811,18 @@ function handlePlaceCapital(session: PlayerSession, gx: number, gy: number): voi
   touchInteraction();
   noteCapitalCounts();
 
-  if (restoreLobbyActive) {
+  if (awaitingReady) {
     readyPlayerIds.delete(session.id);
-    slog("capital", "placed (restore lobby)", {
+    slog("capital", "placed (ready lobby)", {
       player: session.id.slice(0, 8),
+      restore: restoreMode,
       node,
     });
     broadcastState();
     return;
   }
 
+  // Mid-game re-pick (allowRespawn): enter playing immediately for this seat.
   if (phase !== "playing") tick = 0;
   phase = "playing";
   beginCommWaves();
@@ -3503,8 +3532,8 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       broadcastState();
       return;
     }
-    // Restore lobby: no sim ticks until all ready → playing
-    if (restoreLobbyActive) {
+    // Pregame / restore lobby: no sim ticks until all ready → playing
+    if (awaitingReady) {
       broadcastState();
       if (isIdleNow()) {
         destroyRoom("idle");
@@ -3614,14 +3643,14 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
         existing.name = opts.name.slice(0, 24) || existing.name;
         existing.ws = makeSocket(opts.send);
         touchInteraction();
-        if (restoreLobbyActive) refreshPlayerMapping();
+        if (inRestoreLobby()) refreshPlayerMapping();
         const state = syncPlayerOnJoin(existing);
         return { ok: true, playerId: existing.id, state };
       }
       if (players.size >= maxPlayers) {
         return { ok: false, code: "room_full", message: "房间已满" };
       }
-      if (restoreLobbyActive === false && restoreMode) {
+      if (!awaitingReady && restoreMode) {
         // After restore match started, reject brand-new seats (rejoin OK above).
         return { ok: false, code: "restore_started", message: "读档对局已开始，无法加入" };
       }
@@ -3633,12 +3662,12 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       };
       players.set(session.id, session);
       touchInteraction();
-      if (restoreLobbyActive) {
-        refreshPlayerMapping();
+      if (awaitingReady) {
+        if (inRestoreLobby()) refreshPlayerMapping();
         readyPlayerIds.delete(session.id);
       }
       const state = syncPlayerOnJoin(session);
-      if (restoreLobbyActive) broadcastState();
+      if (awaitingReady) broadcastState();
       slog("conn", "join", roomId, session.id.slice(0, 8), "players=", players.size);
       return { ok: true, playerId: session.id, state };
     },
@@ -3664,7 +3693,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       }
       slog("conn", "leave", roomId, playerId.slice(0, 8), "players=", players.size);
       emit({ type: "player_left", roomId, playerId });
-      if (restoreLobbyActive) refreshPlayerMapping();
+      if (inRestoreLobby()) refreshPlayerMapping();
       if (!closed) broadcastState();
     },
     dispatch(playerId: string, msg: ClientToServer): void {

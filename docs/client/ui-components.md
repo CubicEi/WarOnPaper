@@ -125,7 +125,7 @@ flowchart TB
 ## 10. `ErrorToast` / `DebugOverlay`
 
 - Toast：`toastKey` 变化重播动画；`variant` error/warn。  
-- Debug：版本号 `@version.json`；连接 statusLine；错误列表；`usePlayerActionLog` 分类/状态标签（shared 文案）。
+- Debug：版本号 `@config.json`；连接 statusLine；错误列表；`usePlayerActionLog` 分类/状态标签（shared 文案）。
 
 ## 11. 角落工具（在 `App`，非 components 文件）
 

@@ -7,7 +7,7 @@ import {
   saveIdentity,
   saveLastRoomId,
 } from "../storage";
-import versionJson from "@version.json";
+import configJson from "@config.json";
 
 type ConnState = "connecting" | "open" | "closed";
 
@@ -282,7 +282,7 @@ export function TitleScreen() {
                 : "离线"}
           </span>
           <span className="build-version" title="版本">
-            {versionJson.version}
+            {configJson.version}
           </span>
         </div>
 
@@ -463,7 +463,7 @@ export function TitleScreen() {
               </p>
             ) : (
               <p style={{ marginTop: "0.35rem", opacity: 0.75, fontSize: "0.85rem" }}>
-                仅创建房间时可上传；对局中不可读档。需服务器配置 WOP_SAVE_KEY。
+                仅创建房间时可上传；对局中不可读档。需服务器配置 config.json saveKey。
               </p>
             )}
           </div>

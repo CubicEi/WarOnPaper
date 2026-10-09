@@ -1,5 +1,7 @@
 /**
- * `.wopsave` pack/unpack — AES-256-GCM. Key from `WOP_SAVE_KEY` only (never to clients).
+ * `.wopsave` pack/unpack — AES-256-GCM.
+ * Key from repo-root `config.json` `saveKey` (primary), or `WOP_SAVE_KEY` env override.
+ * Never sent to clients.
  *
  * Layout: magic "WOPS" (4) | version u16 LE | iv (12) | ciphertext | authTag (16)
  */
@@ -16,7 +18,7 @@ const TAG_BYTES = 16;
 
 export class SaveKeyMissingError extends Error {
   constructor() {
-    super("WOP_SAVE_KEY is not configured");
+    super("saveKey is not configured in config.json (or WOP_SAVE_KEY)");
     this.name = "SaveKeyMissingError";
   }
 }
@@ -28,9 +30,46 @@ export class SaveDecryptError extends Error {
   }
 }
 
-/** Resolve 32-byte AES key from env. Accepts raw 32-byte base64 or any passphrase (SHA-256). */
+function repoRootFromHere(): string {
+  const here = dirname(fileURLToPath(import.meta.url));
+  // dist/ → manager/ → repo root; src/ → manager/ → repo root
+  return join(here, "..", "..");
+}
+
+type RootConfig = {
+  version?: string;
+  saveKey?: string;
+};
+
+/** Read repo-root config.json (version + saveKey). */
+export function readRootConfig(): RootConfig {
+  try {
+    const raw = readFileSync(join(repoRootFromHere(), "config.json"), "utf8");
+    return JSON.parse(raw) as RootConfig;
+  } catch {
+    return {};
+  }
+}
+
+/** Product version string from config.json. */
+export function readGameVersion(): string {
+  const v = readRootConfig().version;
+  return typeof v === "string" && v ? v : "unknown";
+}
+
+function readConfiguredSaveKeyRaw(): string | undefined {
+  const env = process.env.WOP_SAVE_KEY?.trim();
+  if (env) return env;
+  const fromConfig = readRootConfig().saveKey;
+  if (typeof fromConfig === "string" && fromConfig.trim()) {
+    return fromConfig.trim();
+  }
+  return undefined;
+}
+
+/** Resolve 32-byte AES key. Accepts raw 32-byte base64 or any passphrase (SHA-256). */
 export function resolveSaveKey(): Buffer {
-  const raw = process.env.WOP_SAVE_KEY?.trim();
+  const raw = readConfiguredSaveKeyRaw();
   if (!raw) throw new SaveKeyMissingError();
   try {
     const b64 = Buffer.from(raw, "base64");
@@ -46,7 +85,7 @@ export function resolveSaveKey(): Buffer {
 }
 
 export function hasSaveKey(): boolean {
-  return Boolean(process.env.WOP_SAVE_KEY?.trim());
+  return Boolean(readConfiguredSaveKeyRaw());
 }
 
 export function encryptSaveDocument(doc: unknown): Buffer {
@@ -98,18 +137,4 @@ export function decryptSaveBlobBase64(b64: string): unknown {
 
 export function encryptSaveDocumentBase64(doc: unknown): string {
   return encryptSaveDocument(doc).toString("base64");
-}
-
-/** Read repo-root version.json next to manager package. */
-export function readGameVersion(): string {
-  try {
-    const here = dirname(fileURLToPath(import.meta.url));
-    // dist/ → manager/ → repo root; src/ → manager/ → repo root
-    const root = join(here, "..", "..");
-    const raw = readFileSync(join(root, "version.json"), "utf8");
-    const j = JSON.parse(raw) as { version?: string };
-    return typeof j.version === "string" ? j.version : "unknown";
-  } catch {
-    return "unknown";
-  }
 }

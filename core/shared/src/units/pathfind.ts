@@ -198,8 +198,10 @@ function ownLandPadAt(
 
 /**
  * Walkability for a unit kind at a point.
- * Land may enter pure ocean only on own land-pad buildings or completed road/railway.
+ * Land may enter pure ocean only on own land-pad buildings or completed road/railway
+ * (including 借道 enemy roads covering own liaison edges).
  * Navy requires pure ocean (port coastline cells use allowImpassableStart/Goal).
+ * Armor cannot enter pure mountain except on road/railway (own or 借道).
  */
 export function terrainAllowsKind(
   kind: UnitKind,
@@ -210,17 +212,27 @@ export function terrainAllowsKind(
 ): boolean {
   if (kind === "air") return true;
   const def = UNIT_BY_KIND[kind];
-  // Armor blocks 山区 only; foothill (山脚) and coastline remain passable.
-  if (def.mountainBlocked && isPureMountainTerrain(map, gx, gy)) return false;
+  if (!def) return false;
+  const liaisons = opts?.liaisons;
+  const ownerId = opts?.ownerId;
+  const onTransport =
+    liaisons != null &&
+    ownerId != null &&
+    transportAt(gx, gy, liaisons, ownerId) != null;
+  // Armor blocks 山区 only; foothill / coastline / road|rail corridors remain passable.
+  if (
+    def.mountainBlocked &&
+    isPureMountainTerrain(map, gx, gy) &&
+    !onTransport
+  ) {
+    return false;
+  }
   if (kind === "navy" || kind === "navy_carrier") {
     return isOceanTerrain(map, gx, gy);
   }
   if (isOceanTerrain(map, gx, gy)) {
     if (ownLandPadAt(gx, gy, opts)) return true;
-    const liaisons = opts?.liaisons;
-    const ownerId = opts?.ownerId;
-    if (!liaisons || ownerId == null) return false;
-    return transportAt(gx, gy, liaisons, ownerId) != null;
+    return onTransport;
   }
   return true;
 }
@@ -239,6 +251,7 @@ export function speedAt(
   ownerId: string,
 ): number {
   const def = UNIT_BY_KIND[kind];
+  if (!def) return 0.01;
   if (kind === "air") return def.speedDuPerS;
 
   const transport = transportAt(gx, gy, liaisons, ownerId);
@@ -525,8 +538,13 @@ export function planLandOrNavyPath(args: {
   }
 
   const rev: Array<{ gx: number; gy: number }> = [];
+  const seen = new Set<string>();
   let walk: string | undefined = goalKey;
   while (walk) {
+    if (seen.has(walk)) {
+      return { path: [], travelTimeSec: 0, error: unreachableError };
+    }
+    seen.add(walk);
     const [xs, ys] = walk.split(",");
     rev.push({ gx: Number(xs), gy: Number(ys) });
     if (walk === startKey) break;

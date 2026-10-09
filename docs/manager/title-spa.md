@@ -9,12 +9,12 @@
 | 入口 HTML | `index.html`（标题「纸上谈兵 4」；加载 Google Fonts：Noto Serif SC / Source Sans 3） |
 | 挂载 | `src/main.tsx` → `<App />` → `TitleScreen` |
 | 样式 | `src/styles.css` |
-| 版本 | `@version.json` alias → 仓库根 `version.json` |
+| 版本 | `@config.json` → 仅 `{ version }`（不打包 `saveKey`） |
 | 开发端口 | `5174`（`host: true`） |
 | 代理 | `/ws`（WS）、`/play`、`/assets` → `http(s)://localhost:4358` |
 | 构建 | `tsc --noEmit && vite build` → `dist/` |
 
-`fs.allow` 放宽到仓库根，以便读取 `version.json`。插件 `watch-version-json` 在开发时监听该文件变更。
+`fs.allow` 放宽到仓库根，以便读取 `config.json`。插件 `wop-config-public` 在开发时监听该文件变更并只向客户端暴露 `version`。
 
 ## 2. 模块图
 
@@ -24,7 +24,7 @@ flowchart TB
   App --> Title[TitleScreen]
   Title --> Net[LobbySocket net.ts]
   Title --> Stor[storage.ts]
-  Title --> Ver["@version.json"]
+  Title --> Ver["@config.json"]
   Net -->|JSON /ws| Mgr[manager :4358]
 ```
 

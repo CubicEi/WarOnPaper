@@ -1,25 +1,25 @@
 # 存档下载与读档恢复
 
-权威存档由 **GameRoom** 导出明文，**manager** 用 `WOP_SAVE_KEY` 做 AES-256-GCM 封包为 `.wopsave`。密钥永不下发客户端。
+权威存档由 **GameRoom** 导出明文，**manager** 用 `config.json` 的 `saveKey`（或可选环境变量 `WOP_SAVE_KEY`）做 AES-256-GCM 封包为 `.wopsave`。密钥永不下发客户端。
 
-## 配置 `WOP_SAVE_KEY`
+## 配置存档密钥
 
-密钥**只在启动脚本**中设置（`start.js` / `.env` 不提供默认值）：
+**主来源**：仓库根 [`config.json`](../../config.json) 字段 `saveKey`（仅 manager / 服务端读取；Vite 客户端别名 `@config.json` 只暴露 `version`，不打包密钥）。
 
-| 入口 | 行为 |
-|------|------|
-| [`start.cmd`](../../start.cmd) | 未设置时写入示例 `WOP_SAVE_KEY` |
-| [`manager/start.sh`](../../manager/start.sh)（根目录 `start.sh` 转调） | `${WOP_SAVE_KEY:-<示例>}` |
+可选覆盖：启动前设置环境变量 `WOP_SAVE_KEY`（优先于 `config.json`）。启动脚本不再写入默认密钥。
 
-示例密钥（base64，32 字节）：
+示例（与仓库示例 `config.json` 一致，base64 32 字节）：
 
+```json
+{
+  "version": "…",
+  "saveKey": ""
+}
 ```
-WOP_SAVE_KEY=jvFkO2ewJAkSp5Gu67q2VKjdkFsq95GPd1JmK/SwuiY=
-```
 
-直接跑 `start.cmd` / `start.sh` 即可。若用 `node manager/dist/index.js` 等绕过启动脚本，需自行导出该变量，否则导出/读档会 `SAVE_KEY_MISSING`。
+直接跑 `start.cmd` / `start.sh` 即可（读取 `config.json`）。若用 `node manager/dist/index.js` 等绕过启动器，仍须保证进程能读到仓库根 `config.json`，或自行导出 `WOP_SAVE_KEY`，否则导出/读档会 `SAVE_KEY_MISSING`。
 
-**生产请更换脚本内密钥**；不同密钥加密的 `.wopsave` 无法互相读档。
+**生产请更换 `saveKey`**；不同密钥加密的 `.wopsave` 无法互相读档。
 
 | 形式 | 行为 |
 |------|------|
@@ -45,9 +45,9 @@ magic "WOPS" (4) | version u16 LE (=1) | iv (12) | ciphertext | authTag (16)
 | C→S | `export_save` | 对局中请求下载；manager 调 `exportPlainSave` 后加密，回 `save_export` |
 | S→C | `save_export` | `blob`（base64 密文）、`filename?` |
 | C→S | `create_room` + `saveBlob?` | 仅自定义建房可读档；manager 解密后 `createRoom({ restore, holderPlayerId })` |
-| C→S | `set_ready` | `{ ready: boolean }` — 读档准备大厅 |
-| C→S | `inherit_identity` | `{ savePlayerId }` — 继承未占用存档身份 |
-| C→S | `abandon_capital` | 读档大厅放弃首都以便重选 / 换身份 |
+| C→S | `set_ready` | `{ ready: boolean }` — 开局准备大厅（新开局 `ready_lobby` / 读档 `restore_lobby`） |
+| C→S | `inherit_identity` | `{ savePlayerId }` — 继承未占用存档身份（仅读档） |
+| C→S | `abandon_capital` | 准备大厅放弃首都以便重选 / 换身份 |
 
 **禁止**对局中注入存档。
 
@@ -60,12 +60,23 @@ magic "WOPS" (4) | version u16 LE (=1) | iv (12) | ciphertext | authTag (16)
 
 映射成功即接管该存档玩家全部资产与 HUD。
 
-## `restore_lobby`
+## 开局准备：`ready_lobby` / `restore_lobby`
+
+新开局与读档共用同一套准备门闸（`set_ready` / 全员 ready → `playing`）：
+
+### 新开局 `ready_lobby`
+
+- 玩家先 `pick_capital` 选都，选完后进入 `ready_lobby`（同一套 Ready UI）。
+- 可 `abandon_capital`（放弃首都，重新选择）后再选都。
+- **组队模式**在准备阶段仍允许放弃重选；组队仅禁止对局中首都沦陷后的再选都（观战）。
+- 当前房内 **所有人 ready**、`playerCount >= 2`、且非观战者均已有首都 → `playing`。
+
+### 读档 `restore_lobby`
 
 - 阶段名：`restore_lobby`（快照 `restoreMode: true`）。
 - **全图卫星**展示建筑 / 联络线；**无直接视野**，直至全员准备并进入 `playing`。
 - 禁止战斗 / 建造；可选都（若需要）、继承身份、组队（若仍开放）、准备切换。
-- 已映射且有首都者可 `abandon_capital` 后重选。
+- 已映射且有首都者可 `abandon_capital` 后重选；存档持有者不可放弃/重选都。
 - 当前房内 **所有人 ready**、`playerCount >= 2`、且非持有者/非观战者均已有首都 → `playing`，开始 tick。
 - `allowRespawn` / 地图等沿用存档。
 
@@ -78,7 +89,7 @@ magic "WOPS" (4) | version u16 LE (=1) | iv (12) | ciphertext | authTag (16)
 
 - `core/shared/src/save.ts` — 明文类型
 - `core/server/src/room.ts` / `saveRestore.ts` — 导出与恢复
-- `manager/src/saveCrypto.ts` — 加解密
+- `manager/src/saveCrypto.ts` — 加解密（读 `config.json`）
 - `manager/src/index.ts` — `export_save` / `create_room.saveBlob`
 - `core/client` — 下载钮、准备条、卫星大厅
 - `manager/client` — 标题屏上传

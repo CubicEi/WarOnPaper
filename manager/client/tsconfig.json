@@ -19,7 +19,7 @@
     "noUncheckedSideEffectImports": true,
     "baseUrl": ".",
     "paths": {
-      "@version.json": ["../../version.json"]
+      "@config.json": ["../../config.json"]
     }
   },
   "include": ["src"]

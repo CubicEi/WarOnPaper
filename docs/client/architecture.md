@@ -13,7 +13,7 @@
 | 静态资源 | `vite.config.ts` 的 `publicDir` 指向 `core/assets`（运行时 URL 以 `/icons/...`、`/ui/...` 访问） |
 | 开发代理 | `/ws` → `ws://localhost:4358`（manager）；可用 `VITE_WS_URL` 覆盖 |
 
-`vite.config.ts` 将 `@wop/shared` 直接 alias 到 `../shared/src/index.ts`，开发时与服务器共用同一套类型与规则函数。`@version.json` alias 到仓库根 `version.json`，供 F2 调试面板显示版本号。
+`vite.config.ts` 将 `@wop/shared` 直接 alias 到 `../shared/src/index.ts`，开发时与服务器共用同一套类型与规则函数。`@config.json` alias 到仓库根 `config.json`，供 F2 调试面板显示版本号。
 
 ## 2. 分层职责
 

@@ -955,40 +955,45 @@ export function GameCanvas({
     const unitIds = mobilize.unitIds;
     if (mobilize.mode !== "assign" && sources.length === 0 && unitIds.length === 0) return null;
     if (mobilize.mode === "assign" && unitIds.length === 0) return null;
-    let n = 0;
-    const ctx = {
-      map,
-      terrain,
-      buildings,
-      liaisons,
-      units,
-      connectedIds: connectedBuildingIds,
-      nextId: () => `preview-${++n}`,
-    };
-    if (mobilize.mode === "assign") {
-      if (!mobilize.assignBuildingId) return "请选择建筑";
-      const result = applyAssignHome(myPlayerId, mobilize.assignBuildingId, unitIds, ctx);
-      return result.ok ? null : (result.error ?? "无法归属");
+    try {
+      let n = 0;
+      const ctx = {
+        map,
+        terrain,
+        buildings,
+        liaisons,
+        units,
+        connectedIds: connectedBuildingIds,
+        nextId: () => `preview-${++n}`,
+      };
+      if (mobilize.mode === "assign") {
+        if (!mobilize.assignBuildingId) return "请选择建筑";
+        const result = applyAssignHome(myPlayerId, mobilize.assignBuildingId, unitIds, ctx);
+        return result.ok ? null : (result.error ?? "无法归属");
+      }
+      const result = previewUnitMove(
+        {
+          ownerId: myPlayerId,
+          gx: mobilize.gx,
+          gy: mobilize.gy,
+          sources: sources.length > 0 ? sources : undefined,
+          unitIds: unitIds.length > 0 ? unitIds : undefined,
+          asBlockade: mobilize.mode === "blockade",
+          asSupply: mobilize.mode === "supply",
+          supplyBuildingId: mobilize.supplyBuildingId,
+          asHold: mobilize.mode === "hold",
+          holdBuildingId: mobilize.holdBuildingId,
+          attackTargetUnitId: mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
+          attackTargetBuildingId:
+            mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
+        },
+        ctx,
+      );
+      return result.ok ? null : (result.error ?? "无法调动");
+    } catch (err) {
+      log.error("mobilize", "plan preview failed", err);
+      return "路径预览失败";
     }
-    const result = previewUnitMove(
-      {
-        ownerId: myPlayerId,
-        gx: mobilize.gx,
-        gy: mobilize.gy,
-        sources: sources.length > 0 ? sources : undefined,
-        unitIds: unitIds.length > 0 ? unitIds : undefined,
-        asBlockade: mobilize.mode === "blockade",
-        asSupply: mobilize.mode === "supply",
-        supplyBuildingId: mobilize.supplyBuildingId,
-        asHold: mobilize.mode === "hold",
-        holdBuildingId: mobilize.holdBuildingId,
-        attackTargetUnitId: mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
-        attackTargetBuildingId:
-          mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
-      },
-      ctx,
-    );
-    return result.ok ? null : (result.error ?? "无法调动");
   }, [
     mobilize,
     map,
@@ -1004,62 +1009,66 @@ export function GameCanvas({
   const marchPathPreviews = useMemo(() => {
     const paths: Array<Array<{ gx: number; gy: number }>> = [];
     if (!map || !terrain || myPlayerId == null) return paths;
-    let n = 0;
-    const ctx = {
-      map,
-      terrain,
-      buildings,
-      liaisons,
-      units,
-      connectedIds: connectedBuildingIds,
-      nextId: () => `preview-${++n}`,
-    };
-    if (
-      mobilize &&
-      mobilize.mode !== "assign" &&
-      !(mobilize.mode === "attack" && mobilize.targetLiaisonId)
-    ) {
-      const base = {
-        ownerId: myPlayerId,
-        gx: mobilize.gx,
-        gy: mobilize.gy,
-        asBlockade: mobilize.mode === "blockade",
-        asSupply: mobilize.mode === "supply",
-        supplyBuildingId: mobilize.supplyBuildingId,
-        asHold: mobilize.mode === "hold",
-        holdBuildingId: mobilize.holdBuildingId,
-        attackTargetUnitId: mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
-        attackTargetBuildingId:
-          mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
+    try {
+      let n = 0;
+      const ctx = {
+        map,
+        terrain,
+        buildings,
+        liaisons,
+        units,
+        connectedIds: connectedBuildingIds,
+        nextId: () => `preview-${++n}`,
       };
-      for (const [buildingId, u] of Object.entries(mobilize.sources)) {
-        const result = previewUnitMove({ ...base, sources: [{ buildingId, u }] }, ctx);
-        for (const p of result.paths) paths.push(p);
-      }
-      for (const id of mobilize.unitIds) {
-        const result = previewUnitMove({ ...base, unitIds: [id] }, ctx);
-        for (const p of result.paths) paths.push(p);
-      }
-    }
-    if (trainUi) {
-      const source = buildings.find((b) => b.id === trainUi.sourceId);
-      if (source) {
-        for (const tid of trainUi.targetIds) {
-          const target = buildings.find((b) => b.id === tid);
-          if (!target) continue;
-          const result = previewTrainingDeliveryPath(
-            myPlayerId,
-            trainUi.kind,
-            source.gx,
-            source.gy,
-            target.gx,
-            target.gy,
-            target.id,
-            ctx,
-          );
-          if (result.path.length >= 2) paths.push(result.path);
+      if (
+        mobilize &&
+        mobilize.mode !== "assign" &&
+        !(mobilize.mode === "attack" && mobilize.targetLiaisonId)
+      ) {
+        const base = {
+          ownerId: myPlayerId,
+          gx: mobilize.gx,
+          gy: mobilize.gy,
+          asBlockade: mobilize.mode === "blockade",
+          asSupply: mobilize.mode === "supply",
+          supplyBuildingId: mobilize.supplyBuildingId,
+          asHold: mobilize.mode === "hold",
+          holdBuildingId: mobilize.holdBuildingId,
+          attackTargetUnitId: mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
+          attackTargetBuildingId:
+            mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
+        };
+        for (const [buildingId, u] of Object.entries(mobilize.sources)) {
+          const result = previewUnitMove({ ...base, sources: [{ buildingId, u }] }, ctx);
+          for (const p of result.paths) paths.push(p);
+        }
+        for (const id of mobilize.unitIds) {
+          const result = previewUnitMove({ ...base, unitIds: [id] }, ctx);
+          for (const p of result.paths) paths.push(p);
         }
       }
+      if (trainUi) {
+        const source = buildings.find((b) => b.id === trainUi.sourceId);
+        if (source) {
+          for (const tid of trainUi.targetIds) {
+            const target = buildings.find((b) => b.id === tid);
+            if (!target) continue;
+            const result = previewTrainingDeliveryPath(
+              myPlayerId,
+              trainUi.kind,
+              source.gx,
+              source.gy,
+              target.gx,
+              target.gy,
+              target.id,
+              ctx,
+            );
+            if (result.path.length >= 2) paths.push(result.path);
+          }
+        }
+      }
+    } catch (err) {
+      log.error("mobilize", "path preview failed", err);
     }
     return paths;
   }, [
@@ -1972,6 +1981,7 @@ export function GameCanvas({
           !aiming &&
           (phaseNow === "playing" ||
             phaseNow === "pick_capital" ||
+            phaseNow === "ready_lobby" ||
             phaseNow === "restore_lobby" ||
             phaseNow === "spectating" ||
             phaseNow === "ended") &&
@@ -3434,39 +3444,47 @@ export function GameCanvas({
               mobilize.mode !== "assign" &&
               !(mobilize.mode === "attack" && mobilize.targetLiaisonId)
             ) {
-              let n = 0;
-              const result = previewUnitMove(
-                {
-                  ownerId: myPlayerId,
-                  gx: mobilize.gx,
-                  gy: mobilize.gy,
-                  sources: [{ buildingId, u }],
-                  asBlockade: mobilize.mode === "blockade",
-                  asSupply: mobilize.mode === "supply",
-                  supplyBuildingId: mobilize.supplyBuildingId,
-                  asHold: mobilize.mode === "hold",
-                  holdBuildingId: mobilize.holdBuildingId,
-                  attackTargetUnitId:
-                    mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
-                  attackTargetBuildingId:
-                    mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
-                },
-                {
-                  map,
-                  terrain,
-                  buildings,
-                  liaisons,
-                  units,
-                  connectedIds: connectedBuildingIds,
-                  nextId: () => `preview-${++n}`,
-                },
-              );
-              path =
-                result.paths[0] ??
-                [
+              try {
+                let n = 0;
+                const result = previewUnitMove(
+                  {
+                    ownerId: myPlayerId,
+                    gx: mobilize.gx,
+                    gy: mobilize.gy,
+                    sources: [{ buildingId, u }],
+                    asBlockade: mobilize.mode === "blockade",
+                    asSupply: mobilize.mode === "supply",
+                    supplyBuildingId: mobilize.supplyBuildingId,
+                    asHold: mobilize.mode === "hold",
+                    holdBuildingId: mobilize.holdBuildingId,
+                    attackTargetUnitId:
+                      mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
+                    attackTargetBuildingId:
+                      mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
+                  },
+                  {
+                    map,
+                    terrain,
+                    buildings,
+                    liaisons,
+                    units,
+                    connectedIds: connectedBuildingIds,
+                    nextId: () => `preview-${++n}`,
+                  },
+                );
+                path =
+                  result.paths[0] ??
+                  [
+                    { gx: b.gx, gy: b.gy },
+                    { gx: mobilize.gx, gy: mobilize.gy },
+                  ];
+              } catch (err) {
+                log.error("mobilize", "toggle source preview failed", err);
+                path = [
                   { gx: b.gx, gy: b.gy },
                   { gx: mobilize.gx, gy: mobilize.gy },
                 ];
+              }
             }
             if (b)
               syncFocus(`b:${buildingId}`, b.gx, b.gy, turningOn, {
@@ -3495,39 +3513,47 @@ export function GameCanvas({
               mobilize.mode !== "assign" &&
               !(mobilize.mode === "attack" && mobilize.targetLiaisonId)
             ) {
-              let n = 0;
-              const result = previewUnitMove(
-                {
-                  ownerId: myPlayerId,
-                  gx: mobilize.gx,
-                  gy: mobilize.gy,
-                  unitIds: [id],
-                  asBlockade: mobilize.mode === "blockade",
-                  asSupply: mobilize.mode === "supply",
-                  supplyBuildingId: mobilize.supplyBuildingId,
-                  asHold: mobilize.mode === "hold",
-                  holdBuildingId: mobilize.holdBuildingId,
-                  attackTargetUnitId:
-                    mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
-                  attackTargetBuildingId:
-                    mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
-                },
-                {
-                  map,
-                  terrain,
-                  buildings,
-                  liaisons,
-                  units,
-                  connectedIds: connectedBuildingIds,
-                  nextId: () => `preview-${++n}`,
-                },
-              );
-              path =
-                result.paths[0] ??
-                [
+              try {
+                let n = 0;
+                const result = previewUnitMove(
+                  {
+                    ownerId: myPlayerId,
+                    gx: mobilize.gx,
+                    gy: mobilize.gy,
+                    unitIds: [id],
+                    asBlockade: mobilize.mode === "blockade",
+                    asSupply: mobilize.mode === "supply",
+                    supplyBuildingId: mobilize.supplyBuildingId,
+                    asHold: mobilize.mode === "hold",
+                    holdBuildingId: mobilize.holdBuildingId,
+                    attackTargetUnitId:
+                      mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
+                    attackTargetBuildingId:
+                      mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
+                  },
+                  {
+                    map,
+                    terrain,
+                    buildings,
+                    liaisons,
+                    units,
+                    connectedIds: connectedBuildingIds,
+                    nextId: () => `preview-${++n}`,
+                  },
+                );
+                path =
+                  result.paths[0] ??
+                  [
+                    { gx: u.gx, gy: u.gy },
+                    { gx: mobilize.gx, gy: mobilize.gy },
+                  ];
+              } catch (err) {
+                log.error("mobilize", "toggle unit preview failed", err);
+                path = [
                   { gx: u.gx, gy: u.gy },
                   { gx: mobilize.gx, gy: mobilize.gy },
                 ];
+              }
             }
             if (u)
               syncFocus(`u:${id}`, u.gx, u.gy, turningOn, {

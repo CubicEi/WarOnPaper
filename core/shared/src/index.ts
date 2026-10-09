@@ -20,6 +20,7 @@ export const STARTING_ORGANIZATION = 10;
 export type GamePhase =
   | "need_init"
   | "pick_capital"
+  | "ready_lobby"
   | "restore_lobby"
   | "playing"
   | "spectating"
@@ -256,10 +257,11 @@ export interface GameStateSnapshot {
    */
   allyGarrisonRequests?: import("./teams.js").AllyGarrisonRequest[];
   /**
-   * Restore-from-save lobby: player marked ready. Wire when changed / bootstrap.
+   * Pregame ready lobby (new game ready_lobby or restore_lobby): viewer ready.
+   * Wire when changed / bootstrap.
    */
   ready?: boolean;
-  /** All player ids currently ready (restore lobby). */
+  /** All player ids currently ready (pregame / restore lobby). */
   readyPlayerIds?: string[];
   /** True while room is in restore_lobby (before all-ready → playing). */
   restoreMode?: boolean;
@@ -269,7 +271,7 @@ export interface GameStateSnapshot {
   mappedSaveId?: string | null;
   /** Unmapped / abandoned: may place or inherit a capital. */
   canPickCapital?: boolean;
-  /** Mapped with capital: may abandon and re-pick. */
+  /** Has capital in pregame/restore lobby: may abandon and re-pick. */
   canAbandonCapital?: boolean;
   /** Available save identities for inherit_identity. */
   restoreIdentities?: import("./save.js").RestoreIdentityOption[];
@@ -401,7 +403,7 @@ export type ClientToServer =
       type: "export_save";
     }
   | {
-      /** Restore lobby ready toggle. */
+      /** Pregame / restore lobby ready toggle. */
       type: "set_ready";
       ready: boolean;
     }
@@ -411,7 +413,7 @@ export type ClientToServer =
       savePlayerId: string;
     }
   | {
-      /** Abandon current capital in restore lobby to re-pick / inherit. */
+      /** Abandon current capital in pregame/restore lobby to re-pick / inherit. */
       type: "abandon_capital";
     }
   | { type: "join_room"; roomId: string }

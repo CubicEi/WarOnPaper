@@ -43,6 +43,7 @@ import {
   planAirPath,
   planLandOrNavyPath,
   terrainAllowsKind,
+  transportAt,
   type ActivityRangeLabel,
 } from "./pathfind.js";
 import {
@@ -679,14 +680,21 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
             ) {
               continue;
             }
-            // Armor: skip mountain-cliff coastline strips (standable but no inland step).
-            if (
-              unit.kind === "armor" &&
-              isMountainTerrain(ctx.terrain, p.gx, p.gy) &&
-              !isFoothillTerrain(ctx.terrain, p.gx, p.gy)
-            ) {
-              continue;
-            }
+                            // Armor: skip mountain-cliff coastline strips (standable but no
+                            // inland step) unless a road/rail corridor (incl. 借道) is underfoot.
+                            if (
+                              unit.kind === "armor" &&
+                              isMountainTerrain(ctx.terrain, p.gx, p.gy) &&
+                              !isFoothillTerrain(ctx.terrain, p.gx, p.gy) &&
+                              transportAt(
+                                p.gx,
+                                p.gy,
+                                ctx.liaisons,
+                                unit.ownerId,
+                              ) == null
+                            ) {
+                              continue;
+                            }
             spawn = p;
             break;
           }
