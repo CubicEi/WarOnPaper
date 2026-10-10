@@ -62,6 +62,12 @@ export default defineConfig({
       "/assets": {
         target: "http://localhost:4358",
       },
+      "/icons": {
+        target: "http://localhost:4358",
+      },
+      "/ui": {
+        target: "http://localhost:4358",
+      },
     },
   },
   build: {

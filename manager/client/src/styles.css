@@ -8,12 +8,14 @@
   --accent: #b33a2b;
   --accent-hover: #8f2e22;
   --line: rgba(26, 23, 20, 0.18);
-  --panel: rgba(232, 223, 208, 0.88);
+  --panel: rgba(232, 223, 208, 0.92);
   --shadow: 0 18px 50px rgba(20, 16, 10, 0.28);
   --font-display: "Noto Serif SC", "Songti SC", serif;
   --font-body: "Source Sans 3", "Segoe UI", "PingFang SC", "Microsoft YaHei",
     sans-serif;
   --shell-pad: clamp(1.25rem, 4vw, 2.5rem);
+  --hero-ink: #f4efe6;
+  --hero-muted: rgba(244, 239, 230, 0.78);
 }
 
 *,
@@ -30,23 +32,70 @@ body,
   overflow: hidden;
 }
 
-/* Fixed full-viewport backdrop — does not scroll with panel content */
-body::before {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(ellipse 90% 70% at 15% 10%, rgba(61, 107, 79, 0.35), transparent 55%),
-    radial-gradient(ellipse 70% 60% at 90% 80%, rgba(179, 58, 43, 0.18), transparent 50%),
-    linear-gradient(165deg, #1e2a22 0%, #314a3a 42%, #1a221c 100%);
-}
-
 body {
   font-family: var(--font-body);
   color: var(--ink);
-  background: transparent;
+  background: #1a221c;
+}
+
+/* Full-viewport map cycle behind the title hero */
+.title-map-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: #1a221c;
+}
+
+.title-map-layer {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+  will-change: transform, opacity;
+}
+
+.title-map-layer.is-visible {
+  opacity: 1;
+}
+
+.title-map-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* Dim wash so hero type stays readable over the map */
+.title-map-veil {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(
+      ellipse 80% 55% at 50% 36%,
+      rgba(20, 28, 22, 0.35),
+      transparent 70%
+    ),
+    radial-gradient(
+      ellipse 90% 70% at 15% 10%,
+      rgba(61, 107, 79, 0.22),
+      transparent 55%
+    ),
+    radial-gradient(
+      ellipse 70% 60% at 90% 80%,
+      rgba(179, 58, 43, 0.12),
+      transparent 50%
+    ),
+    linear-gradient(
+      165deg,
+      rgba(30, 42, 34, 0.55) 0%,
+      rgba(49, 74, 58, 0.38) 42%,
+      rgba(26, 34, 28, 0.62) 100%
+    );
 }
 
 button,
@@ -60,131 +109,120 @@ button {
 }
 
 .app-shell {
+  position: relative;
+  z-index: 1;
   height: 100%;
   width: 100%;
-  display: grid;
-  place-items: center;
-  padding: var(--shell-pad);
   overflow: hidden;
 }
 
-.title-screen {
-  width: min(520px, 100%);
-  max-height: calc(100% - 0.01px);
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow);
-  padding: clamp(1.5rem, 4vw, 2.25rem);
-  animation: rise 0.55s ease-out both;
-  scrollbar-gutter: stable;
-}
-
-@keyframes rise {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+/* —— Hero cover (no paper panel) —— */
+.title-hero {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
 }
 
 .brand {
+  position: absolute;
+  left: 50%;
+  top: 34%;
+  transform: translate(-50%, -50%);
+  width: min(520px, calc(100% - 2 * var(--shell-pad)));
+  text-align: center;
   font-family: var(--font-display);
-  font-size: clamp(2.4rem, 8vw, 3.4rem);
+  font-size: clamp(2.8rem, 10vw, 4.2rem);
   font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1.1;
-  margin: 0 0 0.35rem;
-  color: var(--ink);
+  letter-spacing: 0.12em;
+  line-height: 1.08;
+  margin: 0;
+  color: var(--hero-ink);
+  text-shadow:
+    0 2px 0 rgba(20, 16, 10, 0.35),
+    0 12px 36px rgba(10, 14, 12, 0.55);
+  animation: rise-brand 0.55s ease-out both;
+  pointer-events: none;
 }
 
-.tagline {
-  margin: 0 0 1.75rem;
-  color: var(--ink-muted);
-  font-size: 0.98rem;
+/* Name + two CTAs — placed lower than the brand */
+.title-cta-cluster {
+  position: absolute;
+  left: 50%;
+  top: 52%;
+  transform: translate(-50%, 0);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.1rem;
+  width: min(420px, calc(100% - 2 * var(--shell-pad)));
+  text-align: center;
+  animation: rise-cluster 0.55s ease-out both;
+  pointer-events: auto;
 }
 
-.field {
-  display: grid;
-  gap: 0.35rem;
-  margin-bottom: 1rem;
-}
-
-.field label {
-  font-size: 0.78rem;
-  letter-spacing: 0.06em;
-  color: var(--ink-muted);
-}
-
-.field input,
-.field select {
-  border: 1px solid var(--line);
-  background: rgba(255, 252, 246, 0.9);
-  color: var(--ink);
-  padding: 0.65rem 0.75rem;
-  outline: none;
-}
-
-.field input:focus,
-.field select:focus {
-  border-color: var(--field-bright);
-  box-shadow: 0 0 0 3px rgba(61, 107, 79, 0.2);
-}
-
-.field input:disabled,
-.field select:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-  background: rgba(232, 223, 208, 0.65);
-}
-
-.section {
-  border-top: 1px solid var(--line);
-  padding-top: 1.1rem;
-  margin-top: 0.4rem;
-  animation: fade-in 0.45s ease both;
-}
-
-.section:nth-of-type(2) {
-  animation-delay: 0.08s;
-}
-.section:nth-of-type(3) {
-  animation-delay: 0.14s;
-}
-.section:nth-of-type(4) {
-  animation-delay: 0.2s;
-}
-
-@keyframes fade-in {
+@keyframes rise-brand {
   from {
     opacity: 0;
+    transform: translate(-50%, calc(-50% + 10px));
   }
   to {
     opacity: 1;
+    transform: translate(-50%, -50%);
   }
 }
 
-.section h2 {
-  font-family: var(--font-display);
-  font-size: 1.15rem;
-  margin: 0 0 0.75rem;
-  font-weight: 500;
+@keyframes rise-cluster {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 12px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
 }
 
-.row {
+.title-cta-cluster .title-name-field {
+  width: 100%;
+  margin-bottom: 0;
+  text-align: left;
+}
+
+.title-cta-cluster .title-name-field label {
+  color: var(--hero-muted);
+  text-shadow: 0 1px 6px rgba(10, 14, 12, 0.45);
+}
+
+.title-cta-cluster .title-name-field input {
+  border: 1px solid rgba(244, 239, 230, 0.28);
+  background: rgba(20, 28, 22, 0.55);
+  color: var(--hero-ink);
+  padding: 0.65rem 0.75rem;
+  outline: none;
+  width: 100%;
+}
+
+.title-cta-cluster .title-name-field input:focus {
+  border-color: rgba(61, 107, 79, 0.7);
+  box-shadow: 0 0 0 3px rgba(61, 107, 79, 0.28);
+}
+
+.title-cta-cluster .title-name-save {
+  color: var(--hero-ink);
+  border-color: rgba(244, 239, 230, 0.28);
+  background: rgba(20, 28, 22, 0.4);
+}
+
+.title-cta-cluster .title-name-save:hover:not(:disabled) {
+  background: rgba(244, 239, 230, 0.1);
+}
+
+.title-cta-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.6rem;
-  align-items: center;
-}
-
-.row > .grow {
-  flex: 1 1 140px;
+  gap: 0.85rem;
+  justify-content: center;
+  width: 100%;
 }
 
 .btn {
@@ -225,36 +263,39 @@ button {
   transform: none;
 }
 
-.check {
+.btn-hero {
+  min-width: 9.5rem;
+  padding: 0.85rem 1.45rem;
+  font-size: 1.05rem;
+  letter-spacing: 0.12em;
+  border: 1px solid rgba(244, 239, 230, 0.22);
+  box-shadow: 0 10px 28px rgba(10, 14, 12, 0.35);
+}
+
+.btn-hero.btn-accent {
+  border-color: rgba(179, 58, 43, 0.45);
+}
+
+.title-queue-hint {
+  margin: 0;
+  color: var(--hero-muted);
+  font-size: 0.92rem;
+  letter-spacing: 0.04em;
+  text-shadow: 0 1px 8px rgba(10, 14, 12, 0.5);
+}
+
+/* Bottom-right online + version */
+.title-corner-meta {
+  position: absolute;
+  right: var(--shell-pad);
+  bottom: var(--shell-pad);
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  font-size: 0.92rem;
-  color: var(--ink-muted);
-}
-
-.status {
-  margin-top: 1rem;
-  min-height: 1.4rem;
-  font-size: 0.9rem;
-  color: var(--ink-muted);
-}
-
-.status.error {
-  color: var(--accent);
-}
-
-.status.ok {
-  color: var(--field);
-}
-
-.conn {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.75rem;
-  margin-bottom: 1.25rem;
+  gap: 0.85rem;
   font-size: 0.82rem;
-  color: var(--ink-muted);
+  color: var(--hero-muted);
+  text-shadow: 0 1px 6px rgba(10, 14, 12, 0.55);
+  pointer-events: none;
 }
 
 .build-version {
@@ -270,6 +311,7 @@ button {
   display: inline-block;
   margin-right: 0.4rem;
   background: #9a9084;
+  vertical-align: 0.05em;
 }
 
 .dot.live {
@@ -288,8 +330,232 @@ button {
   }
 }
 
+/* —— Modals (interaction panels after CTA) —— */
+.title-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: var(--shell-pad);
+  background: rgba(12, 16, 14, 0.42);
+  animation: fade-in 0.2s ease both;
+}
+
+.title-modal {
+  width: min(520px, 100%);
+  max-height: min(86vh, 720px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  animation: modal-rise 0.28s ease-out both;
+}
+
+@keyframes modal-rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.title-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 1rem 1.15rem;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+
+.title-modal-head h2 {
+  font-family: var(--font-display);
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+  letter-spacing: 0.06em;
+}
+
+.title-modal-close {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.title-modal-body {
+  padding: 1.1rem 1.15rem 1.25rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+}
+
+.field label {
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  color: var(--ink-muted);
+}
+
+.field input,
+.field select,
+.title-modal-body .row > input {
+  border: 1px solid var(--line);
+  background: rgba(255, 252, 246, 0.9);
+  color: var(--ink);
+  padding: 0.65rem 0.75rem;
+  outline: none;
+}
+
+.field input:focus,
+.field select:focus,
+.title-modal-body .row > input:focus {
+  border-color: var(--field-bright);
+  box-shadow: 0 0 0 3px rgba(61, 107, 79, 0.2);
+}
+
+.field input:disabled,
+.field select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: rgba(232, 223, 208, 0.65);
+}
+
+.section {
+  border-top: 1px solid var(--line);
+  padding-top: 1.1rem;
+  margin-top: 0.4rem;
+}
+
+/* No leftover divider where the name field used to sit */
+.title-modal-body > .section:first-child {
+  border-top: none;
+  padding-top: 0;
+  margin-top: 0;
+}
+
+.section h3 {
+  font-family: var(--font-display);
+  font-size: 1.05rem;
+  margin: 0 0 0.75rem;
+  font-weight: 500;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.row > .grow {
+  flex: 1 1 140px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.92rem;
+  color: var(--ink-muted);
+  margin-bottom: 0.85rem;
+}
+
+.status {
+  margin-top: 1rem;
+  min-height: 1.4rem;
+  font-size: 0.9rem;
+  color: var(--ink-muted);
+}
+
+.status.ok {
+  color: var(--field);
+}
+
+.hint-muted {
+  margin-top: 0.35rem;
+  opacity: 0.75;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+}
+
+.rejoin-label {
+  color: var(--ink-muted);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* In-game style notch / 刘海 toast */
+.error-toast {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 40;
+  max-width: min(520px, calc(100% - 32px));
+  padding: 10px 18px;
+  font-size: 14px;
+  line-height: 1.35;
+  color: #ffe8e4;
+  background: rgba(120, 28, 28, 0.94);
+  border: 1px solid #c45a4a;
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  transform: translate(-50%, 0);
+  animation: error-toast-in 0.28s ease-out;
+}
+
+.error-toast.is-warn {
+  color: #fff8e0;
+  background: rgba(140, 110, 20, 0.94);
+  border-color: #d4b84a;
+}
+
+@keyframes error-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -110%);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
 @media (max-width: 480px) {
-  .title-screen {
-    padding: 1.25rem;
+  .brand {
+    top: 30%;
+  }
+
+  .title-cta-cluster {
+    top: 48%;
+    gap: 0.95rem;
+  }
+
+  .title-modal {
+    max-height: 90vh;
+  }
+
+  .title-modal-body {
+    padding: 1rem;
   }
 }
