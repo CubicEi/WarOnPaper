@@ -4,6 +4,10 @@
 
 import type { MapSizeId } from "./map.js";
 import type { PlacedBuilding } from "./buildings/actions.js";
+import type {
+  ActiveRocketResearch,
+  RocketResearchProgressMap,
+} from "./buildings/research.js";
 import type { PlacedLiaison } from "./buildings/liaison.js";
 import type { PollutionZone } from "./buildings/pollution.js";
 import type { ResourceTerrainSync } from "./terrain/types.js";
@@ -29,6 +33,10 @@ export interface SavePlayerHud {
   energy: number;
   organization: number;
   organizationMax: number;
+  /** Rocket research progress (optional on older saves). */
+  research?: RocketResearchProgressMap;
+  /** Timed research in progress (optional on older saves). */
+  activeResearch?: ActiveRocketResearch | null;
 }
 
 export interface SavePlayerSnapshot {
@@ -37,6 +45,13 @@ export interface SavePlayerSnapshot {
   hud: SavePlayerHud;
   /** True when this player was spectating at save time. */
   spectator: boolean;
+  /**
+   * Rocket research progress (preferred over `hud.research` when both present).
+   * Older saves may only carry these under `hud`.
+   */
+  research?: RocketResearchProgressMap;
+  /** Timed research in progress at save time. */
+  activeResearch?: ActiveRocketResearch | null;
 }
 
 /**

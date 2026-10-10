@@ -128,6 +128,18 @@ import {
   type RestoreIdentityOption,
   SAVE_FORMAT_VERSION,
   applyResourceTerrainSync,
+  emptyRocketResearchProgress,
+  normalizeRocketResearchProgress,
+  normalizeActiveRocketResearch,
+  canStartRocketResearch,
+  getRocketResearchEntry,
+  getRocketResearchStages,
+  getNextRocketResearchStage,
+  rollRocketResearchSuccess,
+  applyRocketResearchOutcome,
+  rocketResearchDisplayName,
+  isRocketResearchTarget,
+  isRocketBuildUnlocked,
 } from "@wop/shared";
 import type { WebSocket } from "ws";
 import {
@@ -313,7 +325,7 @@ export function createRoom(options: CreateRoomOptions): GameRoom {
   const restoreHudByOwner = new Map<string, PlayerHudState>();
   if (restoreDoc) {
     for (const p of restoreDoc.players) {
-      restoreHudByOwner.set(p.playerId, { ...p.hud });
+      restoreHudByOwner.set(p.playerId, hudFromSavePlayer(p));
     }
   }
 
@@ -492,6 +504,39 @@ function createHud(): PlayerHudState {
     energy: STARTING_ENERGY,
     organization: STARTING_ORGANIZATION,
     organizationMax: ORGANIZATION_BAR_MAX,
+    research: emptyRocketResearchProgress(),
+    activeResearch: null,
+  };
+}
+
+/** Rebuild HUD (+ research) from a save player row (supports older saves). */
+function hudFromSavePlayer(p: SavePlayerSnapshot): PlayerHudState {
+  const research = normalizeRocketResearchProgress(
+    p.research ?? p.hud.research,
+  );
+  const activeResearch = normalizeActiveRocketResearch(
+    p.activeResearch !== undefined ? p.activeResearch : p.hud.activeResearch,
+  );
+  return {
+    capitalHp: p.hud.capitalHp,
+    capitalHpMax: p.hud.capitalHpMax,
+    energy: p.hud.energy,
+    organization: p.hud.organization,
+    organizationMax: p.hud.organizationMax,
+    research,
+    activeResearch,
+  };
+}
+
+function packSaveHud(hud: PlayerHudState): SavePlayerSnapshot["hud"] {
+  return {
+    capitalHp: hud.capitalHp,
+    capitalHpMax: hud.capitalHpMax,
+    energy: hud.energy,
+    organization: hud.organization,
+    organizationMax: hud.organizationMax,
+    research: { ...hud.research },
+    activeResearch: hud.activeResearch ? { ...hud.activeResearch } : null,
   };
 }
 
@@ -1262,7 +1307,7 @@ function applyRestoreDocument(doc: SaveDocument): void {
   }
   restoreHudByOwner.clear();
   for (const p of doc.players) {
-    restoreHudByOwner.set(p.playerId, { ...p.hud });
+    restoreHudByOwner.set(p.playerId, hudFromSavePlayer(p));
   }
   syncPollutionFlags();
   noteCapitalCounts();
@@ -1491,8 +1536,12 @@ function buildExportDocument(requesterId: string): SaveDocument | null {
     players: [...players.values()].map((p) => ({
       playerId: p.id,
       name: p.name,
-      hud: { ...p.hud },
+      hud: packSaveHud(p.hud),
       spectator: spectatorIds.has(p.id),
+      research: { ...p.hud.research },
+      activeResearch: p.hud.activeResearch
+        ? { ...p.hud.activeResearch }
+        : null,
     })),
   };
 }
@@ -2583,6 +2632,18 @@ function tryBuild(
     return;
   }
 
+  if (
+    isRocketResearchTarget(buildingId) &&
+    !isRocketBuildUnlocked(session.hud.research, buildingId)
+  ) {
+    sendError(
+      session.ws,
+      "research_locked",
+      `${def.name}尚未研究解锁`,
+    );
+    return;
+  }
+
   const node = snapToBuildNode(gx, gy, MAP);
   let existing = findBuildingAt(buildings, node.gx, node.gy);
 
@@ -2784,6 +2845,107 @@ function tryBuild(
   broadcastState();
 }
 
+function tryResearchBuilding(session: PlayerSession, buildingId: string): void {
+  if (rejectIfNotPlaying(session)) return;
+
+  slog("research", "request", {
+    player: session.id.slice(0, 8),
+    buildingId,
+    E: session.hud.energy,
+    O: session.hud.organization,
+    research: session.hud.research,
+    active: session.hud.activeResearch,
+  });
+
+  const check = canStartRocketResearch({
+    buildingId,
+    progress: session.hud.research,
+    activeResearch: session.hud.activeResearch,
+    energy: session.hud.energy,
+    organization: session.hud.organization,
+  });
+  if (!check.ok) {
+    sendError(session.ws, check.reason, check.message);
+    return;
+  }
+
+  session.hud.energy -= check.stage.energy;
+  session.hud.organization -= check.stage.organization;
+  const entry = getRocketResearchEntry(session.hud.research, check.buildingId);
+  session.hud.research = {
+    ...session.hud.research,
+    [check.buildingId]: entry,
+  };
+  session.hud.activeResearch = {
+    buildingId: check.buildingId,
+    stage: check.stageIndex,
+    endsAtTick: tick + check.durationTicks,
+  };
+
+  const name = rocketResearchDisplayName(check.buildingId);
+  sendTip(
+    session.ws,
+    `开始研究${name} · 第 ${check.stageIndex + 1} 阶 · ${check.stage.energy}E ${check.stage.organization}O · ${check.stage.chancePercent}%`,
+  );
+  slog("research", "started", {
+    player: session.id.slice(0, 8),
+    buildingId: check.buildingId,
+    stage: check.stageIndex,
+    endsAtTick: session.hud.activeResearch.endsAtTick,
+    durationTicks: check.durationTicks,
+  });
+  broadcastState();
+}
+
+/** Resolve timed rocket research attempts whose endsAtTick has arrived. */
+function advanceRocketResearch(): void {
+  for (const player of players.values()) {
+    const active = player.hud.activeResearch;
+    if (!active) continue;
+    if (tick < active.endsAtTick) continue;
+
+    player.hud.activeResearch = null;
+    const entry = getRocketResearchEntry(player.hud.research, active.buildingId);
+    if (entry.unlocked) continue;
+
+    const stageDef = getRocketResearchStages(active.buildingId)[active.stage];
+    if (!stageDef) continue;
+
+    const success = rollRocketResearchSuccess(
+      stageDef.chancePercent,
+      Math.random(),
+    );
+    const next = applyRocketResearchOutcome(
+      { stage: active.stage, unlocked: false },
+      success,
+    );
+    player.hud.research = {
+      ...player.hud.research,
+      [active.buildingId]: next,
+    };
+
+    const name = rocketResearchDisplayName(active.buildingId);
+    if (success) {
+      sendTip(player.ws, `${name}研究成功，已解锁`);
+    } else {
+      const nextStage = getNextRocketResearchStage(active.buildingId, next);
+      sendTip(
+        player.ws,
+        nextStage
+          ? `${name}研究失败，进入第 ${next.stage + 1} 阶（${nextStage.chancePercent}%）`
+          : `${name}研究失败`,
+      );
+    }
+    slog("research", "resolved", {
+      player: player.id.slice(0, 8),
+      buildingId: active.buildingId,
+      stage: active.stage,
+      success,
+      unlocked: next.unlocked,
+      nextStage: next.stage,
+    });
+  }
+}
 
 function countLivingCapitals(): PlacedBuilding[] {
   return buildings.filter((b) => b.buildingId === "capital" && b.hp > 0);
@@ -2825,12 +2987,17 @@ function onCapitalFallen(ownerId: string): void {
   if (!teamMode && allowRespawn) {
     spectatorIds.delete(ownerId);
     if (owner) {
+      // Per-match research unlocks persist across capital respawn.
+      const research = { ...owner.hud.research };
       owner.hud = createHud();
+      owner.hud.research = research;
+      owner.hud.activeResearch = null;
     }
   } else {
     spectatorIds.add(ownerId);
     if (owner) {
       owner.hud.capitalHp = 0;
+      owner.hud.activeResearch = null;
     }
   }
   noteCapitalCounts();
@@ -3174,6 +3341,12 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
         ? msg.ground
         : "land";
     tryBuild(session, msg.buildingId, msg.gx, msg.gy, ground);
+    return;
+  }
+
+  if (msg.type === "research_building") {
+    slog("msg", "research_building", msg.buildingId);
+    tryResearchBuilding(session, String(msg.buildingId ?? ""));
     return;
   }
 
@@ -3555,6 +3728,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     syncPollutionFlags();
     advanceConstruction();
     advanceRepair();
+    advanceRocketResearch();
     advancePollutionCapitalDamage();
     if (tick % COMM_WAVE_INTERVAL_TICKS === 0) {
       beginCommWaves();

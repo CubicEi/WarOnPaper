@@ -127,6 +127,9 @@ interface Props {
     gy: number;
     ground: GroundContext;
   }) => void;
+  onResearchBuilding?: (buildingId: string) => void;
+  research?: import("@wop/shared").RocketResearchProgressMap | null;
+  activeResearch?: import("@wop/shared").ActiveRocketResearch | null;
   onBuildLiaison?: (args: { kind: LiaisonKind; nodes: GridNode[] }) => void;
   onDemolishLiaison?: (id: string) => void;
   onDemolish?: (buildingId: string) => void;
@@ -352,6 +355,9 @@ export function GameCanvas({
   onAllyGarrisonAccept,
   onAllyGarrisonReject,
   onBuild,
+  onResearchBuilding,
+  research = null,
+  activeResearch = null,
   onBuildLiaison,
   onDemolishLiaison,
   onDemolish,
@@ -478,6 +484,8 @@ export function GameCanvas({
     pendingLiaisonKind?: LiaisonKind;
     initialMode?: "buildings" | "liaison";
     liaisonNonce?: number;
+    /** Bump to animate-close the overlay (same path as Escape / ×). */
+    closeNonce?: number;
   } | null>(null);
   const [liaisonKind, setLiaisonKind] = useState<LiaisonKind | null>(null);
   const [liaisonDraft, setLiaisonDraft] = useState<GridNode[] | null>(null);
@@ -2638,6 +2646,16 @@ export function GameCanvas({
     log.info("action", id, selectionUi ? `(${selectionUi.gx}, ${selectionUi.gy})` : null);
   };
 
+  const onPickResearchBuilding = (b: BuildingDef) => {
+    log.info("build-ui", "pick research → onResearchBuilding", b.id, b.name);
+    if (!onResearchBuilding) {
+      log.error("build-ui", "onResearchBuilding prop is undefined");
+      return;
+    }
+    setLiaisonLocalError(null);
+    onResearchBuilding(b.id);
+  };
+
   const onPickBuilding = (b: BuildingDef) => {
     if (!buildMode) {
       log.error("build-ui", "pick ignored: no buildMode", b.id);
@@ -2781,7 +2799,16 @@ export function GameCanvas({
     const atTarget = findBuildingAt(buildings, buildMode.gx, buildMode.gy);
     if (atTarget && atTarget.buildingId === buildMode.pendingBuildingId) {
       log.info("build-ui", "build success, closing overlay");
-      setBuildMode(null);
+      // Animate out via overlay requestClose — do not unmount immediately.
+      setBuildMode((bm) =>
+        bm?.pendingBuildingId
+          ? {
+              ...bm,
+              pendingBuildingId: undefined,
+              closeNonce: (bm.closeNonce ?? 0) + 1,
+            }
+          : bm,
+      );
     }
   }, [buildings, buildMode?.pendingBuildingId, buildMode?.gx, buildMode?.gy]);
 
@@ -3775,8 +3802,11 @@ export function GameCanvas({
           ground={buildMode.ground}
           initialMode={buildMode.initialMode}
           enterLiaisonNonce={buildMode.liaisonNonce ?? 0}
+          closeNonce={buildMode.closeNonce ?? 0}
           errorMessage={liaisonLocalError}
           liaisonDraftCost={liaisonDraftCost}
+          research={research}
+          activeResearch={activeResearch}
           onClose={() => {
             setLiaisonKind(null);
             setLiaisonDraft(null);
@@ -3786,6 +3816,7 @@ export function GameCanvas({
             setBuildMode(null);
           }}
           onPickBuilding={onPickBuilding}
+          onResearchBuilding={onPickResearchBuilding}
           onLiaisonKindChange={onLiaisonKindChange}
           onLiaisonEditActiveChange={onLiaisonEditActiveChange}
         />

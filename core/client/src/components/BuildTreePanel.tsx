@@ -13,8 +13,14 @@ import {
   getBuildEnergyCost,
   getBuildDurationSec,
   formatBuildDuration,
+  getNextRocketResearchStage,
+  getRocketResearchEntry,
+  isRocketResearchTarget,
+  isRocketResearchUnlocked,
+  type ActiveRocketResearch,
   type BuildTreeNode,
   type BuildingDef,
+  type RocketResearchProgressMap,
   type SettlementSpineSeg,
 } from "@wop/shared";
 import { buildingUiIcon } from "../ui/buildingUiIcon";
@@ -26,7 +32,11 @@ interface Props {
   currentBuildingId?: string | null;
   /** When true, reverse BFS hide (~0.5s) before the overlay unmounts. */
   exiting?: boolean;
+  research?: RocketResearchProgressMap | null;
+  activeResearch?: ActiveRocketResearch | null;
   onSelect?: (building: BuildingDef) => void;
+  /** Locked rocket node confirm → research instead of build. */
+  onResearch?: (building: BuildingDef) => void;
 }
 
 type Axis = "horizontal" | "vertical";
@@ -497,33 +507,45 @@ function BuildingCard({
   anchorId,
   selected,
   fromBuildingId,
+  researchLocked,
+  researchLabel,
   onOpen,
-  onBuild,
+  onConfirm,
 }: {
   building: BuildingDef;
   spine?: boolean;
   anchorId: string;
   selected: boolean;
   fromBuildingId: string | null;
+  researchLocked: boolean;
+  researchLabel: string | null;
   onOpen: (building: BuildingDef) => void;
-  onBuild: (building: BuildingDef) => void;
+  onConfirm: (building: BuildingDef) => void;
 }) {
   return (
     <div className={`build-tree-card-wrap${selected ? " is-selected" : ""}`}>
       <button
         type="button"
-        className={`build-tree-card${spine ? " build-tree-card-spine" : ""}${selected ? " is-dimmed" : ""}`}
+        className={`build-tree-card${spine ? " build-tree-card-spine" : ""}${selected ? " is-dimmed" : ""}${researchLocked ? " is-research-locked" : ""}`}
         data-anchor={anchorId}
         title={
-          building.upgradeLevels != null
-            ? `${building.name} +${building.upgradeLevels}`
-            : building.name
+          researchLocked && researchLabel
+            ? researchLabel
+            : building.upgradeLevels != null
+              ? `${building.name} +${building.upgradeLevels}`
+              : building.name
         }
         onClick={(e) => {
           e.stopPropagation();
           if (selected) {
-            console.info("[wop:build-tree] confirm build", building.id, building.name);
-            onBuild(building);
+            console.info(
+              researchLocked
+                ? "[wop:build-tree] confirm research"
+                : "[wop:build-tree] confirm build",
+              building.id,
+              building.name,
+            );
+            onConfirm(building);
           } else {
             console.info("[wop:build-tree] select", building.id, building.name);
             onOpen(building);
@@ -532,18 +554,32 @@ function BuildingCard({
         onDoubleClick={(e) => {
           e.stopPropagation();
           e.preventDefault();
-          console.info("[wop:build-tree] double-click build", building.id, building.name);
-          onBuild(building);
+          console.info(
+            researchLocked
+              ? "[wop:build-tree] double-click research"
+              : "[wop:build-tree] double-click build",
+            building.id,
+            building.name,
+          );
+          onConfirm(building);
         }}
       >
         <span className="build-tree-card-icon">
           <img src={buildingUiIcon(building.icon)} alt="" draggable={false} />
-          {selected && <span className="build-tree-card-build-hint">点击建造</span>}
+          {selected && (
+            <span className="build-tree-card-build-hint">
+              {researchLocked ? "点击研究" : "点击建造"}
+            </span>
+          )}
         </span>
         <span className="build-tree-card-meta">
           <span className="build-tree-card-name">{building.name}</span>
-          {building.upgradeLevels != null && (
-            <span className="build-tree-card-cost">+{building.upgradeLevels}</span>
+          {researchLocked && researchLabel ? (
+            <span className="build-tree-card-research">{researchLabel}</span>
+          ) : (
+            building.upgradeLevels != null && (
+              <span className="build-tree-card-cost">+{building.upgradeLevels}</span>
+            )
           )}
         </span>
       </button>
@@ -593,6 +629,32 @@ function clipToIcon(
   };
 }
 
+function researchLockInfo(
+  building: BuildingDef,
+  research: RocketResearchProgressMap | null | undefined,
+  activeResearch: ActiveRocketResearch | null | undefined,
+): { locked: boolean; label: string | null } {
+  if (!isRocketResearchTarget(building.id)) {
+    return { locked: false, label: null };
+  }
+  if (isRocketResearchUnlocked(research, building.id)) {
+    return { locked: false, label: null };
+  }
+  const entry = getRocketResearchEntry(research, building.id);
+  const stage = getNextRocketResearchStage(building.id, entry);
+  if (!stage) {
+    return { locked: true, label: "研究已完成" };
+  }
+  const busy =
+    activeResearch?.buildingId === building.id
+      ? " · 研究中"
+      : "";
+  return {
+    locked: true,
+    label: `研究 · ${stage.energy}E ${stage.organization}O · ${stage.chancePercent}%${busy}`,
+  };
+}
+
 function SettlementSpineView({
   currentLabel,
   originBranches,
@@ -600,7 +662,10 @@ function SettlementSpineView({
   axis,
   fromBuildingId,
   exiting = false,
+  research = null,
+  activeResearch = null,
   onSelect,
+  onResearch,
 }: {
   currentLabel: string;
   originBranches: BuildTreeNode[];
@@ -608,7 +673,10 @@ function SettlementSpineView({
   axis: Axis;
   fromBuildingId: string | null;
   exiting?: boolean;
+  research?: RocketResearchProgressMap | null;
+  activeResearch?: ActiveRocketResearch | null;
   onSelect?: (building: BuildingDef) => void;
+  onResearch?: (building: BuildingDef) => void;
 }) {
   const { nodes, edges } = useMemo(
     () => buildGraph(currentLabel, originBranches, spine),
@@ -720,12 +788,17 @@ function SettlementSpineView({
 
   const isH = axis === "horizontal";
 
-  const handleBuild = useCallback(
+  const handleConfirm = useCallback(
     (building: BuildingDef) => {
-      onSelect?.(building);
+      const { locked } = researchLockInfo(building, research, activeResearch);
+      if (locked) {
+        onResearch?.(building);
+      } else {
+        onSelect?.(building);
+      }
       setSelectedId(null);
     },
-    [onSelect],
+    [onSelect, onResearch, research, activeResearch],
   );
 
   return (
@@ -779,15 +852,26 @@ function SettlementSpineView({
               }
             >
               {n.building ? (
-                <BuildingCard
-                  building={n.building}
-                  spine={n.spine}
-                  anchorId={n.id}
-                  selected={selected}
-                  fromBuildingId={fromBuildingId}
-                  onOpen={(b) => setSelectedId(b.id)}
-                  onBuild={handleBuild}
-                />
+                (() => {
+                  const lock = researchLockInfo(
+                    n.building,
+                    research,
+                    activeResearch,
+                  );
+                  return (
+                    <BuildingCard
+                      building={n.building}
+                      spine={n.spine}
+                      anchorId={n.id}
+                      selected={selected}
+                      fromBuildingId={fromBuildingId}
+                      researchLocked={lock.locked}
+                      researchLabel={lock.label}
+                      onOpen={(b) => setSelectedId(b.id)}
+                      onConfirm={handleConfirm}
+                    />
+                  );
+                })()
               ) : (
                 <OriginCard label={n.label} anchorId={n.id} />
               )}
@@ -805,14 +889,20 @@ function ForestFallback({
   axis,
   fromBuildingId,
   exiting,
+  research,
+  activeResearch,
   onSelect,
+  onResearch,
 }: {
   roots: BuildTreeNode[];
   currentLabel: string;
   axis: Axis;
   fromBuildingId: string | null;
   exiting?: boolean;
+  research?: RocketResearchProgressMap | null;
+  activeResearch?: ActiveRocketResearch | null;
   onSelect?: (building: BuildingDef) => void;
+  onResearch?: (building: BuildingDef) => void;
 }) {
   return (
     <SettlementSpineView
@@ -822,7 +912,10 @@ function ForestFallback({
       axis={axis}
       fromBuildingId={fromBuildingId}
       exiting={exiting}
+      research={research}
+      activeResearch={activeResearch}
       onSelect={onSelect}
+      onResearch={onResearch}
     />
   );
 }
@@ -832,7 +925,10 @@ export function BuildTreePanel({
   currentLabel,
   currentBuildingId = null,
   exiting = false,
+  research = null,
+  activeResearch = null,
   onSelect,
+  onResearch,
 }: Props) {
   const axis = useLongerAxis();
   const settlement = useMemo(() => extractSettlementSpine(roots), [roots]);
@@ -856,7 +952,10 @@ export function BuildTreePanel({
           axis={axis}
           fromBuildingId={currentBuildingId}
           exiting={exiting}
+          research={research}
+          activeResearch={activeResearch}
           onSelect={onSelect}
+          onResearch={onResearch}
         />
       ) : (
         <ForestFallback
@@ -865,7 +964,10 @@ export function BuildTreePanel({
           axis={axis}
           fromBuildingId={currentBuildingId}
           exiting={exiting}
+          research={research}
+          activeResearch={activeResearch}
           onSelect={onSelect}
+          onResearch={onResearch}
         />
       )}
     </div>

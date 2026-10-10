@@ -296,7 +296,7 @@ export function generateTerrain(options: GenerateTerrainOptions = {}): TerrainMa
     if (blob.length < 2) continue;
 
     const n = blob.length;
-    const reserve = randInt(rng, 25, 35) * n + randInt(rng, -20, 20);
+    const reserve = randInt(rng, 15, 25) * n + randInt(rng, -30, 20);
     const id = depositId++;
     for (const { x, y } of blob) {
       cells[idx(width, x, y)].resource = {
@@ -334,7 +334,7 @@ export function generateTerrain(options: GenerateTerrainOptions = {}): TerrainMa
     }
 
     const n = blob.length;
-    const reserve = randInt(rng, 20, 30) * n;
+    const reserve = randInt(rng, 100, 150) * n;
     const id = depositId++;
     for (const { x, y } of blob) {
       cells[idx(width, x, y)].resource = {

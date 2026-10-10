@@ -85,6 +85,10 @@ export interface PlayerHudState {
   energy: number;
   organization: number;
   organizationMax: number;
+  /** Rocket research progress keyed by building id. */
+  research: import("./buildings/research.js").RocketResearchProgressMap;
+  /** Timed research attempt in progress, if any. */
+  activeResearch: import("./buildings/research.js").ActiveRocketResearch | null;
 }
 
 /** Idle room destroy threshold (manager + GameRoom hooks). */
@@ -468,6 +472,11 @@ export type ClientToServer =
       ground: import("./buildings/catalog.js").GroundContext;
     }
   | {
+      /** Start a timed rocket-research attempt for a locked missile tier. */
+      type: "research_building";
+      buildingId: string;
+    }
+  | {
       type: "build_liaison";
       kind: import("./buildings/liaison.js").LiaisonKind;
       nodes: import("./buildings/liaison.js").GridNode[];
@@ -843,6 +852,41 @@ export type {
   LinearUpgradeBuildingId,
   LinearUpgradePreview,
 } from "./buildings/levelUpgrade.js";
+
+export {
+  ROCKET_RESEARCH_IDS,
+  ROCKET_RESEARCH_STAGES,
+  ROCKET_RESEARCH_PREREQ,
+  ROCKET_RESEARCH_DURATION_E_PER_SEC,
+  isRocketResearchTarget,
+  isRocketResearchId,
+  emptyRocketResearchEntry,
+  emptyRocketResearchProgress,
+  getRocketResearchEntry,
+  isRocketResearchUnlocked,
+  getRocketResearchStages,
+  getNextRocketResearchStage,
+  rocketResearchDurationSec,
+  rocketResearchDurationTicks,
+  rocketResearchDisplayName,
+  canStartRocketResearch,
+  rollRocketResearchSuccess,
+  applyRocketResearchOutcome,
+  isRocketBuildUnlocked,
+  normalizeRocketResearchProgress,
+  normalizeActiveRocketResearch,
+} from "./buildings/research.js";
+export type {
+  RocketResearchId,
+  RocketResearchStage,
+  RocketResearchEntry,
+  ActiveRocketResearch,
+  RocketResearchProgressMap,
+  RocketResearchRejectReason,
+  RocketResearchCheckOk,
+  RocketResearchCheckFail,
+  RocketResearchCheckResult,
+} from "./buildings/research.js";
 
 export {
   POWER_DRAIN_PER_10S,

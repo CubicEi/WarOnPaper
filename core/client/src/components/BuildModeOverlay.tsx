@@ -3,9 +3,11 @@ import {
   getBuildTree,
   BUILDING_BY_ID,
   LIAISON_LINES,
+  type ActiveRocketResearch,
   type BuildingDef,
   type GroundContext,
   type LiaisonKind,
+  type RocketResearchProgressMap,
 } from "@wop/shared";
 import { buildingUiIcon } from "../ui/buildingUiIcon";
 import { BuildTreePanel, BUILD_TREE_REVEAL_MS } from "./BuildTreePanel";
@@ -42,8 +44,13 @@ interface Props {
   initialMode?: BuildOverlayMode;
   /** Increment to switch an already-open overlay into liaison edit. */
   enterLiaisonNonce?: number;
+  /** Increment to play the same exit animation as Escape / ×, then call onClose. */
+  closeNonce?: number;
+  research?: RocketResearchProgressMap | null;
+  activeResearch?: ActiveRocketResearch | null;
   onClose: () => void;
   onPickBuilding?: (building: BuildingDef) => void;
+  onResearchBuilding?: (building: BuildingDef) => void;
   onLiaisonKindChange?: (kind: LiaisonKind | null) => void;
   /** True while in 「编辑联络线」 sub-mode (for map demolish picks). */
   onLiaisonEditActiveChange?: (active: boolean) => void;
@@ -70,8 +77,12 @@ export function BuildModeOverlay({
   liaisonDraftCost = null,
   initialMode = "buildings",
   enterLiaisonNonce = 0,
+  closeNonce = 0,
+  research = null,
+  activeResearch = null,
   onClose,
   onPickBuilding,
+  onResearchBuilding,
   onLiaisonKindChange,
   onLiaisonEditActiveChange,
 }: Props) {
@@ -216,6 +227,11 @@ export function BuildModeOverlay({
   }, [clearCloseTimer, clearLiaisonTimer, mode, liaisonMounted, onClose]);
 
   useEffect(() => {
+    if (!closeNonce) return;
+    requestClose();
+  }, [closeNonce, requestClose]);
+
+  useEffect(() => {
     const typing = (target: EventTarget | null) => {
       if (!(target instanceof HTMLElement)) return false;
       return (
@@ -351,7 +367,10 @@ export function BuildModeOverlay({
           // Island is a platform, not an upgrade base — cost/duration as from empty land.
           currentBuildingId={onIsland ? null : currentBuildingId}
           exiting={treeExiting}
+          research={research}
+          activeResearch={activeResearch}
           onSelect={onPickBuilding}
+          onResearch={onResearchBuilding}
         />
       )}
       {showLiaisonPanel && (

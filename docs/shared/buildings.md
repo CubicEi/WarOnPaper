@@ -7,6 +7,7 @@
 | `catalog.ts` | 建筑定义表、造价/工期、建造树、发射冷却 |
 | `actions.ts` | `PlacedBuilding`、放置/修理/拆除/迁都逻辑 |
 | `levelUpgrade.ts` | 雷达/港口/兵营/装甲营/机场线性 1–10 级 |
+| `research.ts` | 火箭军分阶概率研究（导弹 / 远程 / 核） |
 | `workRange.ts` | 工作半径圆 + 雷达协同 |
 | `economy.ts` | 产电、炼化、功耗、资源揭示/枯竭、核装填条件 |
 | `liaison.ts` | 线缆/公路/铁路折线几何与造价 |
@@ -76,6 +77,23 @@
 - 属性：level 1 = 目录基值，level 10 = 5×，线性插值（`linearStatMultiplier`）  
 - `effectiveHpMax` / `effectiveUmax` / `effectiveWorkR`  
 - `previewLinearUpgrade` / `applyLinearUpgrade` / `romanLevelLabel`  
+
+---
+
+## `research.ts` — 火箭军研究
+
+目标 id（拼写保持现状）：`missile` | `advenced_missile` | `nuke_missile`（=`ROCKET_RESEARCH_IDS`）。
+
+机制摘要：
+
+- 每项科技独立进度 `{ stage, unlocked }`（`stage` 为下一阶 0-based 下标）  
+- 同时最多一项进行中：`activeResearch = { buildingId, endsAtTick, stage }`  
+- 耗时：`energyCost / ROCKET_RESEARCH_DURATION_E_PER_SEC`(100) 秒 → `rocketResearchDurationTicks`（经 `time.ts`）  
+- 研究依赖：远程需已解锁导弹；核需已解锁远程  
+- 建造门闩：`isRocketBuildUnlocked`；未解锁时服务端硬拒 `build`  
+- 协议：`ClientToServer` → `research_building`；进度在 `PlayerHudState.research` / `activeResearch`，存档见 `SavePlayerSnapshot`  
+
+纯函数：`canStartRocketResearch`、`rollRocketResearchSuccess`、`applyRocketResearchOutcome`、`getNextRocketResearchStage` 等。RNG 仅在服务端结算时调用。
 
 ---
 

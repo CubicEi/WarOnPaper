@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ICON_PRELOAD_URLS } from "@wop/icon-preload-urls";
 import { LobbySocket, type MapSizeId, type ServerMsg } from "../net";
+import { preloadIconAssets } from "../iconPreload";
 import {
   loadCachedIdentity,
   loadLastRoomId,
@@ -61,6 +63,44 @@ export function TitleScreen() {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastKey, setToastKey] = useState(0);
   const [toastVariant, setToastVariant] = useState<ToastVariant>("error");
+
+  /** False until icon preload finishes or is skipped (warm cache). */
+  const [iconsReady, setIconsReady] = useState(false);
+  /** Null while checking / after skip; set only when a real download is needed. */
+  const [iconProgress, setIconProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const ac = new AbortController();
+    void preloadIconAssets(
+      ICON_PRELOAD_URLS,
+      (p) => {
+        if (cancelled) return;
+        if (p.skipped) {
+          setIconProgress(null);
+          return;
+        }
+        setIconProgress({ completed: p.completed, total: p.total });
+      },
+      ac.signal,
+    )
+      .catch(() => {
+        /* best-effort — still unlock CTAs */
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIconsReady(true);
+          setIconProgress(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
+  }, []);
 
   const showToast = useCallback(
     (message: string, variant: ToastVariant = "error") => {
@@ -311,22 +351,59 @@ export function TitleScreen() {
                 </button>
               </div>
             </div>
-            <div className="title-cta-row">
-              <button
-                type="button"
-                className="btn btn-hero btn-accent"
-                onClick={() => setModal("new")}
+            {iconsReady ? (
+              <div className="title-cta-row">
+                <button
+                  type="button"
+                  className="btn btn-hero btn-accent"
+                  onClick={() => setModal("new")}
+                >
+                  新游戏
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-hero"
+                  onClick={() => setModal("join")}
+                >
+                  加入游戏
+                </button>
+              </div>
+            ) : iconProgress ? (
+              <div
+                className="title-preload"
+                role="status"
+                aria-live="polite"
+                aria-busy="true"
               >
-                新游戏
-              </button>
-              <button
-                type="button"
-                className="btn btn-hero"
-                onClick={() => setModal("join")}
-              >
-                加入游戏
-              </button>
-            </div>
+                <p className="title-preload-label">资源加载中…</p>
+                <div
+                  className="title-preload-track"
+                  aria-valuemin={0}
+                  aria-valuemax={iconProgress.total}
+                  aria-valuenow={iconProgress.completed}
+                  role="progressbar"
+                >
+                  <div
+                    className="title-preload-fill"
+                    style={{
+                      width:
+                        iconProgress.total > 0
+                          ? `${Math.min(
+                              100,
+                              (100 * iconProgress.completed) /
+                                iconProgress.total,
+                            )}%`
+                          : "0%",
+                    }}
+                  />
+                </div>
+                <p className="title-preload-count">
+                  {iconProgress.completed} / {iconProgress.total}
+                </p>
+              </div>
+            ) : (
+              <div className="title-cta-row title-cta-row--placeholder" aria-hidden />
+            )}
             {queuing && queueInfo ? (
               <p className="title-queue-hint">{queueInfo}</p>
             ) : null}

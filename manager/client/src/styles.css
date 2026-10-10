@@ -225,6 +225,52 @@ button {
   width: 100%;
 }
 
+/* Reserve hero CTA height while cache check runs (avoids layout jump). */
+.title-cta-row--placeholder {
+  min-height: 3.1rem;
+}
+
+.title-preload {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.55rem;
+  width: 100%;
+  min-height: 3.1rem;
+}
+
+.title-preload-label {
+  margin: 0;
+  color: var(--hero-muted);
+  font-size: 0.92rem;
+  letter-spacing: 0.08em;
+  text-shadow: 0 1px 8px rgba(10, 14, 12, 0.5);
+}
+
+.title-preload-track {
+  height: 0.45rem;
+  border: 1px solid rgba(244, 239, 230, 0.22);
+  background: rgba(20, 28, 22, 0.55);
+  box-shadow: 0 8px 20px rgba(10, 14, 12, 0.28);
+  overflow: hidden;
+}
+
+.title-preload-fill {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.12s ease-out;
+}
+
+.title-preload-count {
+  margin: 0;
+  color: var(--hero-muted);
+  font-size: 0.82rem;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 8px rgba(10, 14, 12, 0.5);
+}
+
 .btn {
   border: none;
   padding: 0.7rem 1.1rem;

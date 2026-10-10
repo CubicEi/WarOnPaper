@@ -14,6 +14,7 @@ import { GameCanvas } from "./canvas/GameCanvas";
 import { DebugOverlay, type DebugErrorEntry } from "./components/DebugOverlay";
 import { ErrorToast } from "./components/ErrorToast";
 import { HudOverlay } from "./components/HudOverlay";
+import { ResearchProgressIndicator } from "./components/ResearchProgressIndicator";
 import { TeamPanel, TeamPanelButton } from "./components/TeamPanel";
 import { RestoreLobbyBar } from "./components/RestoreLobbyBar";
 import { useGameSocket } from "./net/useGameSocket";
@@ -174,6 +175,15 @@ export function App() {
         ground: args.ground,
       });
       if (!ok) log.error("app", "build send returned false", args);
+    },
+    [send],
+  );
+
+  const onResearchBuilding = useCallback(
+    (buildingId: string) => {
+      log.info("app", "onResearchBuilding", buildingId);
+      const ok = send({ type: "research_building", buildingId });
+      if (!ok) log.error("app", "research_building send returned false", buildingId);
     },
     [send],
   );
@@ -599,6 +609,9 @@ export function App() {
           send({ type: "ally_garrison_reject", requestId })
         }
         onBuild={onBuild}
+        onResearchBuilding={onResearchBuilding}
+        research={state?.you.research ?? null}
+        activeResearch={state?.you.activeResearch ?? null}
         onBuildLiaison={onBuildLiaison}
         onDemolishLiaison={onDemolishLiaison}
         onDemolish={onDemolish}
@@ -734,6 +747,12 @@ export function App() {
       >
         返回
       </button>
+      {state ? (
+        <ResearchProgressIndicator
+          tick={state.tick}
+          activeResearch={state.you.activeResearch}
+        />
+      ) : null}
       <div className="corner-tools">
         {showAdvancedView ? (
           <div className="corner-tools-col">

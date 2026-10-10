@@ -185,6 +185,7 @@ export function categoryForAction(type: string): PlayerActionCategory {
     case "place_capital":
       return "capital";
     case "build":
+    case "research_building":
       return "build";
     case "build_liaison":
     case "demolish_liaison":
@@ -292,6 +293,9 @@ export function summarizeClientAction(msg: { readonly type: string }): {
     case "build":
       summary = `建造 ${buildingName(m.buildingId)} ${xy(m.gx, m.gy)}`;
       if (m.ground) bits.push(`地形 ${String(m.ground)}`);
+      break;
+    case "research_building":
+      summary = `研究 ${buildingName(m.buildingId)}`;
       break;
     case "build_liaison": {
       const n = asCount(m.nodes);
