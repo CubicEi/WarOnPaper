@@ -118,7 +118,7 @@ Manager 还会发 `room_ready`、`match_status`、`room_status` 等；**这些�
 | `tick` | 当前模拟 tick | 每帧 |
 | `map` | `MapConfig`（尺寸等） | 仅 join / 再入房 |
 | `you` | 该玩家 HUD 绝对值 | 每帧 |
-| `buildings` / `liaisons` | 经视野过滤；bootstrap / 每 150 tick 全量，否则 `*Delta` | 见 [tick-packets.md](../shared/tick-packets.md) §3.0 |
+| `buildings` / `liaisons` | 经视野过滤；bootstrap / 每 `TICKS_PER_10S` 全量，否则 `*Delta` | 见 [tick-packets.md](../shared/tick-packets.md) §3.0 |
 | `units` | 经视野过滤或全量拷贝 | 每帧 |
 | `connectedBuildingIds` | 本玩家已提交通讯连通的建筑实例 id | 每帧 |
 | `pollutionZones` | 核污染区列表 | bootstrap / 再入房，或变化时 |

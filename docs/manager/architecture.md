@@ -107,7 +107,7 @@ flowchart TB
 | 对局 UI / 画布 | `core/client` | 仍连同主机 `/ws` |
 | 身份 UUID / 昵称 | `identity.ts` | 持久化 `manager/data/identities.json` |
 | 大厅协议 | `protocol.ts` + `index.ts` | 建房 / 加入 / 匹配 / 离房 |
-| 房间表与 15 Hz tick | `rooms.ts` | 不实现规则 |
+| 房间表与 5 Hz tick | `rooms.ts` | 不实现规则 |
 | 权威仿真与对局协议 | `@wop/server` `GameRoom` | 经 `gameBridge` 加载 |
 | 规则与对局消息类型 | `@wop/shared` | manager **不** import shared；仅镜像大厅字段 |
 

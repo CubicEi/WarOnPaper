@@ -28,9 +28,8 @@ import {
   type PlacedLiaison,
 } from "./liaison.js";
 import { isFriendly, type TeamRoster } from "../teams.js";
+export { COMM_WAVE_INTERVAL_TICKS } from "../time.js";
 
-/** Restart a full diffusion wave every N ticks. */
-export const COMM_WAVE_INTERVAL_TICKS = 10;
 /** Queue expansions processed per tick (wave may span multiple ticks). */
 export const COMM_STEPS_PER_TICK = 48;
 

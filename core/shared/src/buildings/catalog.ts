@@ -1,5 +1,7 @@
 /** Building catalog from rules §7. Icon paths use assets PNG filenames. */
 
+import { durationSecToTicksCeil } from "../time.js";
+
 export type BuildingCategory =
   | "settlement"
   | "command"
@@ -298,9 +300,6 @@ export function extractSettlementSpine(roots: BuildTreeNode[]): SettlementSpine 
   };
 }
 
-/** Keep in sync with `TICK_HZ` in index (avoid circular import). */
-const LAUNCH_TICKS_PER_SEC = 15;
-
 /**
  * 发射冷却（秒）= 装填单发 E 成本 / 30。
  * 用于火箭军建筑与防空炮。
@@ -311,13 +310,8 @@ export function launchCooldownSec(reloadE: number): number {
 }
 
 /** 发射冷却 tick 数（至少 1，当 reloadE > 0）。 */
-export function launchCooldownTicks(
-  reloadE: number,
-  tickHz = LAUNCH_TICKS_PER_SEC,
-): number {
-  const sec = launchCooldownSec(reloadE);
-  if (sec <= 0) return 0;
-  return Math.max(1, Math.ceil(sec * tickHz));
+export function launchCooldownTicks(reloadE: number): number {
+  return durationSecToTicksCeil(launchCooldownSec(reloadE));
 }
 
 /** 是否仍处于发射冷却中（截止 tick 不含）。 */

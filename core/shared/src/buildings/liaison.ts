@@ -1,7 +1,7 @@
 /** Liaison lines (线缆 / 公路 / 铁路) — rules §7.4 / 建造联络线. */
 
 import { isFriendly, type TeamRoster } from "../teams.js";
-import { durationSecToTicks } from "./actions.js";
+import { durationSecToTicks } from "../time.js";
 
 export type LiaisonKind = "fiber" | "road" | "railway";
 

@@ -1,10 +1,11 @@
 import { existsSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { TICK_MS } from "@wop/shared";
 import { CORE_GAME_ROOM_MODULE } from "./paths.js";
 import type { MapSizeId } from "./protocol.js";
 
-/** Matches core `TICK_MS` (TICK_HZ = 15). */
-export const GAME_TICK_MS = 1000 / 15;
+/** Matches `@wop/shared` `TICK_MS` (`TICK_HZ` from `time.ts`). */
+export const GAME_TICK_MS = TICK_MS;
 
 export interface GameRoomCreateOptions {
   roomId: string;

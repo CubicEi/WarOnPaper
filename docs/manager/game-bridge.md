@@ -15,14 +15,14 @@ core/server/dist/room.js
 ## 2. 时钟常量
 
 ```ts
-export const GAME_TICK_MS = 1000 / 15;
+export const GAME_TICK_MS = TICK_MS; // from @wop/shared (time.ts)
 ```
 
-与 `@wop/shared` 的 `TICK_HZ = 15` / `TICK_MS` 对齐。`RoomRegistry.start()` 用该间隔对所有房间调用 `game.tick()`。
+与 `@wop/shared` 的 `TICK_HZ = 5` / `TICK_MS` 对齐（无本地 `1000/N`）。`RoomRegistry.start()` 用该间隔对所有房间调用 `game.tick()`。
 
 ## 3. 契约镜像类型
 
-Manager 侧自行声明与 core 对齐的 TypeScript 接口（不 import shared/server 类型包），避免编译期硬依赖：
+Manager 侧自行声明与 core 对齐的 TypeScript 接口（不 import server 类型包）；时钟常量从 `@wop/shared` 的 `TICK_MS` 导入：
 
 ### 3.1 `GameRoomCreateOptions`
 

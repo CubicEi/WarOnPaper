@@ -18,19 +18,21 @@
 
 ## 时间与房间常量
 
-定义于 `core/shared/src/index.ts`：
+**仿真时钟与秒↔tick 换算**统一定义于 `core/shared/src/time.ts`（经 `index.ts` 再导出）。其它模块不得硬编码 tick 数值或本地 `TICKS_PER_SEC`。
 
 | 符号 | 值 | 含义 |
 |------|-----|------|
-| `TICK_HZ` | `15` | 服务端广播/仿真频率（注释：10–20 Hz 目标） |
-| `TICK_MS` | `1000/15` | 每 tick 毫秒 |
-| `ORGANIZATION_BAR_MAX` | `50` | 组织度条上限 |
+| `TICK_HZ` | `5` | 服务端广播/仿真频率 |
+| `TICK_MS` | `1000 / TICK_HZ` | 每 tick 毫秒 |
+| `DT_SEC_PER_TICK` | `TICK_MS / 1000` | 每 tick 推进的墙钟秒 |
+| `TICKS_PER_SEC` / `TICKS_PER_10S` / `TICKS_PER_30S` | 由 `TICK_HZ` 派生 | 经济/快照取模间隔 |
+| `durationSecToTicks` / `durationSecToTicksCeil` / `ticksToSec` / `ticksPerSeconds` | — | 秒↔tick 助手 |
+| `COMM_WAVE_INTERVAL_SEC` / `COMM_WAVE_INTERVAL_TICKS` | `10/15` s → `durationSecToTicks` | 通信波重启间隔（墙钟；对齐旧 15Hz×10 tick） |
+| `ORGANIZATION_BAR_MAX` | `50` | 组织度条上限（`index.ts`） |
 | `CAPITAL_HP_MAX` | `60` | 首都 HP 上限（HUD） |
 | `STARTING_ENERGY` | `500` | 开局 E |
 | `STARTING_ORGANIZATION` | `10` | 开局 O |
 | `ROOM_IDLE_MS` | `5 * 60 * 1000` | 空闲房间销毁阈值（manager + GameRoom） |
-
-`buildings/actions.ts` 内部用本地 `TICKS_PER_SEC = 15`，与 `TICK_HZ` 保持一致（避免循环 import）。
 
 ## 数据模型总览
 

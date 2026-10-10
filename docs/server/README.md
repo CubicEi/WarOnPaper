@@ -32,7 +32,7 @@ core/server/
 - **权威状态**在 `GameRoom` 闭包内（建筑、联络线、单位、污染、HUD 的 E/O）。
 - **规则与协议类型**来自 `@wop/shared`（`ClientToServer` / `ServerToClient` / 建造·单位·视野过滤等纯函数）。
 - **传输层**由调用方提供：`join({ send })` 注入 `RoomSend`；房间只通过该回调推送 JSON 消息对象。
-- **时钟**由外部按 `TICK_MS`（15 Hz）调用 `room.tick()`。
+- **时钟**由外部按 `TICK_MS`（5 Hz，见 `time.ts`）调用 `room.tick()`。
 
 ## 快速启动（调试）
 

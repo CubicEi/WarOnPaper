@@ -1,6 +1,6 @@
 # 游戏循环（`tick`）
 
-时钟频率由 `@wop/shared` 定义：`TICK_HZ = 15`，`TICK_MS = 1000/15 ≈ 66.67ms`。  
+时钟频率由 `@wop/shared` 的 `time.ts` 定义：`TICK_HZ = 5`，`TICK_MS = 1000/5 = 200ms`。  
 `GameRoom` **不自带定时器**；调试入口与 `manager` 的 `RoomRegistry` 负责 `setInterval(..., TICK_MS)` 后调用 `room.tick()`。
 
 ## 1. `tickRoom` 总控流
@@ -45,7 +45,7 @@ flowchart TD
 | 7 | `advanceCommWaves` | 每 tick 走 `COMM_STEPS_PER_TICK`；**完成才**提交 `connectedByOwner` |
 | 8 | `simulateEconomy` | 见下节 |
 | 9 | `advanceUnitTraining` | 训练队列；完工生成单位并尝试送货路径 |
-| 10 | `advanceUnitMovement` | 单位移动（`TICK_MS/1000` 秒） |
+| 10 | `advanceUnitMovement` | 单位移动（`DT_SEC_PER_TICK` 秒） |
 | 11 | `advanceUnitAntiAir` | 防空持续消耗；`tip` 通知弹药事件 |
 | 12 | `advanceUnitBlockades` | 封锁维护费 + 交战；扣玩家 E |
 | 13 | `advanceUnitCombat` | 驻守维护 → 战斗/围城 → 切联络线；扣 E |
@@ -58,7 +58,7 @@ flowchart TD
 
 ## 3. 经济节奏 `simulateEconomy`
 
-基于 `tick` 取模（`TICKS_PER_SEC = TICK_HZ` 等）：
+基于 `tick` 取模（`TICKS_PER_SEC` / `TICKS_PER_10S` / `TICKS_PER_30S`，均来自 `time.ts`）：
 
 | 条件 | 行为 |
 |------|------|

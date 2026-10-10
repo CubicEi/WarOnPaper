@@ -1,4 +1,5 @@
 import type { MapConfig } from "../map.js";
+import { durationSecToTicks, ticksPerSeconds } from "../time.js";
 import {
   BUILDING_BY_ID,
   getBuildDurationSec,
@@ -9,9 +10,6 @@ import {
   type GroundContext,
 } from "./catalog.js";
 import { UNIT_OCCUPY_DEMOLISH_REFUND_RATE } from "../units/catalog.js";
-
-/** Keep in sync with `TICK_HZ` in index (avoid circular import). */
-const TICKS_PER_SEC = 15;
 
 /** 行动表：升级 / 建造 −2 O / 建筑 */
 export const BUILD_O_COST = 2;
@@ -218,11 +216,6 @@ export function constructionHp(
   return Math.max(0, Math.min(hpMax, (hpMax * elapsed) / ticksTotal));
 }
 
-export function durationSecToTicks(sec: number): number {
-  if (sec <= 0) return 0;
-  return Math.max(1, Math.round(sec * TICKS_PER_SEC));
-}
-
 /** 规则 §⑨：修复中 HP = 修复前 HP + 预计修复 HP × 已用时 / 总用时. */
 export function repairHp(
   hpBefore: number,
@@ -394,18 +387,17 @@ export function demolishEnergyRefund(building: PlacedBuilding): number {
 }
 
 /** Ticks after repair during which demolish is forbidden. */
-export function demolishLockTicksAfterRepair(tickHz = TICKS_PER_SEC): number {
-  return DEMOLISH_LOCK_AFTER_REPAIR_SEC * tickHz;
+export function demolishLockTicksAfterRepair(): number {
+  return ticksPerSeconds(DEMOLISH_LOCK_AFTER_REPAIR_SEC);
 }
 
 export function isDemolishLockedByRepair(
   building: PlacedBuilding,
   currentTick: number,
-  tickHz = TICKS_PER_SEC,
 ): boolean {
   const at = building.repairedAtTick;
   if (at == null) return false;
-  return currentTick - at < demolishLockTicksAfterRepair(tickHz);
+  return currentTick - at < demolishLockTicksAfterRepair();
 }
 
 /** Clamp present + away U into catalog Umax (prefer keeping away occupation). */

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { WebSocket } from "ws";
 import {
-  TICK_MS,
+  DT_SEC_PER_TICK,
   UNIT_MOVE_O_COST,
   UNIT_BLOCKADE_O_COST,
   UNIT_SUPPLY_O_COST,
@@ -65,7 +65,7 @@ export function advanceUnitMovement(world: UnitWorld): void {
     world.liaisons,
     world.terrain,
     world.connectedByOwner,
-    TICK_MS / 1000,
+    DT_SEC_PER_TICK,
     world.teams,
   );
   world.units.length = 0;
@@ -85,7 +85,7 @@ export function advanceUnitBlockades(
     world.units,
     world.buildings,
     energyByOwner,
-    TICK_MS / 1000,
+    DT_SEC_PER_TICK,
     world.teams,
   );
   world.units.length = 0;
@@ -104,7 +104,7 @@ export function advanceUnitCombat(
     world.units,
     world.buildings,
     energyByOwner,
-    TICK_MS / 1000,
+    DT_SEC_PER_TICK,
   );
   world.units.length = 0;
   world.units.push(...hold.units);
@@ -119,7 +119,7 @@ export function advanceUnitCombat(
   const fight = advanceFightsAndSieges(
     world.units,
     world.buildings,
-    TICK_MS / 1000,
+    DT_SEC_PER_TICK,
     {
       map: world.map,
       terrain: world.terrain,
@@ -138,7 +138,7 @@ export function advanceUnitCombat(
   const cut = advanceLiaisonCuts(
     world.units,
     world.liaisons,
-    TICK_MS / 1000,
+    DT_SEC_PER_TICK,
     () => randomUUID(),
   );
   world.units.length = 0;
@@ -790,7 +790,7 @@ export function advanceUnitAntiAir(
   const result = advanceAntiAir(
     world.units,
     world.buildings,
-    TICK_MS / 1000,
+    DT_SEC_PER_TICK,
     world.connectedByOwner,
     { tick },
   );

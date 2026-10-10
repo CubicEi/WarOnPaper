@@ -69,7 +69,7 @@ magic "WOPS" (4) | version u16 LE (=1) | iv (12) | ciphertext | authTag (16)
 - 玩家先 `pick_capital` 选都，选完后进入 `ready_lobby`（同一套 Ready UI）。
 - 可 `abandon_capital`（放弃首都，重新选择）后再选都。
 - **组队模式**在准备阶段仍允许放弃重选；组队仅禁止对局中首都沦陷后的再选都（观战）。
-- 当前房内 **所有人 ready**、`playerCount >= 2`、且非观战者均已有首都 → `playing`。
+- 当前房内 **所有人 ready**、`playerCount >= 1`、且非观战者均已有首都 → `playing`（自定义房可 1/1 开局）。
 
 ### 读档 `restore_lobby`
 
@@ -77,7 +77,7 @@ magic "WOPS" (4) | version u16 LE (=1) | iv (12) | ciphertext | authTag (16)
 - **全图卫星**展示建筑 / 联络线；**无直接视野**，直至全员准备并进入 `playing`。
 - 禁止战斗 / 建造；可选都（若需要）、继承身份、组队（若仍开放）、准备切换。
 - 已映射且有首都者可 `abandon_capital` 后重选；存档持有者不可放弃/重选都。
-- 当前房内 **所有人 ready**、`playerCount >= 2`、且非持有者/非观战者均已有首都 → `playing`，开始 tick。
+- 当前房内 **所有人 ready**、`playerCount >= 1`、且非持有者/非观战者均已有首都 → `playing`，开始 tick（与新开局同一门闸，可读档 1/1）。
 - `allowRespawn` / 地图等沿用存档。
 
 ## UI

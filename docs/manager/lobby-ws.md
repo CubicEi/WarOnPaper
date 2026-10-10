@@ -219,7 +219,7 @@ sequenceDiagram
   P->>M: hello（新 WS）
   M->>G: join / setSend 重绑
   G-->>P: welcome + state
-  loop 15 Hz
+  loop 5 Hz
     M->>G: tick
   end
   P->>M: 对局命令

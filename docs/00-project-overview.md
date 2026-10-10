@@ -53,7 +53,7 @@ flowchart TB
 ### `@wop/shared`（`core/shared`）
 
 - 纯 TypeScript 逻辑库：无 DOM、无 WebSocket。
-- 导出 tick 常量（`TICK_HZ = 15`，`TICK_MS`）、地图尺寸、`GameStateSnapshot`、`ClientToServer` / `ServerToClient`，以及建筑 / 单位 / 地形 / 视野等函数与类型。
+- 导出 tick 常量（`time.ts`：`TICK_HZ = 5`，`TICK_MS` 及秒↔tick 助手）、地图尺寸、`GameStateSnapshot`、`ClientToServer` / `ServerToClient`，以及建筑 / 单位 / 地形 / 视野等函数与类型。
 - 构建产物：`core/shared/dist/`；server 依赖已构建的包；client 开发时 Vite 别名直指 `shared/src/index.ts`。
 
 ### `@wop/server`（`core/server`）
@@ -73,7 +73,7 @@ flowchart TB
 - HTTP：标题 SPA（`manager/client/dist`）、对局 SPA（`/play/` → `core/client/dist`）、共享资源（`core/assets`）。
 - WebSocket `/ws`：大厅消息本地处理；对局消息转发到对应 `GameRoom.dispatch`。
 - `gameBridge.ts` 动态 `import` `core/server/dist/room.js` 的 `createRoom`。
-- `RoomRegistry` 按 `GAME_TICK_MS`（与 shared 的 15 Hz 一致）对所有房间调用 `tick()`。
+- `RoomRegistry` 按 `GAME_TICK_MS`（与 shared 的 5 Hz / `TICK_MS` 一致）对所有房间调用 `tick()`。
 - 身份持久化：`manager/data/identities.json`（gitignore）。
 
 ### `@wop/manager-client`（`manager/client`）

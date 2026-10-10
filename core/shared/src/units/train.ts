@@ -1,6 +1,7 @@
 import type { PlacedBuilding } from "../buildings/actions.js";
-import { durationSecToTicks, isBuildingComplete } from "../buildings/actions.js";
+import { isBuildingComplete } from "../buildings/actions.js";
 import { effectiveUmax } from "../buildings/levelUpgrade.js";
+import { DT_SEC_PER_TICK, durationSecToTicks } from "../time.js";
 import { unitKindFromBuilding, type UnitKind } from "./catalog.js";
 import { occupiedGarrisonU } from "./garrison.js";
 import type { UnitGroup } from "./types.js";
@@ -56,7 +57,7 @@ export function trainDurationSec(kind: TrainableKind, u: number): number {
 
 export function trainDurationTicks(kind: TrainableKind, u: number): number {
   const sec = trainDurationSec(kind, u);
-  return sec < 1 / 15 ? 0 : durationSecToTicks(sec);
+  return sec < DT_SEC_PER_TICK ? 0 : durationSecToTicks(sec);
 }
 
 /** Whether this building can hold the given unit kind as garrison. */

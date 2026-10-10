@@ -27,7 +27,7 @@ import { TICK_MS, type ClientToServer, generateTerrain, ... } from "@wop/shared"
 
 | 符号 | 用途 |
 |------|------|
-| `TICK_HZ` / `TICK_MS` | tick 间隔；单位推进 `dt` |
+| `TICK_HZ` / `TICK_MS` / `DT_SEC_PER_TICK`（`time.ts`） | tick 间隔；单位推进 `dt` |
 | `ROOM_IDLE_MS` | 默认空闲销毁（再导出为 `DEFAULT_ROOM_IDLE_MS`） |
 | `STARTING_ENERGY` / `STARTING_ORGANIZATION` | 选都时重置 HUD |
 | `CAPITAL_HP_MAX` / `ORGANIZATION_BAR_MAX` | HUD 上限 |

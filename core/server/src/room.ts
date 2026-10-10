@@ -9,8 +9,10 @@ import {
   ORGANIZATION_BAR_MAX,
   STARTING_ENERGY,
   STARTING_ORGANIZATION,
-  TICK_HZ,
-  TICK_MS,
+  TICKS_PER_SEC,
+  TICKS_PER_10S,
+  TICKS_PER_30S,
+  ticksPerSeconds,
   DEMOLISH_O_COST,
   HOLD_ACTION_O_COST,
   RELOCATE_CAPITAL_O_COST,
@@ -452,11 +454,9 @@ function isEmptyEntityDelta(delta: SnapshotListDelta<{ id: string }>): boolean {
 
 /** Active map; set at room creation. */
 let MAP: MapConfig = MAP_SIZES[options.mapSize && isMapSizeId(options.mapSize) ? options.mapSize : DEFAULT_MAP_SIZE_ID];
-const TICKS_PER_SEC = TICK_HZ;
-const TICKS_PER_10S = TICKS_PER_SEC * 10;
-const TICKS_PER_30S = TICKS_PER_SEC * 30;
-const TICKS_PER_POLLUTION_CAPITAL =
-  TICKS_PER_SEC * POLLUTION_CAPITAL_HP_INTERVAL_SEC;
+const TICKS_PER_POLLUTION_CAPITAL = ticksPerSeconds(
+  POLLUTION_CAPITAL_HP_INTERVAL_SEC,
+);
 
 const players = new Map<string, PlayerSession>();
 const buildings: PlacedBuilding[] = [];
@@ -754,7 +754,7 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
  * - regular ticks: omit bootstrap fields; role / winner* / pollutionZones /
  *   resourceTerrain only when changed vs lastSentChange; buildings /
  *   liaisons as delta vs last sent filtered set, with a full refresh every
- *   TICKS_PER_10S (150 ticks) of simulation since last full
+ *   TICKS_PER_10S of simulation since last full
  */
 function packWireSnapshot(
   player: PlayerSession,
@@ -1151,8 +1151,9 @@ function rejectIfPolluted(
   return true;
 }
 
-/** Every COMM_WAVE_INTERVAL_TICKS: restart diffusion from each capital.
- *  Published comms state is left untouched until the wave finishes.
+/** Every COMM_WAVE_INTERVAL_TICKS (~COMM_WAVE_INTERVAL_SEC wall-clock): restart
+ *  diffusion from each capital. Published comms state is left untouched until
+ *  the wave finishes.
  */
 function beginCommWaves(): void {
   const owners = new Set<string>();
@@ -1335,7 +1336,8 @@ function refreshPlayerMapping(): void {
 
 function tryStartPlayingFromLobby(): void {
   if (!awaitingReady) return;
-  if (players.size < 2) return;
+  // Allow solo custom rooms (1/1 ready). Matchmaking still forms ≥2-seat rooms.
+  if (players.size < 1) return;
   for (const p of players.values()) {
     if (!readyPlayerIds.has(p.id)) return;
     if (spectatorIds.has(p.id)) continue;
@@ -3584,7 +3586,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       }
     }
     reconcileCapitals();
-    // Full snapshot each tick (15 Hz) includes absolute you.energy / you.organization.
+    // Full snapshot each tick includes absolute you.energy / you.organization.
     // Economy mutates those at 1 Hz (and 10s/30s); this broadcast is the client source of truth.
     broadcastState();
     if (isIdleNow()) {

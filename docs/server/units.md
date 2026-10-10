@@ -33,7 +33,7 @@
 
 | 函数 | Shared 调用 | 副作用 |
 |------|-------------|--------|
-| `advanceUnitMovement` | `advanceUnits(..., dt=TICK_MS/1000)` | 替换 units；按 id 更新 buildings |
+| `advanceUnitMovement` | `advanceUnits(..., dt=DT_SEC_PER_TICK)` | 替换 units；按 id 更新 buildings |
 | `advanceUnitTraining` | `advanceTrainingQueues` + 完工 `createUnitGroup` + `applyUnitMove(..., asTrainingDelivery)` | 可能生成单位并自动开往目标建筑入库 |
 | `advanceUnitBlockades` | `advanceBlockades` | 替换 units/buildings；返回各主人应扣 E 的 Map |
 | `advanceUnitCombat` | `advanceHolds` → `advanceFightsAndSieges` → `advanceLiaisonCuts` | 替换单位/建筑/联络线；返回驻守 E 消耗 Map |

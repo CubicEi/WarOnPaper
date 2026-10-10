@@ -64,7 +64,7 @@
 | `interruptBuildOrRepairOnDamage` / `applyBuildingHpDamage` | 受伤中断与 HP |
 | `demolishEnergyRefund` / `isDemolishLockedByRepair` | 拆除返还与修复后锁拆 |
 | `applyCapitalRelocateInPlace` | 迁都到首府 |
-| `durationSecToTicks` | 秒 → tick（与 15Hz 对齐） |
+| （建造时长） | 经 `time.ts` 的 `durationSecToTicks` 换算 |
 
 ---
 
@@ -136,7 +136,7 @@
 
 ## `comm.ts` — 通信波
 
-常量：`COMM_WAVE_INTERVAL_TICKS = 10`，`COMM_STEPS_PER_TICK = 48`。
+常量：`COMM_WAVE_INTERVAL_SEC = 10/15`（≈0.667s，经 `durationSecToTicks` → `COMM_WAVE_INTERVAL_TICKS`，定义于 `time.ts`）；`COMM_STEPS_PER_TICK = 48`（每 tick 扩散步数，纯 tick 工作量子，墙钟吞吐随 `TICK_HZ` 变）。
 
 思想：归一化预算 `[0,1]`，在介质上走距离 `d` 消耗 `d/M`（M = 介质最大长度或电台 R）；换介质按比例折算剩余 Du；**真正接入的建筑**重置预算为 1。
 

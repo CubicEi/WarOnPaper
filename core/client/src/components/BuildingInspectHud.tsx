@@ -5,7 +5,7 @@ import {
   HOLD_ACTION_O_COST,
   RELOCATE_CAPITAL_O_COST,
   SIZE_NAME,
-  TICK_HZ,
+  ticksToSec,
   UNIT_BY_KIND,
   awayOccupiedU,
   buildingLevel,
@@ -256,9 +256,7 @@ export function BuildingInspectHud({
   const cooldownRemSec = onCooldown
     ? Math.max(
         1,
-        Math.ceil(
-          ((building.fireCooldownUntilTick ?? 0) - tick) / TICK_HZ,
-        ),
+        Math.ceil(ticksToSec((building.fireCooldownUntilTick ?? 0) - tick)),
       )
     : 0;
   const cooldownLabel = onCooldown
@@ -385,7 +383,7 @@ export function BuildingInspectHud({
     const q = building.trainingQueue ?? [];
     if (q.length > 0) {
       const head = q[0]!;
-      const remSec = Math.ceil(head.ticksRemaining / 15);
+      const remSec = Math.ceil(ticksToSec(head.ticksRemaining));
       const kindName = UNIT_BY_KIND[head.kind]?.name ?? head.kind;
       extras.push(
         `训练 ${kindName} ${head.u}U · 约 ${remSec}s` +

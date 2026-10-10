@@ -1,6 +1,6 @@
 # WarOnPaper Manager 文档（`manager`）
 
-本文档描述 `@wop/manager`（路径：`manager`）的架构与实现。Manager 是产品进程入口：托管标题 SPA、对局 SPA 静态资源、大厅 WebSocket（`/ws`），并通过 `gameBridge` 动态加载 `@wop/server` 的 `createRoom` / `GameRoom`，以 15 Hz 调度多房间。
+本文档描述 `@wop/manager`（路径：`manager`）的架构与实现。Manager 是产品进程入口：托管标题 SPA、对局 SPA 静态资源、大厅 WebSocket（`/ws`），并通过 `gameBridge` 动态加载 `@wop/server` 的 `createRoom` / `GameRoom`，以 5 Hz 调度多房间。
 
 ## 文档索引
 
@@ -49,7 +49,7 @@ manager/
 - **大厅消息**（`protocol.ts`）在 manager 内处理：身份、建房、加入、匹配、离房。
 - **对局消息**不透明转发到对应 `GameRoom.dispatch`；推送经 `RoomSend` 写回同一 WebSocket。
 - **权威房间**来自 `core/server/dist/room.js`（`createRoom`），**不要**加载会起调试监听的 `dist/index.js`。
-- **时钟**由 `RoomRegistry` 按 `GAME_TICK_MS = 1000/15` 对所有房间调用 `tick()`。
+- **时钟**由 `RoomRegistry` 按 `GAME_TICK_MS`（=`@wop/shared` 的 `TICK_MS`，5 Hz）对所有房间调用 `tick()`。
 
 ## 快速启动
 

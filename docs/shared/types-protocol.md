@@ -58,7 +58,7 @@
 | `tick` | `number` | 当前仿真 tick | 每帧 |
 | `map?` | `MapConfig` | 本局地图尺寸 | 仅开局 / 再入房 |
 | `you` | `PlayerHudState` | 本观众 HUD | 每帧 |
-| `buildings?` | `PlacedBuilding[]` | 可见建筑全量 | bootstrap / 每 150 tick 基线 |
+| `buildings?` | `PlacedBuilding[]` | 可见建筑全量 | bootstrap / 每 `TICKS_PER_10S` 基线 |
 | `buildingsDelta?` | `SnapshotListDelta<PlacedBuilding>` | 建筑增量（upserts/removes） | 常规 tick |
 | `liaisons?` | `PlacedLiaison[]` | 可见联络线全量 | 同 buildings |
 | `liaisonsDelta?` | `SnapshotListDelta<PlacedLiaison>` | 联络线增量 | 同 buildingsDelta |

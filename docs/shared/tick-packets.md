@@ -13,8 +13,8 @@
 
 | 项 | 值 / 说明 | 源码 |
 |----|-----------|------|
-| 频率 | `TICK_HZ = 15`（约 66.67 ms/tick） | `core/shared/src/index.ts` |
-| 间隔 | `TICK_MS = 1000 / TICK_HZ`；manager 侧 `GAME_TICK_MS` 同值 | `manager/src/gameBridge.ts` |
+| 频率 | `TICK_HZ = 5`（200 ms/tick） | `core/shared/src/time.ts`（经 `index.ts` 再导出） |
+| 间隔 | `TICK_MS = 1000 / TICK_HZ`；manager 侧 `GAME_TICK_MS = TICK_MS` | `manager/src/gameBridge.ts` |
 | 谁驱动 | `RoomRegistry.setInterval(..., GAME_TICK_MS)` → 各房间 `room.tick()` | `manager/src/rooms.ts` |
 | 谁发谁收 | **服务端 → 各在房玩家**：每 tick（及多数成功指令后）推送个性化快照 | `room.ts` `broadcastState` |
 | 客户端每 tick 是否上报 | **否**。客户端不发「tick」「ack」「输入帧」类消息；对局中只发事件型 `ClientToServer`（建造、调动等） | `useGameSocket.ts` |
@@ -38,7 +38,7 @@ sequenceDiagram
 要点：
 
 - **`awaitingReady`**（`pick_capital` / `ready_lobby` / `restore_lobby`）、**无人 `playing`**、或 **已有胜者**：仍会 `broadcastState()`，但**不**推进 `tick` 与模拟（见 `tickRoom`）。
-- **建筑物 / 联络线可增量**：常规 tick 对 `buildings` / `liaisons` 相对该连接上次已发送的**已过滤**集合发 `*Delta`；约每 10 秒（150 tick）或 bootstrap 再发全量数组重置基线。`units` 等其余实体仍每帧全量；E/O 从不发增量。其它顶层字段按 §3.0 省略。
+- **建筑物 / 联络线可增量**：常规 tick 对 `buildings` / `liaisons` 相对该连接上次已发送的**已过滤**集合发 `*Delta`；约每 10 秒（`TICKS_PER_10S`）或 bootstrap 再发全量数组重置基线。`units` 等其余实体仍每帧全量；E/O 从不发增量。其它顶层字段按 §3.0 省略。
 - 传输：每帧一个 JSON 对象，`type` 判别联合类型；底层 `JSON.stringify` / `JSON.parse`。
 
 ---
@@ -70,7 +70,7 @@ sequenceDiagram
 | `tick` | `number` | 当前仿真 tick（`awaitingReady` / 无人 playing / 已胜时可不递增，但快照仍带当前值） | 每帧 |
 | `map?` | `MapConfig` | 本局地图尺寸 | **仅开局 / 再入房** |
 | `you` | `PlayerHudState` | **本观众** HUD（绝对 E/O；先 `syncCapitalHud`） | 每帧 |
-| `buildings?` | `PlacedBuilding[]` | 可见建筑全量（视野过滤 / 观战终局全量 / `restore_lobby` 卫星门面） | **bootstrap / 每 150 tick 基线刷新** |
+| `buildings?` | `PlacedBuilding[]` | 可见建筑全量（视野过滤 / 观战终局全量 / `restore_lobby` 卫星门面） | **bootstrap / 每 `TICKS_PER_10S` 基线刷新** |
 | `buildingsDelta?` | `SnapshotListDelta<PlacedBuilding>` | 相对该连接上次已发送过滤集的增量 | **常规 tick**（无变化则省略） |
 | `liaisons?` | `PlacedLiaison[]` | 可见联络线全量 | **同 buildings** |
 | `liaisonsDelta?` | `SnapshotListDelta<PlacedLiaison>` | 联络线增量 | **同 buildingsDelta** |
@@ -120,7 +120,7 @@ sequenceDiagram
 - `winnerTeamId` / `winnerPlayerIds` / `winnerNames`：现实现**不**随上述成对省略，仍每帧带出。
 - `pollutionZones`、`resourceTerrain`：相对该连接上次已发送 JSON 指纹比较，**未变则省略**；核弹落点新增污染区、资源枯竭 / 矿点储量变化等必须发出（整段替换，非增量）。
 - **`buildings` / `liaisons`**：
-  - 若距该连接上次**全量**实体包已过 ≥ `TICKS_PER_10S`（150 tick，约 10 秒仿真时间）→ 再发**全量**数组，并重置该连接基线（不发 `*Delta`）。
+  - 若距该连接上次**全量**实体包已过 ≥ `TICKS_PER_10S`（`ticksPerSeconds(10)`，约 10 秒仿真时间）→ 再发**全量**数组，并重置该连接基线（不发 `*Delta`）。
   - 否则相对该连接上次已发送的过滤集合算 diff，发 `buildingsDelta` / `liaisonsDelta`（无变化则整段省略）；**不发**全量数组。
   - 视野：diff 在**过滤后**（或 restore 门面）集合上计算——刚进入视野 → `upserts`；刚离开视野 → `removes`；实体字段变化 → `upserts`（整实体替换）。
 
@@ -399,7 +399,8 @@ const fullVision = role === "spectator" || phaseFor(player) === "ended";
 
 | 主题 | 路径 |
 |------|------|
-| `TICK_HZ` / `GamePhase` / `GameStateSnapshot` / `SnapshotListDelta` / `mergeGameStateSnapshot` / `applySnapshotListDelta` / 协议联合类型 | `core/shared/src/index.ts` |
+| `TICK_HZ` / `TICK_MS` / seconds↔ticks 助手 | `core/shared/src/time.ts`（经 `index.ts` 再导出） |
+| `GamePhase` / `GameStateSnapshot` / `SnapshotListDelta` / `mergeGameStateSnapshot` / `applySnapshotListDelta` / 协议联合类型 | `core/shared/src/index.ts` |
 | 组队 / 友方进驻类型 | `core/shared/src/teams.ts` |
 | 读档身份选项 | `core/shared/src/save.ts`（`RestoreIdentityOption`） |
 | 嵌套实体类型 | `buildings/actions.ts`、`liaison.ts`、`pollution.ts`、`units/types.ts`、`terrain/types.ts`、`map.ts` |

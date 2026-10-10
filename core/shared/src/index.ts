@@ -1,6 +1,17 @@
-/** Server-authoritative broadcast rate (10–20 Hz). */
-export const TICK_HZ = 15;
-export const TICK_MS = 1000 / TICK_HZ;
+export {
+  TICK_HZ,
+  TICK_MS,
+  DT_SEC_PER_TICK,
+  TICKS_PER_SEC,
+  TICKS_PER_10S,
+  TICKS_PER_30S,
+  COMM_WAVE_INTERVAL_SEC,
+  COMM_WAVE_INTERVAL_TICKS,
+  ticksPerSeconds,
+  durationSecToTicks,
+  durationSecToTicksCeil,
+  ticksToSec,
+} from "./time.js";
 
 export type { MapConfig, MapSizeId } from "./map.js";
 export {
@@ -109,7 +120,6 @@ export {
   repairHp,
   previewRepairCost,
   previewContinueBuildCost,
-  durationSecToTicks,
   isBuildingAncestor,
   canPlaceBuildingDef,
   previewBuildCost,
@@ -165,7 +175,7 @@ export interface GameStateSnapshot {
   you: PlayerHudState;
   /**
    * Visible buildings (viewer-filtered). Wire: full array on bootstrap and
-   * every ~10s (150 ticks) baseline refresh; omitted when `buildingsDelta`
+   * every ~10s (`TICKS_PER_10S`) baseline refresh; omitted when `buildingsDelta`
    * is used (or when unchanged with an empty delta).
    */
   buildings?: import("./buildings/actions.js").PlacedBuilding[];
@@ -899,7 +909,6 @@ export type { LiaisonOverlapResolution, StationLikeBuilding } from "./buildings/
 
 export type { CommEdge, CommWaveState } from "./buildings/comm.js";
 export {
-  COMM_WAVE_INTERVAL_TICKS,
   COMM_STEPS_PER_TICK,
   buildLiaisonAdjacency,
   startCommWave,

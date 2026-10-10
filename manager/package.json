@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@wop/shared": "file:../core/shared",
     "ws": "^8.18.1"
   },
   "devDependencies": {
