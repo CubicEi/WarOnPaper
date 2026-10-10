@@ -388,6 +388,11 @@ body,
   pointer-events: none;
 }
 
+/* Pregame: minimap hidden — chat docks at screen bottom (same corner). */
+.minimap-stack.is-chat-bottom {
+  bottom: 12px;
+}
+
 .minimap {
   position: relative;
   right: auto;

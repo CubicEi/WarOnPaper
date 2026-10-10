@@ -22,7 +22,8 @@ export {
 } from "./map.js";
 
 export const ORGANIZATION_BAR_MAX = 50;
-export const CAPITAL_HP_MAX = 60;
+/** Matches `BUILDING_BY_ID.capital.hp` in buildings/catalog (HUD seed / fallback). */
+export const CAPITAL_HP_MAX = 120;
 
 /** 规则开局：O = 10，E = 500 */
 export const STARTING_ENERGY = 500;

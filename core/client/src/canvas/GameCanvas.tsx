@@ -204,6 +204,8 @@ interface Props {
   showCommStatus?: boolean;
   chatMessages?: readonly ChatMessage[];
   onSendChat?: (text: string) => void;
+  /** When false, hide minimap canvas (chat stays docked at bottom). Default true. */
+  showMinimap?: boolean;
 }
 
 interface SelectionView {
@@ -383,6 +385,7 @@ export function GameCanvas({
   showCommStatus = false,
   chatMessages = [],
   onSendChat,
+  showMinimap = true,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const miniRef = useRef<HTMLCanvasElement>(null);
@@ -1429,7 +1432,7 @@ export function GameCanvas({
     };
     raf = requestAnimationFrame(paint);
     return () => cancelAnimationFrame(raf);
-  }, [map, terrain, buildings, liaisons, resourceSight, connectedBuildingIds, pollutionZones, myPlayerId, teams, showEnemyVision, showCommStatus, width, height, miniSize.width, miniSize.height]);
+  }, [map, terrain, buildings, liaisons, resourceSight, connectedBuildingIds, pollutionZones, myPlayerId, teams, showEnemyVision, showCommStatus, showMinimap, width, height, miniSize.width, miniSize.height]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -2504,7 +2507,7 @@ export function GameCanvas({
       mini.removeEventListener("pointerup", onUp);
       mini.removeEventListener("pointercancel", onUp);
     };
-  }, [map, miniSize.width, miniSize.height]);
+  }, [map, showMinimap, miniSize.width, miniSize.height]);
 
   const groundAt = (gx: number, gy: number): GroundContext => {
     const t = terrainRef.current;
@@ -3845,7 +3848,10 @@ export function GameCanvas({
         </div>
       )}
       {map && miniSize.width > 0 && (
-        <div className="minimap-stack" style={{ width: miniSize.width }}>
+        <div
+          className={`minimap-stack${showMinimap ? "" : " is-chat-bottom"}`}
+          style={{ width: miniSize.width }}
+        >
           <AllyRequestStack
             requests={allyGarrisonRequests}
             playerNames={playerNames}
@@ -3866,13 +3872,15 @@ export function GameCanvas({
             width={miniSize.width}
             onSend={(text) => onSendChat?.(text)}
           />
-          <canvas
-            ref={miniRef}
-            className="minimap"
-            width={Math.round(miniSize.width * devicePixelRatio)}
-            height={Math.round(miniSize.height * devicePixelRatio)}
-            style={{ width: miniSize.width, height: miniSize.height }}
-          />
+          {showMinimap ? (
+            <canvas
+              ref={miniRef}
+              className="minimap"
+              width={Math.round(miniSize.width * devicePixelRatio)}
+              height={Math.round(miniSize.height * devicePixelRatio)}
+              style={{ width: miniSize.width, height: miniSize.height }}
+            />
+          ) : null}
         </div>
       )}
     </>

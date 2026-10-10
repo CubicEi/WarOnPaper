@@ -12,7 +12,7 @@ import { ErrorToast, type ToastVariant } from "../components/ErrorToast";
 import { TitleMapBackdrop } from "./TitleMapBackdrop";
 
 type ConnState = "connecting" | "open" | "closed";
-type ModalId = "match" | "custom" | null;
+type ModalId = "new" | "join" | null;
 
 function roomClosedReason(raw: unknown): string {
   const key = String(raw ?? "unknown");
@@ -315,16 +315,16 @@ export function TitleScreen() {
               <button
                 type="button"
                 className="btn btn-hero btn-accent"
-                onClick={() => setModal("match")}
+                onClick={() => setModal("new")}
               >
-                匹配大厅
+                新游戏
               </button>
               <button
                 type="button"
                 className="btn btn-hero"
-                onClick={() => setModal("custom")}
+                onClick={() => setModal("join")}
               >
-                自定义开始
+                加入游戏
               </button>
             </div>
             {queuing && queueInfo ? (
@@ -363,7 +363,7 @@ export function TitleScreen() {
             >
               <div className="title-modal-head">
                 <h2 id="title-modal-heading">
-                  {modal === "match" ? "匹配大厅" : "自定义开始"}
+                  {modal === "new" ? "新游戏" : "加入游戏"}
                 </h2>
                 <button
                   type="button"
@@ -376,93 +376,99 @@ export function TitleScreen() {
               </div>
 
               <div className="title-modal-body">
-                {modal === "match" ? (
-                  <section className="section">
-                    <h3>匹配</h3>
-                    <div className="row">
-                      <div className="field grow" style={{ marginBottom: 0 }}>
-                        <label htmlFor="teamFormat">组队</label>
-                        <select
-                          id="teamFormat"
-                          value={teamFormat}
-                          disabled={queuing}
-                          onChange={(e) => {
-                            if (queuing) return;
-                            setTeamFormat(
-                              e.target.value as
-                                | ""
-                                | "2v2"
-                                | "3v3"
-                                | "4v4"
-                                | "2v2v2"
-                                | "3v3v3"
-                                | "2v2v2v2",
-                            );
-                          }}
-                        >
-                          <option value="">无（自由混战）</option>
-                          <option value="2v2">2v2 · 4 人</option>
-                          <option value="3v3">3v3 · 6 人</option>
-                          <option value="4v4">4v4 · 8 人</option>
-                          <option value="2v2v2">2v2v2 · 6 人</option>
-                          <option value="3v3v3">3v3v3 · 9 人</option>
-                          <option value="2v2v2v2">2v2v2v2 · 8 人</option>
-                        </select>
-                      </div>
-                      {!teamFormat ? (
+                {modal === "new" ? (
+                  <>
+                    <section className="section">
+                      <h3>匹配</h3>
+                      <div className="row">
                         <div className="field grow" style={{ marginBottom: 0 }}>
-                          <label htmlFor="matchCount">人数（2–5）</label>
+                          <label htmlFor="teamFormat">组队</label>
                           <select
-                            id="matchCount"
-                            value={matchCount}
+                            id="teamFormat"
+                            value={teamFormat}
                             disabled={queuing}
                             onChange={(e) => {
                               if (queuing) return;
-                              setMatchCount(Number(e.target.value));
+                              setTeamFormat(
+                                e.target.value as
+                                  | ""
+                                  | "2v2"
+                                  | "3v3"
+                                  | "4v4"
+                                  | "2v2v2"
+                                  | "3v3v3"
+                                  | "2v2v2v2",
+                              );
                             }}
                           >
-                            {[2, 3, 4, 5].map((n) => (
-                              <option key={n} value={n}>
-                                {n} 人 · {n <= 3 ? "89×59" : "119×79"}
-                              </option>
-                            ))}
+                            <option value="">无（自由混战）</option>
+                            <option value="2v2">2v2 · 4 人</option>
+                            <option value="3v3">3v3 · 6 人</option>
+                            <option value="4v4">4v4 · 8 人</option>
+                            <option value="2v2v2">2v2v2 · 6 人</option>
+                            <option value="3v3v3">3v3v3 · 9 人</option>
+                            <option value="2v2v2v2">2v2v2v2 · 8 人</option>
                           </select>
                         </div>
-                      ) : (
-                        <div className="field grow" style={{ marginBottom: 0 }}>
-                          <label>地图</label>
+                        {!teamFormat ? (
                           <div
-                            style={{ paddingTop: "0.35rem", opacity: 0.85 }}
+                            className="field grow"
+                            style={{ marginBottom: 0 }}
                           >
-                            119×79（组队局）
+                            <label htmlFor="matchCount">人数（2–5）</label>
+                            <select
+                              id="matchCount"
+                              value={matchCount}
+                              disabled={queuing}
+                              onChange={(e) => {
+                                if (queuing) return;
+                                setMatchCount(Number(e.target.value));
+                              }}
+                            >
+                              {[2, 3, 4, 5].map((n) => (
+                                <option key={n} value={n}>
+                                  {n} 人 · {n <= 3 ? "89×59" : "119×79"}
+                                </option>
+                              ))}
+                            </select>
                           </div>
-                        </div>
-                      )}
-                      {!queuing ? (
-                        <button
-                          type="button"
-                          className="btn btn-accent"
-                          disabled={conn !== "open"}
-                          onClick={startMatch}
-                        >
-                          开始匹配
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          className="btn btn-ghost"
-                          onClick={cancelMatch}
-                        >
-                          取消
-                        </button>
-                      )}
-                    </div>
-                    {queueInfo ? (
-                      <p className="status ok">{queueInfo}</p>
-                    ) : null}
-                  </section>
-                ) : (
-                  <>
+                        ) : (
+                          <div
+                            className="field grow"
+                            style={{ marginBottom: 0 }}
+                          >
+                            <label>地图</label>
+                            <div
+                              style={{ paddingTop: "0.35rem", opacity: 0.85 }}
+                            >
+                              119×79（组队局）
+                            </div>
+                          </div>
+                        )}
+                        {!queuing ? (
+                          <button
+                            type="button"
+                            className="btn btn-accent"
+                            disabled={conn !== "open"}
+                            onClick={startMatch}
+                          >
+                            开始匹配
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn btn-ghost"
+                            onClick={cancelMatch}
+                          >
+                            取消
+                          </button>
+                        )}
+                      </div>
+                      {queueInfo ? (
+                        <p className="status ok">{queueInfo}</p>
+                      ) : null}
+                    </section>
+
                     <section className="section">
                       <h3>创建房间</h3>
                       <div className="row">
@@ -575,7 +581,9 @@ export function TitleScreen() {
                         </button>
                       </div>
                     </section>
-
+                  </>
+                ) : (
+                  <>
                     <section className="section">
                       <h3>输入房间码</h3>
                       <div className="row">

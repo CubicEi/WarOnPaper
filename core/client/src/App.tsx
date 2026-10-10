@@ -495,6 +495,22 @@ export function App() {
   const phase = state?.phase ?? "need_init";
   const role = state?.role ?? "player";
 
+  // HUD visibility by phase (spectator/restore: see notes in return matrix).
+  // A pick_capital · B ready/restore lobby · C playing (+ spectating/ended).
+  const hudPhase =
+    phase === "pick_capital" || phase === "need_init"
+      ? "pick"
+      : phase === "ready_lobby" ||
+          phase === "restore_lobby" ||
+          (phase === "spectating" && !!state?.restoreMode)
+        ? "ready"
+        : "playing";
+  const showHudRing = hudPhase !== "pick";
+  const showHudResources = hudPhase !== "pick";
+  const showSaveDownload = hudPhase === "playing";
+  const showAdvancedView = hudPhase !== "pick";
+  const showMinimap = hudPhase === "playing";
+
   const foreignCapital =
     (phase === "pick_capital" ||
       phase === "ready_lobby" ||
@@ -617,36 +633,48 @@ export function App() {
         showCommStatus={showCommStatus}
         chatMessages={chatMessages}
         onSendChat={onSendChat}
+        showMinimap={showMinimap}
       />
       {state && (
         <HudOverlay
           hud={state.you}
           windowHudSize={windowHudSize}
+          showRing={showHudRing}
+          showResources={showHudResources}
           belowRing={
-            <div className="hud-below-ring">
-              <button
-                type="button"
-                className="save-download-btn"
-                title="下载存档"
-                aria-label="下载存档"
-                disabled={phase === "need_init" || phase === "ended"}
-                onClick={() => send({ type: "export_save" })}
-              >
-                <span className="save-download-btn__glyph" aria-hidden>
-                  ↓
-                </span>
-              </button>
-              <TeamPanelButton
-                visible={
-                  (phase === "pick_capital" ||
-                    phase === "ready_lobby" ||
-                    phase === "restore_lobby") &&
-                  (state.players?.length ?? 0) >= 3 &&
-                  !!playerId
-                }
-                onClick={() => setTeamPanelOpen(true)}
-              />
-            </div>
+            showSaveDownload ||
+            ((phase === "pick_capital" ||
+              phase === "ready_lobby" ||
+              phase === "restore_lobby") &&
+              (state.players?.length ?? 0) >= 3 &&
+              !!playerId) ? (
+              <div className="hud-below-ring">
+                {showSaveDownload ? (
+                  <button
+                    type="button"
+                    className="save-download-btn"
+                    title="下载存档"
+                    aria-label="下载存档"
+                    disabled={phase === "need_init" || phase === "ended"}
+                    onClick={() => send({ type: "export_save" })}
+                  >
+                    <span className="save-download-btn__glyph" aria-hidden>
+                      ↓
+                    </span>
+                  </button>
+                ) : null}
+                <TeamPanelButton
+                  visible={
+                    (phase === "pick_capital" ||
+                      phase === "ready_lobby" ||
+                      phase === "restore_lobby") &&
+                    (state.players?.length ?? 0) >= 3 &&
+                    !!playerId
+                  }
+                  onClick={() => setTeamPanelOpen(true)}
+                />
+              </div>
+            ) : undefined
           }
         />
       )}
@@ -707,28 +735,30 @@ export function App() {
         返回
       </button>
       <div className="corner-tools">
-        <div className="corner-tools-col">
-          <button
-            type="button"
-            className={`comm-status-btn${showCommStatus ? " is-on" : ""}`}
-            title="显示我方通信状态"
-            aria-label="显示我方通信状态"
-            aria-pressed={showCommStatus}
-            onClick={() => setShowCommStatus((v) => !v)}
-          >
-            <img src="/ui/advanced_view/comm.png" alt="" draggable={false} />
-          </button>
-          <button
-            type="button"
-            className={`enemy-vision-btn${showEnemyVision ? " is-on" : ""}`}
-            title="显示已知对手视野范围"
-            aria-label="显示已知对手视野范围"
-            aria-pressed={showEnemyVision}
-            onClick={() => setShowEnemyVision((v) => !v)}
-          >
-            <img src="/ui/advanced_view/view.png" alt="" draggable={false} />
-          </button>
-        </div>
+        {showAdvancedView ? (
+          <div className="corner-tools-col">
+            <button
+              type="button"
+              className={`comm-status-btn${showCommStatus ? " is-on" : ""}`}
+              title="显示我方通信状态"
+              aria-label="显示我方通信状态"
+              aria-pressed={showCommStatus}
+              onClick={() => setShowCommStatus((v) => !v)}
+            >
+              <img src="/ui/advanced_view/comm.png" alt="" draggable={false} />
+            </button>
+            <button
+              type="button"
+              className={`enemy-vision-btn${showEnemyVision ? " is-on" : ""}`}
+              title="显示已知对手视野范围"
+              aria-label="显示已知对手视野范围"
+              aria-pressed={showEnemyVision}
+              onClick={() => setShowEnemyVision((v) => !v)}
+            >
+              <img src="/ui/advanced_view/view.png" alt="" draggable={false} />
+            </button>
+          </div>
+        ) : null}
         <div className="corner-tools-col">
           {phaseHint && (
             <div className="status-chip" data-status="connecting">

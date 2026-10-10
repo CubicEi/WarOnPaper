@@ -8,6 +8,10 @@ interface Props {
   windowHudSize: number;
   /** Optional control under the capital HP ring (e.g. team button). */
   belowRing?: ReactNode;
+  /** Capital HP ring (hidden during pick_capital). Default true. */
+  showRing?: boolean;
+  /** Energy / organization block. Default true. */
+  showResources?: boolean;
 }
 
 interface CapSize {
@@ -15,7 +19,13 @@ interface CapSize {
   h: number;
 }
 
-export function HudOverlay({ hud, windowHudSize, belowRing }: Props) {
+export function HudOverlay({
+  hud,
+  windowHudSize,
+  belowRing,
+  showRing = true,
+  showResources = true,
+}: Props) {
   // hud.energy / hud.organization are server-authoritative (from GameStateSnapshot.you).
   const resourcesRef = useRef<HTMLDivElement>(null);
   /** Natural size of energy/org block at scale 1 — permanent cap. */
@@ -23,13 +33,13 @@ export function HudOverlay({ hud, windowHudSize, belowRing }: Props) {
 
   // Measure once at scale 1, before paint when possible.
   useLayoutEffect(() => {
-    if (cap) return;
+    if (cap || !showResources) return;
     const el = resourcesRef.current;
     if (!el) return;
     const w = el.offsetWidth;
     const h = el.offsetHeight;
     if (w > 0 && h > 0) setCap({ w, h });
-  }, [cap, hud.energy, hud.organization]);
+  }, [cap, showResources, hud.energy, hud.organization]);
 
   const hudSize =
     cap && cap.h > 0 ? Math.min(windowHudSize, cap.h) : windowHudSize;
@@ -53,33 +63,39 @@ export function HudOverlay({ hud, windowHudSize, belowRing }: Props) {
     transformOrigin: "left top",
   };
 
+  if (!showRing && !showResources && !belowRing) return null;
+
   return (
     <div className="hud" style={hudStyle}>
       <div className="hud-left-col">
-        <CapitalHpRing
-          diameter={hudSize}
-          hp={hud.capitalHp}
-          hpMax={hud.capitalHpMax}
-        />
+        {showRing ? (
+          <CapitalHpRing
+            diameter={hudSize}
+            hp={hud.capitalHp}
+            hpMax={hud.capitalHpMax}
+          />
+        ) : null}
         {belowRing}
       </div>
-      <div className="hud-resources-slot" style={slotStyle}>
-        <div className="hud-resources" ref={resourcesRef} style={resourcesStyle}>
-          <div className="resource-row energy">
-            <img className="resource-icon" src="/ui/energy.png" alt="" />
-            <span className="resource-label">能源</span>
-            <span className="resource-value">{Math.floor(hud.energy)}</span>
-          </div>
-          <div className="resource-row organization">
-            <img className="resource-icon" src="/ui/organization_point.png" alt="" />
-            <span className="resource-label">组织</span>
-            <span className="resource-value">{Math.floor(hud.organization)}</span>
-          </div>
-          <div className="org-bar" title={`组织点槽 ${hud.organization}/${hud.organizationMax}`}>
-            <div className="org-bar-fill" style={{ width: `${orgRatio * 100}%` }} />
+      {showResources ? (
+        <div className="hud-resources-slot" style={slotStyle}>
+          <div className="hud-resources" ref={resourcesRef} style={resourcesStyle}>
+            <div className="resource-row energy">
+              <img className="resource-icon" src="/ui/energy.png" alt="" />
+              <span className="resource-label">能源</span>
+              <span className="resource-value">{Math.floor(hud.energy)}</span>
+            </div>
+            <div className="resource-row organization">
+              <img className="resource-icon" src="/ui/organization_point.png" alt="" />
+              <span className="resource-label">组织</span>
+              <span className="resource-value">{Math.floor(hud.organization)}</span>
+            </div>
+            <div className="org-bar" title={`组织点槽 ${hud.organization}/${hud.organizationMax}`}>
+              <div className="org-bar-fill" style={{ width: `${orgRatio * 100}%` }} />
+            </div>
           </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
