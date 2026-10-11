@@ -2,6 +2,7 @@ import {
   BUILDING_BY_ID,
   TRAINABLE_KINDS,
   TRAIN_E_PER_U,
+  TRAIN_O_COST,
   UNIT_BY_KIND,
   allocateTrainingDeliveries,
   availableTrainingRoom,
@@ -21,6 +22,7 @@ interface Props {
   units: readonly UnitGroup[];
   myPlayerId: string | null;
   energy: number;
+  organization: number;
   kind: TrainableKind;
   u: number;
   /** Multi-select destination buildings; U is split by each target's free room in list order. */
@@ -38,6 +40,7 @@ export function TrainPanel({
   units,
   myPlayerId,
   energy,
+  organization,
   kind,
   u,
   targetIds,
@@ -102,6 +105,7 @@ export function TrainPanel({
     amount >= 1 &&
     amount <= maxU &&
     energy >= cost &&
+    organization >= TRAIN_O_COST &&
     !kindBlocked &&
     preview != null &&
     preview.ok;
@@ -182,9 +186,20 @@ export function TrainPanel({
       )}
       <div className="mobilize-foot">
         <span>
-          {cost}E · {secs < 1 ? "<1" : secs.toFixed(1)}s
+          {cost}E · {TRAIN_O_COST}O · {secs < 1 ? "<1" : secs.toFixed(1)}s
         </span>
-        <button type="button" disabled={!canGo} onClick={() => onGo(amount)}>
+        <button
+          type="button"
+          disabled={!canGo}
+          title={
+            organization < TRAIN_O_COST
+              ? `组织度不足（需要 ${TRAIN_O_COST} O）`
+              : energy < cost
+                ? `能源不足（需要 ${cost} E）`
+                : undefined
+          }
+          onClick={() => onGo(amount)}
+        >
           开始训练
         </button>
       </div>

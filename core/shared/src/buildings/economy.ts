@@ -317,18 +317,22 @@ export function sumRefinedRawIncome(
   return raw;
 }
 
+/** Shared uranium infra gate for nuke reload / research. */
+export type NukeUraniumInfraPurpose = "reload" | "research";
+
 /**
- * 核导弹装填前置。与产电 tick 同一套判定，不另做通信扩散：
+ * 核导弹铀设施前置（装填与研究共用）。与产电 tick 同一套判定，不另做通信扩散：
  * - 接入通信：建筑 id 在 `connectedIds`（通信波已提交的连通集）
  * - 正在开采 / 正在工作：已建成且未污染（`isActive`）；铀矿机还须脚下铀矿储量 > 0
  *   （与 `sumRefinedRawIncome` / `depleteResourcesForMiners` 相同）
  * 铀矿机与铀工厂须同时满足，缺一返回拒绝文案。
  */
-export function nukeReloadRejectReason(
+export function nukeUraniumInfraRejectReason(
   buildings: readonly PlacedBuilding[],
   ownerId: string,
   terrain: TerrainMap | null,
   connectedIds?: ReadonlySet<string> | readonly string[] | null,
+  purpose: NukeUraniumInfraPurpose = "reload",
 ): string | null {
   const linked = asIdSet(connectedIds);
   let mining = false;
@@ -349,20 +353,37 @@ export function nukeReloadRejectReason(
     }
   }
 
+  const verb = purpose === "research" ? "研究" : "装填";
   const minerReason = miningLinked
     ? null
     : mining
-      ? "铀矿机未接入通信，无法装填核导弹"
-      : "没有正在开采的铀矿机，无法装填核导弹";
+      ? `铀矿机未接入通信，无法${verb}核导弹`
+      : `没有正在开采的铀矿机，无法${verb}核导弹`;
   const factoryReason = refiningLinked
     ? null
     : refining
-      ? "铀工厂未接入通信，无法装填核导弹"
-      : "没有正在工作的铀工厂，无法装填核导弹";
+      ? `铀工厂未接入通信，无法${verb}核导弹`
+      : `没有正在工作的铀工厂，无法${verb}核导弹`;
   if (minerReason && factoryReason) {
-    return "装填核导弹需要已接入通信且正在开采的铀矿机，以及已接入通信且正在工作的铀工厂";
+    return `${verb}核导弹需要已接入通信且正在开采的铀矿机，以及已接入通信且正在工作的铀工厂`;
   }
   return minerReason ?? factoryReason;
+}
+
+/** 核导弹装填前置（`nukeUraniumInfraRejectReason` 的装填文案包装）。 */
+export function nukeReloadRejectReason(
+  buildings: readonly PlacedBuilding[],
+  ownerId: string,
+  terrain: TerrainMap | null,
+  connectedIds?: ReadonlySet<string> | readonly string[] | null,
+): string | null {
+  return nukeUraniumInfraRejectReason(
+    buildings,
+    ownerId,
+    terrain,
+    connectedIds,
+    "reload",
+  );
 }
 
 /** E gained each second from P + refined Raw-P. */

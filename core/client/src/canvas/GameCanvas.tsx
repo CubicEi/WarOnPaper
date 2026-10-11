@@ -31,6 +31,8 @@ import {
   previewTrainingDeliveryPath,
   applyAssignHome,
   unitKindFromBuilding,
+  isOceanTerrain,
+  LAND_WATER_ERROR,
   extendLiaisonPath,
   bluntLiaisonPath,
   previewLiaisonCost,
@@ -44,6 +46,7 @@ import {
   isValidPortSite,
   isBuildingCommsLinked,
   nukeReloadRejectReason,
+  nukeUraniumInfraRejectReason,
   LIAISON_BY_ID,
   BUILDING_BY_ID,
   UNIT_BY_KIND,
@@ -956,16 +959,16 @@ export function GameCanvas({
     setTrainUi(next);
   };
 
-  const planError = useMemo(() => {
-    if (!mobilize || !map || !terrain || myPlayerId == null) return null;
-    if (mobilize.mode === "attack" && mobilize.targetLiaisonId) return null;
-    const sources = Object.entries(mobilize.sources).map(([buildingId, u]) => ({
-      buildingId,
-      u,
-    }));
-    const unitIds = mobilize.unitIds;
-    if (mobilize.mode !== "assign" && sources.length === 0 && unitIds.length === 0) return null;
-    if (mobilize.mode === "assign" && unitIds.length === 0) return null;
+  /**
+   * Single dry-run for mobilize plan tip + march polylines.
+   * Caps A* via previewUnitMove so armor/land ocean crossings cannot freeze React.
+   */
+  const mobilizePreview = useMemo(() => {
+    const empty = {
+      planError: null as string | null,
+      paths: [] as Array<Array<{ gx: number; gy: number }>>,
+    };
+    if (!map || !terrain || myPlayerId == null) return empty;
     try {
       let n = 0;
       const ctx = {
@@ -976,88 +979,10 @@ export function GameCanvas({
         units,
         connectedIds: connectedBuildingIds,
         nextId: () => `preview-${++n}`,
+        previewPathfind: true as const,
       };
-      if (mobilize.mode === "assign") {
-        if (!mobilize.assignBuildingId) return "请选择建筑";
-        const result = applyAssignHome(myPlayerId, mobilize.assignBuildingId, unitIds, ctx);
-        return result.ok ? null : (result.error ?? "无法归属");
-      }
-      const result = previewUnitMove(
-        {
-          ownerId: myPlayerId,
-          gx: mobilize.gx,
-          gy: mobilize.gy,
-          sources: sources.length > 0 ? sources : undefined,
-          unitIds: unitIds.length > 0 ? unitIds : undefined,
-          asBlockade: mobilize.mode === "blockade",
-          asSupply: mobilize.mode === "supply",
-          supplyBuildingId: mobilize.supplyBuildingId,
-          asHold: mobilize.mode === "hold",
-          holdBuildingId: mobilize.holdBuildingId,
-          attackTargetUnitId: mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
-          attackTargetBuildingId:
-            mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
-        },
-        ctx,
-      );
-      return result.ok ? null : (result.error ?? "无法调动");
-    } catch (err) {
-      log.error("mobilize", "plan preview failed", err);
-      return "路径预览失败";
-    }
-  }, [
-    mobilize,
-    map,
-    terrain,
-    buildings,
-    liaisons,
-    units,
-    connectedBuildingIds,
-    myPlayerId,
-  ]);
+      const paths: Array<Array<{ gx: number; gy: number }>> = [];
 
-  /** Dry-run march polylines for checked mobilize sources / train targets. */
-  const marchPathPreviews = useMemo(() => {
-    const paths: Array<Array<{ gx: number; gy: number }>> = [];
-    if (!map || !terrain || myPlayerId == null) return paths;
-    try {
-      let n = 0;
-      const ctx = {
-        map,
-        terrain,
-        buildings,
-        liaisons,
-        units,
-        connectedIds: connectedBuildingIds,
-        nextId: () => `preview-${++n}`,
-      };
-      if (
-        mobilize &&
-        mobilize.mode !== "assign" &&
-        !(mobilize.mode === "attack" && mobilize.targetLiaisonId)
-      ) {
-        const base = {
-          ownerId: myPlayerId,
-          gx: mobilize.gx,
-          gy: mobilize.gy,
-          asBlockade: mobilize.mode === "blockade",
-          asSupply: mobilize.mode === "supply",
-          supplyBuildingId: mobilize.supplyBuildingId,
-          asHold: mobilize.mode === "hold",
-          holdBuildingId: mobilize.holdBuildingId,
-          attackTargetUnitId: mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
-          attackTargetBuildingId:
-            mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
-        };
-        for (const [buildingId, u] of Object.entries(mobilize.sources)) {
-          const result = previewUnitMove({ ...base, sources: [{ buildingId, u }] }, ctx);
-          for (const p of result.paths) paths.push(p);
-        }
-        for (const id of mobilize.unitIds) {
-          const result = previewUnitMove({ ...base, unitIds: [id] }, ctx);
-          for (const p of result.paths) paths.push(p);
-        }
-      }
       if (trainUi) {
         const source = buildings.find((b) => b.id === trainUi.sourceId);
         if (source) {
@@ -1078,10 +1003,84 @@ export function GameCanvas({
           }
         }
       }
+
+      if (!mobilize) return { planError: null, paths };
+      if (mobilize.mode === "attack" && mobilize.targetLiaisonId) {
+        return { planError: null, paths };
+      }
+
+      const sources = Object.entries(mobilize.sources).map(([buildingId, u]) => ({
+        buildingId,
+        u,
+      }));
+      const unitIds = mobilize.unitIds;
+      if (mobilize.mode !== "assign" && sources.length === 0 && unitIds.length === 0) {
+        return { planError: null, paths };
+      }
+      if (mobilize.mode === "assign" && unitIds.length === 0) {
+        return { planError: null, paths };
+      }
+
+      if (mobilize.mode === "assign") {
+        if (!mobilize.assignBuildingId) return { planError: "请选择建筑", paths };
+        const result = applyAssignHome(
+          myPlayerId,
+          mobilize.assignBuildingId,
+          unitIds,
+          ctx,
+        );
+        return {
+          planError: result.ok ? null : (result.error ?? "无法归属"),
+          paths,
+        };
+      }
+
+      // Pure ocean dest without a corridor: tip immediately (still runs planner
+      // below for 借道/路桥 cases — planner itself returns LAND_WATER_ERROR in 1ms).
+      const destOcean = isOceanTerrain(terrain, mobilize.gx, mobilize.gy);
+
+      const base = {
+        ownerId: myPlayerId,
+        gx: mobilize.gx,
+        gy: mobilize.gy,
+        asBlockade: mobilize.mode === "blockade",
+        asSupply: mobilize.mode === "supply",
+        supplyBuildingId: mobilize.supplyBuildingId,
+        asHold: mobilize.mode === "hold",
+        holdBuildingId: mobilize.holdBuildingId,
+        attackTargetUnitId:
+          mobilize.mode === "attack" ? mobilize.targetUnitId : undefined,
+        attackTargetBuildingId:
+          mobilize.mode === "attack" ? mobilize.targetBuildingId : undefined,
+      };
+
+      // One dry-run only — never re-expand A* per checked unit on failure
+      // (armor across ocean used to freeze the tab for seconds × N).
+      const combined = previewUnitMove(
+        {
+          ...base,
+          sources: sources.length > 0 ? sources : undefined,
+          unitIds: unitIds.length > 0 ? unitIds : undefined,
+        },
+        ctx,
+      );
+      let planError = combined.ok ? null : (combined.error ?? "无法调动");
+      if (
+        !combined.ok &&
+        destOcean &&
+        (planError === "目标地形不可通行" ||
+          planError === "无法到达目标（地形、水域或通信范围）")
+      ) {
+        planError = LAND_WATER_ERROR;
+      }
+      if (combined.ok) {
+        for (const p of combined.paths) paths.push(p);
+      }
+      return { planError, paths };
     } catch (err) {
-      log.error("mobilize", "path preview failed", err);
+      log.error("mobilize", "plan preview failed", err);
+      return { planError: "路径预览失败", paths: [] };
     }
-    return paths;
   }, [
     mobilize,
     trainUi,
@@ -1093,6 +1092,8 @@ export function GameCanvas({
     connectedBuildingIds,
     myPlayerId,
   ]);
+  const planError = mobilizePreview.planError;
+  const marchPathPreviews = mobilizePreview.paths;
   pathPreviewsRef.current = marchPathPreviews;
 
   const setSelectionAt = (
@@ -2652,6 +2653,24 @@ export function GameCanvas({
       log.error("build-ui", "onResearchBuilding prop is undefined");
       return;
     }
+    if (b.id === "nuke_missile" && myPlayerId != null) {
+      const infraMsg = nukeUraniumInfraRejectReason(
+        buildingsRef.current,
+        myPlayerId,
+        terrainRef.current,
+        connectedIdsRef.current,
+        "research",
+      );
+      if (infraMsg) {
+        setLiaisonLocalError(infraMsg);
+        logLocalReject({
+          action: "research",
+          summary: `研究 ${b.name}`,
+          reason: infraMsg,
+        });
+        return;
+      }
+    }
     setLiaisonLocalError(null);
     onResearchBuilding(b.id);
   };
@@ -3502,18 +3521,14 @@ export function GameCanvas({
                     nextId: () => `preview-${++n}`,
                   },
                 );
-                path =
-                  result.paths[0] ??
-                  [
-                    { gx: b.gx, gy: b.gy },
-                    { gx: mobilize.gx, gy: mobilize.gy },
-                  ];
+                // Only show a real planned path — never a straight line through water.
+                path = result.paths[0] ?? null;
+                if (!result.ok && result.error) {
+                  log.info("mobilize", "toggle source preview reject", result.error);
+                }
               } catch (err) {
                 log.error("mobilize", "toggle source preview failed", err);
-                path = [
-                  { gx: b.gx, gy: b.gy },
-                  { gx: mobilize.gx, gy: mobilize.gy },
-                ];
+                path = null;
               }
             }
             if (b)
@@ -3571,18 +3586,13 @@ export function GameCanvas({
                     nextId: () => `preview-${++n}`,
                   },
                 );
-                path =
-                  result.paths[0] ??
-                  [
-                    { gx: u.gx, gy: u.gy },
-                    { gx: mobilize.gx, gy: mobilize.gy },
-                  ];
+                path = result.paths[0] ?? null;
+                if (!result.ok && result.error) {
+                  log.info("mobilize", "toggle unit preview reject", result.error);
+                }
               } catch (err) {
                 log.error("mobilize", "toggle unit preview failed", err);
-                path = [
-                  { gx: u.gx, gy: u.gy },
-                  { gx: mobilize.gx, gy: mobilize.gy },
-                ];
+                path = null;
               }
             }
             if (u)
@@ -3703,6 +3713,7 @@ export function GameCanvas({
             units={units}
             myPlayerId={myPlayerId}
             energy={energy}
+            organization={organization}
             kind={trainUi.kind}
             u={trainUi.u}
             targetIds={trainUi.targetIds}
@@ -3736,13 +3747,7 @@ export function GameCanvas({
                     nextId: () => `preview-${++n}`,
                   },
                 );
-                path =
-                  result.path.length >= 1
-                    ? result.path
-                    : [
-                        { gx: source.gx, gy: source.gy },
-                        { gx: b.gx, gy: b.gy },
-                      ];
+                path = result.path.length >= 1 ? result.path : null;
               }
               if (b)
                 syncFocus(`t:${id}`, b.gx, b.gy, turningOn, {
@@ -3807,6 +3812,17 @@ export function GameCanvas({
           liaisonDraftCost={liaisonDraftCost}
           research={research}
           activeResearch={activeResearch}
+          nukeResearchRejectReason={
+            myPlayerId == null
+              ? null
+              : nukeUraniumInfraRejectReason(
+                  buildings,
+                  myPlayerId,
+                  terrain ?? null,
+                  connectedBuildingIds,
+                  "research",
+                )
+          }
           onClose={() => {
             setLiaisonKind(null);
             setLiaisonDraft(null);

@@ -34,6 +34,8 @@ interface Props {
   exiting?: boolean;
   research?: RocketResearchProgressMap | null;
   activeResearch?: ActiveRocketResearch | null;
+  /** Nuke research blocked tip (uranium infra), shown on locked nuke node. */
+  nukeResearchRejectReason?: string | null;
   onSelect?: (building: BuildingDef) => void;
   /** Locked rocket node confirm → research instead of build. */
   onResearch?: (building: BuildingDef) => void;
@@ -633,6 +635,7 @@ function researchLockInfo(
   building: BuildingDef,
   research: RocketResearchProgressMap | null | undefined,
   activeResearch: ActiveRocketResearch | null | undefined,
+  nukeResearchRejectReason?: string | null,
 ): { locked: boolean; label: string | null } {
   if (!isRocketResearchTarget(building.id)) {
     return { locked: false, label: null };
@@ -644,6 +647,16 @@ function researchLockInfo(
   const stage = getNextRocketResearchStage(building.id, entry);
   if (!stage) {
     return { locked: true, label: "研究已完成" };
+  }
+  if (
+    building.id === "nuke_missile" &&
+    nukeResearchRejectReason &&
+    activeResearch?.buildingId !== building.id
+  ) {
+    return {
+      locked: true,
+      label: nukeResearchRejectReason,
+    };
   }
   const busy =
     activeResearch?.buildingId === building.id
@@ -664,6 +677,7 @@ function SettlementSpineView({
   exiting = false,
   research = null,
   activeResearch = null,
+  nukeResearchRejectReason = null,
   onSelect,
   onResearch,
 }: {
@@ -675,6 +689,7 @@ function SettlementSpineView({
   exiting?: boolean;
   research?: RocketResearchProgressMap | null;
   activeResearch?: ActiveRocketResearch | null;
+  nukeResearchRejectReason?: string | null;
   onSelect?: (building: BuildingDef) => void;
   onResearch?: (building: BuildingDef) => void;
 }) {
@@ -790,7 +805,12 @@ function SettlementSpineView({
 
   const handleConfirm = useCallback(
     (building: BuildingDef) => {
-      const { locked } = researchLockInfo(building, research, activeResearch);
+      const { locked } = researchLockInfo(
+        building,
+        research,
+        activeResearch,
+        nukeResearchRejectReason,
+      );
       if (locked) {
         onResearch?.(building);
       } else {
@@ -798,7 +818,7 @@ function SettlementSpineView({
       }
       setSelectedId(null);
     },
-    [onSelect, onResearch, research, activeResearch],
+    [onSelect, onResearch, research, activeResearch, nukeResearchRejectReason],
   );
 
   return (
@@ -857,6 +877,7 @@ function SettlementSpineView({
                     n.building,
                     research,
                     activeResearch,
+                    nukeResearchRejectReason,
                   );
                   return (
                     <BuildingCard
@@ -891,6 +912,7 @@ function ForestFallback({
   exiting,
   research,
   activeResearch,
+  nukeResearchRejectReason,
   onSelect,
   onResearch,
 }: {
@@ -901,6 +923,7 @@ function ForestFallback({
   exiting?: boolean;
   research?: RocketResearchProgressMap | null;
   activeResearch?: ActiveRocketResearch | null;
+  nukeResearchRejectReason?: string | null;
   onSelect?: (building: BuildingDef) => void;
   onResearch?: (building: BuildingDef) => void;
 }) {
@@ -914,6 +937,7 @@ function ForestFallback({
       exiting={exiting}
       research={research}
       activeResearch={activeResearch}
+      nukeResearchRejectReason={nukeResearchRejectReason}
       onSelect={onSelect}
       onResearch={onResearch}
     />
@@ -927,6 +951,7 @@ export function BuildTreePanel({
   exiting = false,
   research = null,
   activeResearch = null,
+  nukeResearchRejectReason = null,
   onSelect,
   onResearch,
 }: Props) {
@@ -954,6 +979,7 @@ export function BuildTreePanel({
           exiting={exiting}
           research={research}
           activeResearch={activeResearch}
+          nukeResearchRejectReason={nukeResearchRejectReason}
           onSelect={onSelect}
           onResearch={onResearch}
         />
@@ -966,6 +992,7 @@ export function BuildTreePanel({
           exiting={exiting}
           research={research}
           activeResearch={activeResearch}
+          nukeResearchRejectReason={nukeResearchRejectReason}
           onSelect={onSelect}
           onResearch={onResearch}
         />

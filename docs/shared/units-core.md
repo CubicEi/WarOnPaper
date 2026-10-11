@@ -174,6 +174,7 @@
 | 常量/类型 | 含义 |
 |-----------|------|
 | `TRAIN_E_PER_U` | 步 25 / 装 50 / 海 75 / 空 125 |
+| `TRAIN_O_COST` | `2` → 每次训练下单 −2O（不按 U） |
 | `TRAIN_DURATION_E_PER_SEC` | `20` → 用时 = 总 E / 20 秒 |
 | `TrainingJob` | 队列项：kind、u、目标建筑、ticks |
 | `garrisonRoom` | Umax − occupied |

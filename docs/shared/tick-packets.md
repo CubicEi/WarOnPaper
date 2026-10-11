@@ -2,7 +2,7 @@
 
 本文描述客户端与服务端之间 **按仿真 tick 节奏** 交换的 WebSocket 载荷。类型定义在 `core/shared/src/index.ts`；组装与广播在 `core/server/src/room.ts`（`snapshotFor` / `broadcastState` / `tickRoom`）；时钟由 `manager` 的 `RoomRegistry`（或 server 调试入口）按 `TICK_MS` 驱动。
 
-> **聚焦范围**：每 tick（及同 tick 内附带）的报文，含快照顶层的准备 / 读档 / 组队字段。  
+> **聚焦范围**：每 tick（及同 tick 内附带）的报文，含快照顶层的准备 / 读档 / 组队字段；火箭研究因挂在 `you` + tick 结算，线协议见 **§7.1**。  
 > **不展开**：`hello` / 大厅 / 建造与单位指令 / `export_save` 等非周期消息 → 见 [types-protocol.md](./types-protocol.md)、[manager/save-load.md](../manager/save-load.md)、[server/networking.md](../server/networking.md)、[client/networking.md](../client/networking.md)。  
 > **仿真步骤**（建造推进、交战等）→ 见 [server/game-loop.md](../server/game-loop.md)、[tick-combat.md](./tick-combat.md)。  
 > **视野规则细节** → 见 [vision.md](./vision.md)。
@@ -164,6 +164,23 @@ sequenceDiagram
 | `capitalHp` / `capitalHpMax` | `number` | 首都生命（与首都建筑 HP 同步） |
 | `energy` | `number` | 能源 E（服务端权威绝对值） |
 | `organization` / `organizationMax` | `number` | 组织度 O |
+| `research` | `RocketResearchProgressMap` | 火箭科技解锁进度（按建筑 id；见 §7.1） |
+| `activeResearch` | `ActiveRocketResearch \| null` | 进行中的限时研究；无则为 `null` |
+
+`research` / `activeResearch` 随 `you` **每帧整段下发**；客户端对 `you` 以本包为准替换（§3.0），无独立 delta。类型与结算逻辑见 `buildings/research.ts`；线协议细节见 §7.1。
+
+**`RocketResearchProgressMap`**：`Partial<Record<RocketResearchId, RocketResearchEntry>>`，键为 `missile` \| `advenced_missile` \| `nuke_missile`（拼写保持现状）。缺省键视为 `{ stage: 0, unlocked: false }`。
+
+| `RocketResearchEntry` 字段 | 类型 | 含义 |
+|----------------------------|------|------|
+| `stage` | `number` | 下一档尝试的 0-based 阶下标 |
+| `unlocked` | `boolean` | 是否已解锁（可建造该火箭建筑） |
+
+| `ActiveRocketResearch` 字段 | 类型 | 含义 |
+|-----------------------------|------|------|
+| `buildingId` | `RocketResearchId` | 研究目标 |
+| `endsAtTick` | `number` | 结算绝对仿真 tick（`tick >= endsAtTick` 时 resolve） |
+| `stage` | `number` | 本次尝试的 0-based 阶下标 |
 
 ### 3.3 `GamePhase` / `SnapshotRole`
 
@@ -360,8 +377,9 @@ const fullVision = role === "spectator" || phaseFor(player) === "ended";
 | `type` | 何时 | 字段 | 说明 |
 |--------|------|------|------|
 | `tip` | `advanceUnitAntiAir` 产生弹药事件后 | `{ message: string }` | 如「防空炮接敌交战，消耗 N 发弹药」；仅通知相关建筑所有者 |
+| `tip` | `advanceRocketResearch` 结算成功 / 失败；核铀设施中断 | `{ message: string }` | 见 §7.1；仅通知该研究者 |
 
-实现：`notifyAaAmmoEvents` → `sendTip`。客户端用 toast 展示，**不**改权威状态。
+实现：`notifyAaAmmoEvents` / `cancelActiveResearch` / 研究结算 → `sendTip`。客户端用 toast 展示，**不**改权威状态（进度以随后的 `state.you` 为准）。
 
 终局时 tick 路径外还会发 `game_over` / 随后可能 `room_closed`（见房间销毁流程）；本文不展开。
 
@@ -369,13 +387,103 @@ const fullVision = role === "spectator" || phaseFor(player) === "ended";
 
 ## 7. 与「指令即时广播」的关系
 
-成功处理玩家 `dispatch`（建造、调动等）后，房间通常**立即** `broadcastState()`，**不等**下一个时钟 tick。因此：
+成功处理玩家 `dispatch`（建造、调动、研究等）后，房间通常**立即** `broadcastState()`，**不等**下一个时钟 tick。因此：
 
 - 客户端可能在两次 clock tick 之间收到额外的 `state`；
 - 载荷形状与每 tick 的 `state` **相同**（常规帧，非 bootstrap；仍遵循 §3.0 省略 / buildings·liaisons 增量规则）；
-- 经济等按秒取模的变化仍主要出现在 tick 广播里（`simulateEconomy`）。
+- 经济等按秒取模的变化仍主要出现在 tick 广播里（`simulateEconomy`）；研究**结算**也在 tick 路径（`advanceRocketResearch`，见 §7.1）。
 
 客户端 **ping**（约每 5s）→ 服务端 **pong**：延迟探测，**不是** tick 同步，且不刷新空闲计时。
+
+### 7.1 火箭研究线协议（`research_building`）
+
+火箭科技（导弹 → 远程导弹 → 核导弹）为**事件型 C2S + 每帧 `you` 快照 + tick 结算**。机制/数值表见 [buildings.md](./buildings.md) 与 `buildings/research.ts`；本节只记线协议。
+
+#### C2S：`research_building`
+
+```ts
+{ type: "research_building"; buildingId: string }
+```
+
+| 字段 | 含义 |
+|------|------|
+| `buildingId` | 研究目标：`missile` \| `advenced_missile` \| `nuke_missile`（非法值 → `error` `unknown_target`） |
+
+- 仅 `phaseFor(session) === "playing"` 时可发起（否则走通用 `rejectIfNotPlaying`）。
+- 服务端：`dispatch` → `tryResearchBuilding` → `canStartRocketResearch`（纯校验）。
+- **成功**：立刻扣本档 `energy` / `organization`；写入 `you.activeResearch = { buildingId, stage, endsAtTick }`（`endsAtTick = tick + durationTicks`，`durationTicks = rocketResearchDurationTicks(energyCost)`，即 `energyCost / 50` 秒）；`sendTip` 开研文案；`broadcastState()`（§7）。
+- **失败**：`error` `{ code, message }`，**不**改 HUD、**不**广播（`action_result` 仍可能经 dispatch 外层记录，见 [debug.md](./debug.md)）。
+
+| `error.code`（研究专用） | 典型 `message` |
+|--------------------------|----------------|
+| `unknown_target` | 未知研究目标 |
+| `busy` | 已有研究进行中 |
+| `already_unlocked` | `{名}已解锁` |
+| `prereq_locked` | 须先解锁{前置名} |
+| `nuke_uranium_infra` | 铀矿机/铀工厂未开采、未工作或未接入通信（研究文案） |
+| `no_stage` | 无可用研究阶段 |
+| `not_enough_energy` | 能源不足（需要 N E） |
+| `not_enough_org` | 组织度不足（需要 N O） |
+
+开研 tip 形如：`开始研究{名} · 第 {stage+1} 阶 · {E}E {O}O · {chance}%`（展示名：导弹 / 远程导弹 / 核导弹）。
+
+#### S2C：快照字段与合并
+
+进度**只**出现在个性化 `state.state.you`（§3.2），不进 `buildings` / 世界实体：
+
+| 字段 | 发送 | 客户端 |
+|------|------|--------|
+| `you.research` | 每帧随 `you` | `mergeGameStateSnapshot` 整段替换 `you` |
+| `you.activeResearch` | 每帧；无进行中为 `null` | 同上 |
+| `you.energy` / `you.organization` | 开研扣费后立刻反映在指令后广播；结算本身不退款 | 服务端权威绝对值 |
+
+他人看不到你的研究进度（无跨玩家字段）。再入房 bootstrap `you` 同样带当前 `research`（及通常为 `null` 的 `activeResearch`，见下）。
+
+#### 时序：开研扣费 → tick 结算 → tip
+
+```mermaid
+sequenceDiagram
+  participant C as Client
+  participant R as GameRoom
+  participant Clock as tickRoom
+
+  C->>R: research_building
+  Note over R: 扣 E/O；设 activeResearch；tip 开研
+  R->>C: state（you 含 activeResearch）
+  loop 每 TICK_MS
+    Clock->>R: advanceRocketResearch
+    alt nuke 且铀设施失效
+      R->>C: tip 中断 + state（activeResearch=null，stage 不变）
+    else tick >= endsAtTick
+      Note over R: Math.random 判定；写 research；清 activeResearch
+      R->>C: tip 成功/失败 + state（随本 tick broadcast）
+    end
+  end
+```
+
+要点：
+
+- **扣费时机**：仅 `tryResearchBuilding` 成功时；失败 / 中断 / RNG 失败均**不退**已扣 E/O。
+- **结算时机**：`tickRoom` 推进 `tick` 后调用 `advanceRocketResearch`；当 `tick >= active.endsAtTick` 时 resolve。RNG 仅服务端（`Math.random` → `rollRocketResearchSuccess`）；成功 → `unlocked: true`；失败 → `stage = min(stage+1, 末阶)`（末阶可反复刷）。
+- **成功 tip**：`{名}研究成功，已解锁`。
+- **失败 tip**：`{名}研究失败，进入第 {nextStage+1} 阶（{chance}%）`（无下一档文案时仅「研究失败」）。
+- 结算后的 `research` / `activeResearch=null` 随**本 tick** `broadcastState` 下发（不必另等指令广播）。
+
+#### 离房 / 再入房 / 首都重生
+
+| 事件 | `research`（解锁/阶） | `activeResearch` | tip |
+|------|----------------------|------------------|-----|
+| `leave` | 写入 `departedResearchByPlayer`，同 `playerId` 再 join 时 `createHud(stashed)` 恢复 | `cancelActiveResearch(..., "leave")` → `null`（**不** `stage+1`、不退款） | `{名}研究失败（离房中断），可重试第 {stage+1} 阶` |
+| 同座重连（未 leave，仅换 ws） | 保留 | 保留（可继续跑完） | — |
+| 首都陷落且允许重生 | 保留（跨重生） | 清为 `null` | — |
+| 观战淘汰 | 保留在 HUD | 清为 `null` | — |
+
+#### 核铀设施门槛（仅线相关）
+
+- **开研**：`nuke_missile` 走与装填同精神的 `nukeUraniumInfraRejectReason(..., "research")`；不满足 → `error` `nuke_uranium_infra`（文案含「研究」而非「装填」）。
+- **进行中**：每 `NUKE_RESEARCH_INFRA_CHECK_INTERVAL_TICKS`（5 秒墙钟）以及结算当 tick 再检；失效 → `cancelActiveResearch(..., "nuke_uranium_infra")`：清 `activeResearch`，**不** `stage+1`、不退款；tip `{名}研究失败（铀设施中断），可重试第 {stage+1} 阶`。随后靠 tick / 广播的 `state.you` 同步。
+
+未解锁时客户端仍可能发 `build` 该火箭建筑；服务端另拒 `research_locked`（建造路径，非本消息）。
 
 ---
 
@@ -388,8 +496,9 @@ const fullVision = role === "spectator" || phaseFor(player) === "ended";
 | 准备 / 读档门闸 | `set_ready`、`abandon_capital`、`inherit_identity`；结果仍走 `state` | [types-protocol.md](./types-protocol.md)、[manager/save-load.md](../manager/save-load.md) |
 | 存档导出 | `export_save` → `save_export`（manager 加密；不进仿真 tick） | [manager/save-load.md](../manager/save-load.md) |
 | 定都/基建/训练/开火/单位命令 | `place_capital`、`build`、`move_units`… | [types-protocol.md](./types-protocol.md)、[server/networking.md](../server/networking.md) |
+| 火箭研究 | `research_building`；进度/进行中见 `you.research` / `you.activeResearch` | **§7.1**、[buildings.md](./buildings.md) |
 | 组队 / 友方进驻 | `team_invite*`、`ally_garrison_*`；快照侧见 §3 | [types-protocol.md](./types-protocol.md) |
-| 反馈 | `error`、`action_result`、`chat`、`tip` | 同上 + [debug.md](./debug.md) |
+| 反馈 | `error`、`action_result`、`chat`、`tip` | 同上 + [debug.md](./debug.md)；研究 tip 见 §6 / §7.1 |
 
 入房时：`welcome` 内嵌 bootstrap `state`（含 `map` / `terrainSeed` / `allowRespawn` 等），随后再发一条同内容普通 `state`（兼容只监听 `state` 的客户端）——这是**会话同步 / 再入房全量初始态**，不是时钟 tick。
 
@@ -401,10 +510,11 @@ const fullVision = role === "spectator" || phaseFor(player) === "ended";
 |------|------|
 | `TICK_HZ` / `TICK_MS` / seconds↔ticks 助手 | `core/shared/src/time.ts`（经 `index.ts` 再导出） |
 | `GamePhase` / `GameStateSnapshot` / `SnapshotListDelta` / `mergeGameStateSnapshot` / `applySnapshotListDelta` / 协议联合类型 | `core/shared/src/index.ts` |
+| 火箭研究类型 / 校验 / 时长 / 结算纯函数 | `core/shared/src/buildings/research.ts` |
 | 组队 / 友方进驻类型 | `core/shared/src/teams.ts` |
 | 读档身份选项 | `core/shared/src/save.ts`（`RestoreIdentityOption`） |
 | 嵌套实体类型 | `buildings/actions.ts`、`liaison.ts`、`pollution.ts`、`units/types.ts`、`terrain/types.ts`、`map.ts` |
 | 视野与快照裁剪 | `core/shared/src/vision/vision.ts`、`units/filter.ts` |
-| `snapshotFor` / `satelliteFacade*` / `packWireSnapshot` / `broadcastState` / `tickRoom` / `phaseFor` | `core/server/src/room.ts` |
+| `snapshotFor` / `satelliteFacade*` / `packWireSnapshot` / `broadcastState` / `tickRoom` / `phaseFor` / `tryResearchBuilding` / `advanceRocketResearch` / `departedResearchByPlayer` | `core/server/src/room.ts` |
 | 时钟调度 | `manager/src/rooms.ts`、`manager/src/gameBridge.ts`（`GAME_TICK_MS`） |
 | 客户端收包 / 合并 | `core/client/src/net/useGameSocket.ts`、`App.tsx`（`mergeGameStateSnapshot`） |

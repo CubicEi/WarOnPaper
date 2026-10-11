@@ -858,6 +858,8 @@ export {
   ROCKET_RESEARCH_STAGES,
   ROCKET_RESEARCH_PREREQ,
   ROCKET_RESEARCH_DURATION_E_PER_SEC,
+  NUKE_RESEARCH_INFRA_CHECK_INTERVAL_SEC,
+  NUKE_RESEARCH_INFRA_CHECK_INTERVAL_TICKS,
   isRocketResearchTarget,
   isRocketResearchId,
   emptyRocketResearchEntry,
@@ -898,11 +900,13 @@ export {
   applyResourceTerrainSync,
   sumPowerProduction,
   sumRefinedRawIncome,
+  nukeUraniumInfraRejectReason,
   nukeReloadRejectReason,
   energyIncomePerSecond,
   powerDrainPer10s,
   orgBonusPer30s,
 } from "./buildings/economy.js";
+export type { NukeUraniumInfraPurpose } from "./buildings/economy.js";
 
 export type {
   LiaisonKind,
@@ -1036,6 +1040,9 @@ export {
   planLandOrNavyPath,
   estimatePathTimeSec,
   findFreeUnitCoord,
+  LAND_WATER_ERROR,
+  PATHFIND_MAX_EXPAND_DEFAULT,
+  PATHFIND_MAX_EXPAND_PREVIEW,
 } from "./units/pathfind.js";
 export type { PathPlanResult, TransportKind, TerrainAllowOpts } from "./units/pathfind.js";
 export {
@@ -1159,6 +1166,7 @@ export type {
 } from "./units/train.js";
 export {
   TRAIN_E_PER_U,
+  TRAIN_O_COST,
   TRAIN_DURATION_E_PER_SEC,
   TRAINABLE_KINDS,
   isTrainableKind,

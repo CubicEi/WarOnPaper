@@ -42,6 +42,7 @@ import {
   isMountainTerrain,
   planAirPath,
   planLandOrNavyPath,
+  PATHFIND_MAX_EXPAND_PREVIEW,
   terrainAllowsKind,
   transportAt,
   type ActivityRangeLabel,
@@ -74,6 +75,13 @@ export interface MoveContext {
   nextId: () => string;
   /** Optional team roster — allies share cells / cannot be attacked. */
   teams?: TeamRoster | null;
+  /**
+   * Cap A* expansions (UI dry-run). When set (or `previewPathfind`), failed
+   * ocean/mountain crossings return a tip instead of freezing the client.
+   */
+  pathfindMaxExpand?: number;
+  /** Shorthand: use {@link PATHFIND_MAX_EXPAND_PREVIEW} for client previews. */
+  previewPathfind?: boolean;
 }
 
 export interface MoveApplyResult {
@@ -168,6 +176,9 @@ function planFor(
       ),
     };
   }
+  const maxExpand =
+    ctx.pathfindMaxExpand ??
+    (ctx.previewPathfind ? PATHFIND_MAX_EXPAND_PREVIEW : undefined);
   return planLandOrNavyPath({
     kind: unit.kind,
     fromGx: unit.gx,
@@ -185,6 +196,7 @@ function planFor(
     allowImpassableStart,
     allowImpassableGoal,
     rangeLabel,
+    maxExpand,
   });
 }
 
@@ -1629,7 +1641,12 @@ export function previewUnitMove(
   /** Planned polylines for each group that received a path (UI preview). */
   paths: Array<Array<{ gx: number; gy: number }>>;
 } {
-  const result = applyUnitMove(req, ctx);
+  // Always cap A* on UI dry-runs (unreachable water crossings must not freeze).
+  const result = applyUnitMove(req, {
+    ...ctx,
+    previewPathfind: true,
+    pathfindMaxExpand: ctx.pathfindMaxExpand ?? PATHFIND_MAX_EXPAND_PREVIEW,
+  });
   const paths: Array<Array<{ gx: number; gy: number }>> = [];
   if (result.ok) {
     for (const u of result.units) {
@@ -1683,6 +1700,8 @@ export function previewTrainingDeliveryPath(
     {
       ...ctx,
       units: [...ctx.units, unit],
+      previewPathfind: true,
+      pathfindMaxExpand: ctx.pathfindMaxExpand ?? PATHFIND_MAX_EXPAND_PREVIEW,
     },
   );
   if (!result.ok) {

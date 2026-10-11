@@ -64,7 +64,7 @@
 |---------|---------------------|------------------------|
 | `handleMoveUnits` | `move_units` | `UNIT_MOVE_O_COST`（及路径返回的 O/E） |
 | `handleAssignHome` | `assign_home` | 返回的 `organizationCost` |
-| `handleTrainUnits` | `train` | `energyCost` |
+| `handleTrainUnits` | `train` | O + E（`TRAIN_O_COST` + `energyCost`） |
 | `handleBlockadeUnits` | `blockade_units` | O + E（`UNIT_BLOCKADE_O_COST`） |
 | `handleEndBlockade` | `end_blockade` | 无额外 HUD 费 |
 | `handleSupplyUnits` | `supply_units` | O（`UNIT_SUPPLY_O_COST`） |

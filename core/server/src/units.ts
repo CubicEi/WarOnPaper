@@ -357,10 +357,19 @@ export function handleTrainUnits(
     sendError(session.ws, "train_rejected", result.error ?? "æ æ³è®­ç»");
     return;
   }
+  if (session.hud.organization < result.organizationCost) {
+    sendError(
+      session.ws,
+      "not_enough_org",
+      `组织度不足（需要 ${result.organizationCost} O）`,
+    );
+    return;
+  }
   if (session.hud.energy < result.energyCost) {
     sendError(session.ws, "not_enough_energy", `è½æºä¸è¶³ï¼éè¦ ${result.energyCost} Eï¼`);
     return;
   }
+  session.hud.organization -= result.organizationCost;
   session.hud.energy -= result.energyCost;
   world.buildings.length = 0;
   world.buildings.push(...result.buildings);
@@ -369,8 +378,10 @@ export function handleTrainUnits(
     kind,
     u,
     targets: result.allocations?.map((a) => ({ id: a.targetBuildingId.slice(0, 8), u: a.u })),
+    O: session.hud.organization,
     E: session.hud.energy,
-    cost: result.energyCost,
+    costO: result.organizationCost,
+    costE: result.energyCost,
   });
   broadcast();
 }

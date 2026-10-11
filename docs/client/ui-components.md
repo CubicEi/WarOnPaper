@@ -113,7 +113,8 @@ flowchart TB
 ## 8. `TrainPanel`
 
 - 源建筑训练场；`TRAINABLE_KINDS`；若队列已锁种类则禁改。  
-- 多目标：`allocateTrainingDeliveries` 预览分配；`trainEnergyCost` / `trainDurationSec`。  
+- 多目标：`allocateTrainingDeliveries` 预览分配；`trainEnergyCost` / `TRAIN_O_COST` / `trainDurationSec`。  
+- O/E 不足时禁用「开始训练」；页脚显示 `{E}E · {O}O · {s}s`。  
 - `onGo(amount)` 最终由 GameCanvas 调 `onTrain`。
 
 ## 9. `ChatPanel`

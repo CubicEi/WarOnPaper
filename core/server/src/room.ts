@@ -107,6 +107,7 @@ import {
   type PollutionZone,
   type UnitGroup,
   type PlayerHudState,
+  type RocketResearchProgressMap,
   ROOM_IDLE_MS,
   type ServerToClient,
   type SnapshotListDelta,
@@ -140,6 +141,8 @@ import {
   rocketResearchDisplayName,
   isRocketResearchTarget,
   isRocketBuildUnlocked,
+  nukeUraniumInfraRejectReason,
+  NUKE_RESEARCH_INFRA_CHECK_INTERVAL_TICKS,
 } from "@wop/shared";
 import type { WebSocket } from "ws";
 import {
@@ -471,6 +474,12 @@ const TICKS_PER_POLLUTION_CAPITAL = ticksPerSeconds(
 );
 
 const players = new Map<string, PlayerSession>();
+/**
+ * Research unlocks/stage progress kept after `leave` so the same playerId can
+ * rejoin the room without reseeding an empty research map. Active attempts are
+ * cancelled on leave (cannot tick without a seat); unlocks are preserved.
+ */
+const departedResearchByPlayer = new Map<string, RocketResearchProgressMap>();
 const buildings: PlacedBuilding[] = [];
 const liaisons: PlacedLiaison[] = [];
 const units: UnitGroup[] = [];
@@ -497,16 +506,43 @@ function slog(scope: string, ...args: unknown[]): void {
   console.log(`[${t}][wop-server:${scope}]`, ...args);
 }
 
-function createHud(): PlayerHudState {
+function createHud(
+  research: RocketResearchProgressMap = emptyRocketResearchProgress(),
+): PlayerHudState {
   return {
     capitalHp: CAPITAL_HP_MAX,
     capitalHpMax: CAPITAL_HP_MAX,
     energy: STARTING_ENERGY,
     organization: STARTING_ORGANIZATION,
     organizationMax: ORGANIZATION_BAR_MAX,
-    research: emptyRocketResearchProgress(),
+    research: normalizeRocketResearchProgress(research),
     activeResearch: null,
   };
+}
+
+/** Cancel in-flight research without stage++ / refund (same spirit as infra interrupt). */
+function cancelActiveResearch(
+  player: PlayerSession,
+  reason: "leave" | "nuke_uranium_infra",
+  detail?: string,
+): void {
+  const active = player.hud.activeResearch;
+  if (!active) return;
+  player.hud.activeResearch = null;
+  const name = rocketResearchDisplayName(active.buildingId);
+  const tip =
+    reason === "leave"
+      ? `${name}研究失败（离房中断），可重试第 ${active.stage + 1} 阶`
+      : `${name}研究失败（铀设施中断），可重试第 ${active.stage + 1} 阶`;
+  sendTip(player.ws, tip);
+  slog("research", "failed", {
+    player: player.id.slice(0, 8),
+    buildingId: active.buildingId,
+    stage: active.stage,
+    reason,
+    nextStage: active.stage,
+    ...(detail ? { detail } : {}),
+  });
 }
 
 /** Rebuild HUD (+ research) from a save player row (supports older saves). */
@@ -2863,6 +2899,10 @@ function tryResearchBuilding(session: PlayerSession, buildingId: string): void {
     activeResearch: session.hud.activeResearch,
     energy: session.hud.energy,
     organization: session.hud.organization,
+    buildings,
+    ownerId: session.id,
+    terrain,
+    connectedIds: publishedLinks(session.id),
   });
   if (!check.ok) {
     sendError(session.ws, check.reason, check.message);
@@ -2897,11 +2937,35 @@ function tryResearchBuilding(session: PlayerSession, buildingId: string): void {
   broadcastState();
 }
 
-/** Resolve timed rocket research attempts whose endsAtTick has arrived. */
+/**
+ * Nuke research: re-check uranium infra every 5s (and at completion). Gate fail
+ * clears the attempt without stage++ (no E/O refund; same stage retryable).
+ * Otherwise resolve timed attempts whose endsAtTick has arrived.
+ */
 function advanceRocketResearch(): void {
   for (const player of players.values()) {
     const active = player.hud.activeResearch;
     if (!active) continue;
+
+    if (active.buildingId === "nuke_missile") {
+      const dueInfraCheck =
+        tick >= active.endsAtTick ||
+        tick % NUKE_RESEARCH_INFRA_CHECK_INTERVAL_TICKS === 0;
+      if (dueInfraCheck) {
+        const infraMsg = nukeUraniumInfraRejectReason(
+          buildings,
+          player.id,
+          terrain,
+          publishedLinks(player.id),
+          "research",
+        );
+        if (infraMsg) {
+          cancelActiveResearch(player, "nuke_uranium_infra", infraMsg);
+          continue;
+        }
+      }
+    }
+
     if (tick < active.endsAtTick) continue;
 
     player.hud.activeResearch = null;
@@ -2916,6 +2980,7 @@ function advanceRocketResearch(): void {
       Math.random(),
     );
     const next = applyRocketResearchOutcome(
+      active.buildingId,
       { stage: active.stage, unlocked: false },
       success,
     );
@@ -3782,6 +3847,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
     }
     emit(payload);
     players.clear();
+    departedResearchByPlayer.clear();
     slog("room", "destroyed", roomId, reason);
   }
 
@@ -3830,10 +3896,13 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
         // After restore match started, reject brand-new seats (rejoin OK above).
         return { ok: false, code: "restore_started", message: "读档对局已开始，无法加入" };
       }
+      const stashed = departedResearchByPlayer.get(opts.playerId);
+      if (stashed) departedResearchByPlayer.delete(opts.playerId);
       const session: PlayerSession = {
         id: opts.playerId,
         name: (opts.name || `Player-${opts.playerId.slice(0, 4)}`).slice(0, 24),
-        hud: createHud(),
+        // Rejoin after leave: restore unlocks/stage; active attempt stays cleared.
+        hud: createHud(stashed),
         ws: makeSocket(opts.send),
       };
       players.set(session.id, session);
@@ -3854,7 +3923,15 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       return true;
     },
     leave(playerId: string): void {
-      if (!players.has(playerId)) return;
+      const session = players.get(playerId);
+      if (!session) return;
+      // World entities stay; research unlocks/stage must survive rejoin too.
+      // In-flight attempt cannot advance without a seat → cancel (no stage++).
+      cancelActiveResearch(session, "leave");
+      departedResearchByPlayer.set(
+        playerId,
+        normalizeRocketResearchProgress(session.hud.research),
+      );
       players.delete(playerId);
       delete teams[playerId];
       readyPlayerIds.delete(playerId);

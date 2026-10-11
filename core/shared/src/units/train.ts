@@ -17,6 +17,9 @@ export const TRAIN_E_PER_U: Record<TrainableKind, number> = {
   air: 125,
 };
 
+/** 行动表：训练 −2 O / 次（每次下单，不按 U）. */
+export const TRAIN_O_COST = 2;
+
 /** 用时 = 总 E / TRAIN_DURATION_E_PER_SEC 秒. */
 export const TRAIN_DURATION_E_PER_SEC = 20;
 
@@ -238,6 +241,7 @@ export interface EnqueueTrainResult {
   ok: boolean;
   error?: string;
   energyCost: number;
+  organizationCost: number;
   buildings: PlacedBuilding[];
   /** Per-target U after allocation (empty when rejected). */
   allocations?: TrainingAllocation[];
@@ -245,7 +249,7 @@ export interface EnqueueTrainResult {
 
 /**
  * Validate and append training job(s) to the source training ground queue.
- * Does not spend energy — caller deducts `energyCost`.
+ * Does not spend E/O — caller deducts `energyCost` and `organizationCost`.
  * Same training ground may only train one kind at a time (queue must not mix kinds).
  *
  * Multi-target: one FIFO job per allocated target (same kind/timing formula per job's U).
@@ -259,6 +263,13 @@ export function enqueueTraining(
     ...b,
     trainingQueue: b.trainingQueue?.map((j) => ({ ...j })),
   }));
+  const rejected = (error: string): EnqueueTrainResult => ({
+    ok: false,
+    error,
+    energyCost: 0,
+    organizationCost: 0,
+    buildings: next,
+  });
 
   const targetIds =
     req.targetBuildingIds && req.targetBuildingIds.length > 0
@@ -268,35 +279,32 @@ export function enqueueTraining(
         : [];
 
   if (!isTrainableKind(req.kind)) {
-    return { ok: false, error: "无法训练该兵种", energyCost: 0, buildings: next };
+    return rejected("无法训练该兵种");
   }
   const amount = Math.floor(req.u);
   if (!Number.isFinite(amount) || amount < 1) {
-    return { ok: false, error: "训练数量至少为 1", energyCost: 0, buildings: next };
+    return rejected("训练数量至少为 1");
   }
 
   const source = next.find((b) => b.id === req.sourceBuildingId);
   if (!source || source.ownerId !== req.ownerId) {
-    return { ok: false, error: "训练场不存在或不属于你", energyCost: 0, buildings: next };
+    return rejected("训练场不存在或不属于你");
   }
   if (!isTrainingGround(source.buildingId)) {
-    return { ok: false, error: "只能在训练场发起训练", energyCost: 0, buildings: next };
+    return rejected("只能在训练场发起训练");
   }
   if (!isBuildingComplete(source)) {
-    return { ok: false, error: "训练场尚未建成", energyCost: 0, buildings: next };
+    return rejected("训练场尚未建成");
   }
   if (source.polluted) {
-    return { ok: false, error: "污染区内建筑已失效，无法训练", energyCost: 0, buildings: next };
+    return rejected("污染区内建筑已失效，无法训练");
   }
 
   const existingKind = trainingQueueKind(source);
   if (existingKind != null && existingKind !== req.kind) {
-    return {
-      ok: false,
-      error: `训练场正在训练${existingKind === "infantry" ? "步兵" : existingKind === "armor" ? "装甲" : existingKind === "navy" ? "海军" : "空军"}，不能混种`,
-      energyCost: 0,
-      buildings: next,
-    };
+    return rejected(
+      `训练场正在训练${existingKind === "infantry" ? "步兵" : existingKind === "armor" ? "装甲" : existingKind === "navy" ? "海军" : "空军"}，不能混种`,
+    );
   }
 
   const allocated = allocateTrainingDeliveries(
@@ -308,7 +316,7 @@ export function enqueueTraining(
     units,
   );
   if (!allocated.ok) {
-    return { ok: false, error: allocated.error, energyCost: 0, buildings: next };
+    return rejected(allocated.error);
   }
 
   const energyCost = trainEnergyCost(req.kind, amount);
@@ -328,6 +336,7 @@ export function enqueueTraining(
   return {
     ok: true,
     energyCost,
+    organizationCost: TRAIN_O_COST,
     buildings: next,
     allocations: allocated.allocations,
   };

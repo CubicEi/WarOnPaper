@@ -48,6 +48,8 @@ interface Props {
   closeNonce?: number;
   research?: RocketResearchProgressMap | null;
   activeResearch?: ActiveRocketResearch | null;
+  /** Nuke research blocked tip (uranium infra). */
+  nukeResearchRejectReason?: string | null;
   onClose: () => void;
   onPickBuilding?: (building: BuildingDef) => void;
   onResearchBuilding?: (building: BuildingDef) => void;
@@ -80,6 +82,7 @@ export function BuildModeOverlay({
   closeNonce = 0,
   research = null,
   activeResearch = null,
+  nukeResearchRejectReason = null,
   onClose,
   onPickBuilding,
   onResearchBuilding,
@@ -369,6 +372,7 @@ export function BuildModeOverlay({
           exiting={treeExiting}
           research={research}
           activeResearch={activeResearch}
+          nukeResearchRejectReason={nukeResearchRejectReason}
           onSelect={onPickBuilding}
           onResearch={onResearchBuilding}
         />

@@ -88,10 +88,19 @@
 
 - 每项科技独立进度 `{ stage, unlocked }`（`stage` 为下一阶 0-based 下标）  
 - 同时最多一项进行中：`activeResearch = { buildingId, endsAtTick, stage }`  
-- 耗时：`energyCost / ROCKET_RESEARCH_DURATION_E_PER_SEC`(100) 秒 → `rocketResearchDurationTicks`（经 `time.ts`）  
+- 耗时：`energyCost / ROCKET_RESEARCH_DURATION_E_PER_SEC`(50) 秒 → `rocketResearchDurationTicks`（经 `time.ts`）  
 - 研究依赖：远程需已解锁导弹；核需已解锁远程  
+- 核导弹研究前置：与装填相同——须同时拥有已接入通信且正在开采的铀矿机、以及已接入通信且正在工作的铀工厂（`nukeUraniumInfraRejectReason` / `canStartRocketResearch`）；进行中每 `NUKE_RESEARCH_INFRA_CHECK_INTERVAL_SEC`(5) 秒（`NUKE_RESEARCH_INFRA_CHECK_INTERVAL_TICKS`）以及结算前再检；门槛失效则中止当次研究（清除 `activeResearch`，**不** `stage+1`，同阶可重试；已扣 E/O 不退）。普通 RNG 失败仍 `stage+1`（末阶钳制）  
 - 建造门闩：`isRocketBuildUnlocked`；未解锁时服务端硬拒 `build`  
 - 协议：`ClientToServer` → `research_building`；进度在 `PlayerHudState.research` / `activeResearch`，存档见 `SavePlayerSnapshot`  
+
+`ROCKET_RESEARCH_STAGES`（与 `research.ts` 一致；阶为 1-based 展示）：
+
+| 科技 | 阶 | E | O | 成功率 |
+|------|----|---|---|--------|
+| `missile` | 1–4 | 200 / 400 / 800 / 1600 | 5 / 5 / 5 / 10 | 30% / 50% / 80% / 100% |
+| `advenced_missile` | 1–5 | 600 / 1200 / 2400 / 4800 / 9600 | 10 / 10 / 10 / 10 / 20 | 20% / 40% / 60% / 80% / 100% |
+| `nuke_missile` | 1–5 | 3000 / 6000 / 12000 / 24000 / 48000 | 20 / 20 / 20 / 20 / 40 | 10% / 30% / 50% / 75% / 100% |
 
 纯函数：`canStartRocketResearch`、`rollRocketResearchSuccess`、`applyRocketResearchOutcome`、`getNextRocketResearchStage` 等。RNG 仅在服务端结算时调用。
 
@@ -121,7 +130,8 @@
 | `energyIncomePerSecond` | 净收入相关 |
 | `powerDrainPer10s` | 按建筑 size：`POWER_DRAIN_PER_10S` |
 | `orgBonusPer30s` | 组织度周期加成（与 catalog `orgBonus`） |
-| `nukeReloadRejectReason` | 核装填：通信 + 工作中铀矿机与铀工厂 |
+| `nukeUraniumInfraRejectReason` | 核装填/研究共用：通信 + 工作中铀矿机与铀工厂 |
+| `nukeReloadRejectReason` | 核装填文案包装（同上） |
 
 污染建筑 `polluted` 不参与产电/炼化/功耗/组织度（`isActive`）。
 

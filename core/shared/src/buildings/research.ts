@@ -5,6 +5,9 @@
  */
 
 import { durationSecToTicks } from "../time.js";
+import type { TerrainMap } from "../terrain/types.js";
+import type { PlacedBuilding } from "./actions.js";
+import { nukeUraniumInfraRejectReason } from "./economy.js";
 import type { RocketForceBuildingId } from "../units/antiAir.js";
 
 /** Same ids as rocket-force weapons (typo `advenced_missile` kept). */
@@ -16,8 +19,16 @@ export const ROCKET_RESEARCH_IDS = [
 
 export type RocketResearchId = (typeof ROCKET_RESEARCH_IDS)[number];
 
-/** Energy spent per second of research wall-clock time. */
-export const ROCKET_RESEARCH_DURATION_E_PER_SEC = 100;
+/** Energy spent per second of research wall-clock time (duration = energyCost / 50). */
+export const ROCKET_RESEARCH_DURATION_E_PER_SEC = 50;
+
+/** Mid-research nuke uranium infra re-check interval (wall-clock seconds). */
+export const NUKE_RESEARCH_INFRA_CHECK_INTERVAL_SEC = 5;
+
+/** Tick cadence for nuke uranium infra re-checks (`durationSecToTicks(5)`). */
+export const NUKE_RESEARCH_INFRA_CHECK_INTERVAL_TICKS = durationSecToTicks(
+  NUKE_RESEARCH_INFRA_CHECK_INTERVAL_SEC,
+);
 
 export interface RocketResearchStage {
   energy: number;
@@ -53,24 +64,24 @@ export const ROCKET_RESEARCH_STAGES: Record<
   readonly RocketResearchStage[]
 > = {
   missile: [
-    { energy: 100, organization: 5, chancePercent: 30 },
-    { energy: 200, organization: 5, chancePercent: 50 },
-    { energy: 400, organization: 5, chancePercent: 80 },
-    { energy: 800, organization: 10, chancePercent: 100 },
+    { energy: 200, organization: 5, chancePercent: 30 },
+    { energy: 400, organization: 5, chancePercent: 50 },
+    { energy: 800, organization: 5, chancePercent: 80 },
+    { energy: 1600, organization: 10, chancePercent: 100 },
   ],
   advenced_missile: [
-    { energy: 300, organization: 10, chancePercent: 20 },
-    { energy: 6000, organization: 10, chancePercent: 40 },
-    { energy: 1200, organization: 10, chancePercent: 60 },
-    { energy: 2400, organization: 10, chancePercent: 80 },
-    { energy: 4800, organization: 20, chancePercent: 100 },
+    { energy: 600, organization: 10, chancePercent: 20 },
+    { energy: 1200, organization: 10, chancePercent: 40 },
+    { energy: 2400, organization: 10, chancePercent: 60 },
+    { energy: 4800, organization: 10, chancePercent: 80 },
+    { energy: 9600, organization: 20, chancePercent: 100 },
   ],
   nuke_missile: [
-    { energy: 1000, organization: 15, chancePercent: 10 },
-    { energy: 2000, organization: 15, chancePercent: 30 },
-    { energy: 4000, organization: 15, chancePercent: 50 },
-    { energy: 8000, organization: 15, chancePercent: 75 },
-    { energy: 16000, organization: 30, chancePercent: 100 },
+    { energy: 3000, organization: 20, chancePercent: 10 },
+    { energy: 6000, organization: 20, chancePercent: 30 },
+    { energy: 12000, organization: 20, chancePercent: 50 },
+    { energy: 24000, organization: 20, chancePercent: 75 },
+    { energy: 48000, organization: 40, chancePercent: 100 },
   ],
 };
 
@@ -160,7 +171,8 @@ export type RocketResearchRejectReason =
   | "busy"
   | "no_stage"
   | "not_enough_energy"
-  | "not_enough_org";
+  | "not_enough_org"
+  | "nuke_uranium_infra";
 
 export interface RocketResearchCheckOk {
   ok: true;
@@ -193,6 +205,8 @@ export function rocketResearchDisplayName(buildingId: RocketResearchId): string 
 /**
  * Whether the player may start a research attempt (pure; no side effects).
  * Does not require owning a gun / prereq building — that is a build-chain concern.
+ * Nuke research additionally requires working, comms-linked uranium miner + factory
+ * (same gate spirit as nuke reload); pass world args for that check.
  */
 export function canStartRocketResearch(args: {
   buildingId: string;
@@ -200,6 +214,11 @@ export function canStartRocketResearch(args: {
   activeResearch: ActiveRocketResearch | null | undefined;
   energy: number;
   organization: number;
+  /** Required for `nuke_missile` uranium infra gate. */
+  buildings?: readonly PlacedBuilding[];
+  ownerId?: string;
+  terrain?: TerrainMap | null;
+  connectedIds?: ReadonlySet<string> | readonly string[] | null;
 }): RocketResearchCheckResult {
   const { buildingId, progress, activeResearch, energy, organization } = args;
   if (!isRocketResearchTarget(buildingId)) {
@@ -231,6 +250,22 @@ export function canStartRocketResearch(args: {
       reason: "prereq_locked",
       message: `须先解锁${RESEARCH_NAME[prereq]}`,
     };
+  }
+  if (buildingId === "nuke_missile") {
+    const infraMsg = nukeUraniumInfraRejectReason(
+      args.buildings ?? [],
+      args.ownerId ?? "",
+      args.terrain ?? null,
+      args.connectedIds,
+      "research",
+    );
+    if (infraMsg) {
+      return {
+        ok: false,
+        reason: "nuke_uranium_infra",
+        message: infraMsg,
+      };
+    }
   }
   const stage = getNextRocketResearchStage(buildingId, entry);
   if (!stage) {
@@ -272,14 +307,22 @@ export function rollRocketResearchSuccess(
   return roll01 < p;
 }
 
-/** Apply attempt outcome without RNG. Failure advances stage; success unlocks. */
+/**
+ * Apply attempt outcome without RNG. Success unlocks; failure advances `stage`
+ * by 1 but never past the last table row (re-attempt last stage).
+ */
 export function applyRocketResearchOutcome(
+  buildingId: RocketResearchId,
   entry: RocketResearchEntry,
   success: boolean,
 ): RocketResearchEntry {
   if (entry.unlocked) return { ...entry, unlocked: true };
   if (success) return { stage: entry.stage, unlocked: true };
-  return { stage: entry.stage + 1, unlocked: false };
+  const maxStage = Math.max(0, ROCKET_RESEARCH_STAGES[buildingId].length - 1);
+  return {
+    stage: Math.min(entry.stage + 1, maxStage),
+    unlocked: false,
+  };
 }
 
 /** Whether a rocket building may be built/upgraded (research unlocked). */

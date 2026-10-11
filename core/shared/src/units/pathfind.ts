@@ -187,12 +187,14 @@ function ownLandPadAt(
   const buildings = opts?.buildings;
   const ownerId = opts?.ownerId;
   if (!buildings || ownerId == null) return false;
+  const catalog = BUILDING_BY_ID;
+  if (!catalog) return false;
   const key = unitCoordKey(gx, gy);
   return buildings.some(
     (b) =>
       b.ownerId === ownerId &&
       unitCoordKey(b.gx, b.gy) === key &&
-      !BUILDING_BY_ID[b.buildingId]?.flags?.seaOnly,
+      !catalog[b.buildingId]?.flags?.seaOnly,
   );
 }
 
@@ -237,7 +239,13 @@ export function terrainAllowsKind(
   return true;
 }
 
-const LAND_WATER_ERROR = "陆军无法穿越水域，需借道公路或铁路";
+/** Shown when land/armor targets pure ocean without a road/rail corridor. */
+export const LAND_WATER_ERROR = "陆军无法穿越水域，需借道公路或铁路";
+
+/** Default A* pop budget. UI previews should pass a lower `maxExpand`. */
+export const PATHFIND_MAX_EXPAND_DEFAULT = 250_000;
+/** Cap for client dry-runs so unreachable water crossings cannot freeze the tab. */
+export const PATHFIND_MAX_EXPAND_PREVIEW = 12_000;
 
 /**
  * Effective move speed at a point. Road/rail override base; mountain halves infantry.
@@ -397,6 +405,11 @@ export function planLandOrNavyPath(args: {
   allowImpassableGoal?: boolean;
   /** Wording for range errors. Port navy uses the port work range, not radio. */
   rangeLabel?: ActivityRangeLabel;
+  /**
+   * A* node-pop budget. Defaults to {@link PATHFIND_MAX_EXPAND_DEFAULT}.
+   * Pass {@link PATHFIND_MAX_EXPAND_PREVIEW} for UI dry-runs.
+   */
+  maxExpand?: number;
 }): PathPlanResult {
   const { kind, terrain, liaisons, ownerId, map: mapCfg } = args;
   const ignoreCoverage = !!args.ignoreCoverage;
@@ -461,8 +474,12 @@ export function planLandOrNavyPath(args: {
 
   const maxX = mapCfg.linesX - 1;
   const maxY = mapCfg.linesY - 1;
+  const kindDef = UNIT_BY_KIND[kind];
+  if (!kindDef) {
+    return { path: [], travelTimeSec: 0, error: "未知兵种，无法寻路" };
+  }
   const maxSpeed = Math.max(
-    UNIT_BY_KIND[kind].speedDuPerS,
+    kindDef.speedDuPerS,
     ROAD_MOVE_SPEED,
     RAIL_MOVE_SPEED,
   );
@@ -484,18 +501,36 @@ export function planLandOrNavyPath(args: {
   const inBounds = (x: number, y: number) =>
     x >= 0 && y >= 0 && x <= maxX + 1e-9 && y <= maxY + 1e-9;
 
-  const walkable = (nx: number, ny: number): boolean => {
+  // Cache walkability / speed: armor mountain+ocean checks are expensive, and
+  // unreachable water crossings expand the same shoreline cells many times.
+  const walkCache = new Map<string, boolean>();
+  const speedCache = new Map<string, number>();
+  const walkable = (nx: number, ny: number, key: string): boolean => {
     if (ignoreTerrain) return true;
-    if (terrainAllowsKind(kind, terrain, nx, ny, terrainOpts)) return true;
-    const key = unitCoordKey(nx, ny);
-    if (allowImpassableStart && key === startKey) return true;
-    if (allowImpassableGoal && key === goalKey) return true;
-    return false;
+    const cached = walkCache.get(key);
+    if (cached != null) return cached;
+    let ok = terrainAllowsKind(kind, terrain, nx, ny, terrainOpts);
+    if (!ok) {
+      if (allowImpassableStart && key === startKey) ok = true;
+      else if (allowImpassableGoal && key === goalKey) ok = true;
+    }
+    walkCache.set(key, ok);
+    return ok;
+  };
+  const stepSpeed = (nx: number, ny: number, key: string): number => {
+    const cached = speedCache.get(key);
+    if (cached != null) return cached;
+    const spd = speedAt(kind, terrain, nx, ny, liaisons, ownerId);
+    speedCache.set(key, spd);
+    return spd;
   };
 
   let found = false;
   let guard = 0;
-  const GUARD_MAX = 250_000;
+  const GUARD_MAX = Math.max(
+    1,
+    Math.floor(args.maxExpand ?? PATHFIND_MAX_EXPAND_DEFAULT),
+  );
 
   while (open.size > 0 && guard++ < GUARD_MAX) {
     const cur = open.pop()!;
@@ -511,14 +546,14 @@ export function planLandOrNavyPath(args: {
       const ny = Math.round((cur.gy + dy) * 1000) / 1000;
       if (!inBounds(nx, ny)) continue;
       if (coverage.length > 0 && !isInsideAnyCircle(nx, ny, coverage)) continue;
-      if (!walkable(nx, ny)) continue;
+      const nk = unitCoordKey(nx, ny);
+      if (!walkable(nx, ny, nk)) continue;
 
       const dist = Math.hypot(dx, dy);
       // Use destination speed (entering cell / transport).
-      const spd = speedAt(kind, terrain, nx, ny, liaisons, ownerId);
+      const spd = stepSpeed(nx, ny, nk);
       const stepTime = dist / Math.max(1e-6, spd);
       const ng = cur.g + stepTime;
-      const nk = unitCoordKey(nx, ny);
       const prev = gScore.get(nk);
       if (prev != null && ng >= prev - 1e-12) continue;
       gScore.set(nk, ng);
@@ -534,6 +569,8 @@ export function planLandOrNavyPath(args: {
   }
 
   if (!found) {
+    // Prefer the explicit water tip when the goal itself is impassable ocean
+    // (already handled above). Budget exhaustion / cut landmasses share wording.
     return { path: [], travelTimeSec: 0, error: unreachableError };
   }
 

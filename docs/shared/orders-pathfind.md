@@ -56,12 +56,11 @@
 3. 同格 → 单点路径，时间 0。  
 4. 在 0.2 八邻域上 A*：代价 `g` = 累计**时间**（边长 / 进入格 `speedAt`）；启发 = 欧氏 / maxSpeed。  
 5. 扩展时必须在 coverage 内（若有）且 `walkable`。  
-6. `GUARD_MAX = 250_000` 防死循环；失败返回中文 `error`。  
-7. 回溯 `cameFrom` 得折线，`travelTimeSec = g(goal)`。
+6. `maxExpand`（默认 `PATHFIND_MAX_EXPAND_DEFAULT = 250_000`）防死循环；UI 预览用 `PATHFIND_MAX_EXPAND_PREVIEW`（经 `previewUnitMove` / `MoveContext.previewPathfind`）。失败返回中文 `error`。  
+7. 单次规划内缓存 `walkable` / `speedAt`（装甲山区+水域判定较贵；跨海不可达时避免重复冻结主线程）。  
+8. 回溯 `cameFrom` 得折线，`travelTimeSec = g(goal)`。纯海洋目标对陆军返回 `LAND_WATER_ERROR`。
 
 辅助：`estimatePathTimeSec`、`findFreeUnitCoord`（螺旋空位）、`findNearestAllowedCoord`（训练海军就近入海）。
-
-> 注：当前源码中装甲起点处留有 `#region agent log` 的本地 `fetch` 调试探针；文档描述逻辑时忽略其副作用。
 
 ---
 
