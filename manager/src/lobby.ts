@@ -39,7 +39,7 @@ export function teamQueueKey(format: TeamFormat): MatchQueueKey {
   return `team:${format}`;
 }
 
-/** Matchmaking: 2–3 → small map, ≥4 → large; allowRespawn=false. */
+/** Matchmaking: 2–3 → small map, ≥4 → medium; allowRespawn=false. */
 export function mapSizeForMatch(playerCount: number): MapSizeId {
   return playerCount <= 3 ? "89x59" : "119x79";
 }

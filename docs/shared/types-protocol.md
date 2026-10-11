@@ -11,11 +11,11 @@
 
 | 字段 | 含义 |
 |------|------|
-| `id` | `"89x59"` \| `"119x79"` |
+| `id` | `"89x59"` \| `"119x79"` \| `"179x119"` |
 | `cellsX` / `cellsY` | 经向/纬向**格子**数 |
 | `linesX` / `linesY` | 经线/纬线数（= cells + 1） |
 
-`MAP_SIZES` 提供两档；`MAP_SIZE_OPTIONS` 给 UI；`DEFAULT_MAP_SIZE_ID = "89x59"`；`isMapSizeId` 做运行时收窄。
+`MAP_SIZES` 提供三档（小 / 中 / 大）；`MAP_SIZE_OPTIONS` 给 UI；`DEFAULT_MAP_SIZE_ID = "89x59"`；`isMapSizeId` 做运行时收窄。
 
 注释：线网尺寸对应「格数 + 1」的节点网格（建筑落在整数节点上）。
 

@@ -20,7 +20,7 @@
 | `leave_room` | — | 离房回大厅 |
 
 `isLobbyClientMessage`：仅按 `type` 字符串判断是否属于上表。  
-`isMapSizeId`：`"89x59"` \| `"119x79"`。
+`isMapSizeId`：`"89x59"` \| `"119x79"` \| `"179x119"`。
 
 ### 1.2 服务端 → 客户端（`LobbyServerMessage`）
 
@@ -39,7 +39,7 @@
 
 ### 1.3 匹配队列键
 
-`MatchQueues` 按 `ffa:{2|3|4|5}` 或 `team:{format}` 分队；成房时 `allowRespawn=false`，人数 ≥4 用 `119x79`。组队局写入随机 `teams` 并 `teamMode=true`。
+`MatchQueues` 按 `ffa:{2|3|4|5}` 或 `team:{format}` 分队；成房时 `allowRespawn=false`，人数 ≥4 用中型 `119x79`。组队局写入随机 `teams` 并 `teamMode=true`。
 
 `send` / `sendError` 在 `index.ts`：仅当 `ws.readyState === OPEN` 时 `JSON.stringify`。
 
@@ -134,7 +134,7 @@ sequenceDiagram
 
 | 函数 / 规则 | 说明 |
 |-------------|------|
-| `mapSizeForMatch` | ≤3 → `"89x59"`；≥4 → `"119x79"` |
+| `mapSizeForMatch` | ≤3 → 小型 `"89x59"`；≥4 → 中型 `"119x79"` |
 | 成房参数 | `maxPlayers = playerCount`，`allowRespawn = false`，无自定义 seed |
 | `enqueue` | 先 `remove` 旧队列项，再 push，广播 status，`tryForm` |
 | `tryForm` | `while (q.length >= playerCount)` splice 一批 → `createRoom` → 逐人 `join` → `room_ready` / `room_status` / 或 error → `onMatchFormed` |

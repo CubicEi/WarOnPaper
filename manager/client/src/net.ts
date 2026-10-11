@@ -1,4 +1,4 @@
-export type MapSizeId = "89x59" | "119x79";
+export type MapSizeId = "89x59" | "119x79" | "179x119";
 
 export type ClientMsg =
   | { type: "hello"; playerId?: string; name?: string }

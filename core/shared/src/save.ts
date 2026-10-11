@@ -2,7 +2,7 @@
  * Authoritative save document (plaintext). Encrypted to `.wopsave` on manager only.
  */
 
-import type { MapSizeId } from "./map.js";
+import { isMapSizeId, type MapSizeId } from "./map.js";
 import type { PlacedBuilding } from "./buildings/actions.js";
 import type {
   ActiveRocketResearch,
@@ -104,7 +104,7 @@ export function isSaveDocument(value: unknown): value is SaveDocument {
     typeof d.saverPlayerId === "string" &&
     typeof d.saverName === "string" &&
     typeof d.roomId === "string" &&
-    (d.mapSize === "89x59" || d.mapSize === "119x79") &&
+    isMapSizeId(d.mapSize) &&
     typeof d.maxPlayers === "number" &&
     typeof d.terrainSeed === "number" &&
     typeof d.tick === "number" &&

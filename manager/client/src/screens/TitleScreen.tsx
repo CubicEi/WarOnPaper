@@ -504,7 +504,7 @@ export function TitleScreen() {
                             >
                               {[2, 3, 4, 5].map((n) => (
                                 <option key={n} value={n}>
-                                  {n} 人 · {n <= 3 ? "89×59" : "119×79"}
+                                  {n} 人 · {n <= 3 ? "小型 89×59" : "中型 119×79"}
                                 </option>
                               ))}
                             </select>
@@ -518,7 +518,7 @@ export function TitleScreen() {
                             <div
                               style={{ paddingTop: "0.35rem", opacity: 0.85 }}
                             >
-                              119×79（组队局）
+                              中型 119×79（组队局）
                             </div>
                           </div>
                         )}
@@ -580,7 +580,8 @@ export function TitleScreen() {
                             }
                           >
                             <option value="89x59">小型 89×59</option>
-                            <option value="119x79">大型 119×79</option>
+                            <option value="119x79">中型 119×79</option>
+                            <option value="179x119">大型 179×119</option>
                           </select>
                         </div>
                       </div>

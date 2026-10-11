@@ -31,7 +31,7 @@ Manager 侧自行声明与 core 对齐的 TypeScript 接口（不 import server 
 | `roomId` | 房间码 |
 | `maxPlayers` | 人数上限 |
 | `allowRespawn` | 是否允许首都沦陷后重生 |
-| `mapSize` | `"89x59"` \| `"119x79"`（来自 `protocol.MapSizeId`） |
+| `mapSize` | `"89x59"` \| `"119x79"` \| `"179x119"`（来自 `protocol.MapSizeId`） |
 | `seed?` | 地图种子 |
 | `idleMs?` | 空闲超时（可选；由 core 默认处理） |
 

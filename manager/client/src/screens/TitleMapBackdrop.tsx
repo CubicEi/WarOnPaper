@@ -30,7 +30,7 @@ const ZOOM_MIN = 2.2;
 const ZOOM_MAX = 2.85;
 /** Screen pixels per second while a map is shown. */
 const PAN_SPEED = 14;
-const MAP_SIZES: MapSizeId[] = ["89x59", "119x79"];
+const MAP_SIZES: MapSizeId[] = ["89x59", "119x79", "179x119"];
 
 const ORTHO_DIRS: ReadonlyArray<readonly [number, number]> = [
   [1, 0],

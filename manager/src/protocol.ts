@@ -7,7 +7,7 @@
 import type { TeamFormat } from "./teams.js";
 import { isTeamFormat } from "./teams.js";
 
-export type MapSizeId = "89x59" | "119x79";
+export type MapSizeId = "89x59" | "119x79" | "179x119";
 
 export type LobbyClientMessage =
   | { type: "hello"; playerId?: string; name?: string }
@@ -82,6 +82,10 @@ export function isLobbyClientMessage(msg: unknown): msg is LobbyClientMessage {
   );
 }
 
+export function isMapSizeId(value: unknown): value is MapSizeId {
+  return value === "89x59" || value === "119x79" || value === "179x119";
+}
+
 /** Minimal SaveDocument shape check (mirrors @wop/shared isSaveDocument). */
 export function looksLikeSaveDocument(value: unknown): boolean {
   if (!value || typeof value !== "object") return false;
@@ -89,15 +93,11 @@ export function looksLikeSaveDocument(value: unknown): boolean {
   return (
     typeof d.formatVersion === "number" &&
     typeof d.saverPlayerId === "string" &&
-    (d.mapSize === "89x59" || d.mapSize === "119x79") &&
+    isMapSizeId(d.mapSize) &&
     typeof d.terrainSeed === "number" &&
     Array.isArray(d.buildings) &&
     Array.isArray(d.players)
   );
-}
-
-export function isMapSizeId(value: unknown): value is MapSizeId {
-  return value === "89x59" || value === "119x79";
 }
 
 export { isTeamFormat };

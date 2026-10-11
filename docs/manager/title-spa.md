@@ -96,7 +96,7 @@ function goPlay(roomId: string) {
 7. **重新加入**：`activeRoomId ?? lastRoomId`
 8. 状态行
 
-匹配选项展示规则与服务端 `mapSizeForMatch` 一致：2–3 人标 89×59，4–5 人标 119×79（客户端仅展示；真正 mapSize 由服务端成房时决定）。
+匹配选项展示规则与服务端 `mapSizeForMatch` 一致：2–3 人标小型 89×59，4–5 人标中型 119×79（客户端仅展示；真正 mapSize 由服务端成房时决定）。创建房间可选小型 / 中型 / 大型（`179x119`）。
 
 ## 6. 与对局客户端的分工
 

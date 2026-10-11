@@ -238,7 +238,7 @@ async function main(): Promise<void> {
               : "89x59"
             : msg.mapSize;
           if (!isMapSizeId(mapSize)) {
-            sendError(session.ws, "BAD_MAP", "地图尺寸须为 89x59 或 119x79");
+            sendError(session.ws, "BAD_MAP", "地图尺寸须为 89x59、119x79 或 179x119");
             return;
           }
           const maxPlayers = restoreDoc
