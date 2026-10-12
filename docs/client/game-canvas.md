@@ -40,6 +40,7 @@
 | `pointersRef` / `pinchRef` | 多指捏合缩放 |
 | `selectionRef` | 点选格点（画屏幕半环）；建筑/单位选中时为 null |
 | `liaison*Ref` | 联络线 kind/draft/编辑/确认/拆除 |
+| `liaisonBuildAnchorsRef` | 己方/友方建造中联络线的进度锚点（剩余/总 tick + 收到时刻），每帧换算 `liaisonBuildProgress` 传给 `drawMap`（见 canvas-rendering §5） |
 | `destructionMarksRef` | 小地图毁坏警示 |
 | `pendingDemolishIdsRef` | 己方主动拆除，跳过警示 |
 | `workRangeRef` | 当前要画的射程圈（开火或检视） |
@@ -86,13 +87,19 @@ screen = center + zoom * (layout - center) + pan
 
 ## 5. 选中逻辑（`setSelectionAt` / 点击）
 
-### 缩放门控
+### 缩放门控（近似物理尺寸，CSS mm）
 
-对局中点击地图（非开火/互防瞄准）时，若 `zoom < MAP_CLICK_ZOOM_GATE`（**3**）：以点击点为枢轴将 `zoom + 1`（`animateCameraTo` 平滑插值，`panAfterZoomAt` 保持点位），**本次不打开菜单/检视**。`zoom` 为相机放大倍数（`MAP_ZOOM_MIN=1` … `MAP_ZOOM_MAX=16`）。
+对局中点击地图（非开火/互防瞄准）时，先算当前一格的屏幕边长：
 
-### ≥3 倍时的点选（`playing`，命中圆 R = `MAP_CLICK_HIT_R_DU` = **0.3 Du**）
+`cellCssPx = cellScreenCssPx(cell, zoom)`（`cell` 来自 `getBoardLayout`，屏幕边长 = `cell × zoom`）。
 
-Du = 格点距离单位（与 `findUnitNear` / 网格坐标一致）。人工岛不计入「建筑」命中（仍可单独打开点菜单）。点击后按 **4 → 3 → 2 → 1** 倒序判定：
+毫米换算用 **CSS 参考像素**：`mmToCssPx(mm) = mm × 96 / 25.4`（**不**乘 `devicePixelRatio`）。
+
+若 `cellCssPx < mmToCssPx(MAP_CLICK_MIN_CELL_MM)`（**8 mm**）且尚未到 `MAP_ZOOM_MAX`：以点击点为枢轴，将 `zoom` 平滑放大到刚好满足门槛的 `zNeeded = mmToCssPx(8) / cell`（再 `min(MAP_ZOOM_MAX, …)`），经 `panAfterZoomAt` + `animateCameraTo`，**本次不打开菜单/检视**。已到 `MAP_ZOOM_MAX` 仍不够大则放行点选。
+
+### 点选命中（`playing`，屏幕半径 `MAP_CLICK_HIT_R_MM` = **10 mm** → Du）
+
+每次点击将固定屏幕半径反推为格点距离：`hitRDu = mmToCssPx(10) / cellCssPx`（与 `findUnitNear` / 网格坐标一致）。放大后同一毫米半径对应更小的 Du，叠放更易拆开。人工岛不计入「建筑」命中（仍可单独打开点菜单）。点击后按 **4 → 3 → 2 → 1** 倒序判定：
 
 4. **建筑 + 单位** → `RadialPickMenu` 叠放菜单（坐标 → 建筑 → 单位）  
 3. **仅单位** → 叠放菜单（坐标 → 单位）  
@@ -101,7 +108,7 @@ Du = 格点距离单位（与 `findUnitNear` / 网格坐标一致）。人工岛
 
 叠放菜单：左右侧环位（正上/正下不排）；「坐标（x，y）」在环正下方居中；建筑/单位角度 **−45° / 0° / 45°（右）→ 135° / 180° / 225°（左）**，右侧优先（不均分全环）；各方内 **我方优先**、同方按 **id**；环上建筑+单位 &gt;6 时最多 6 +「更多」列表；菜单图标一律黑版。点建筑/单位走与直接点选相同的 `focusCenter` 流程（`selectionUiRef` 在 `setSelectionAt` 内同步写入，焦点动画经 `pendingBuildingFocusRef` 延后一拍，避免仍读到上一选中态而中止）。
 
-开火/互防瞄准逻辑不变（仍用既有近点拾取）。观战/结束：R=0.3 最近单位优先，其次建筑，可检视不可操作。选都阶段：缩放门控后点菜单仅「定为首都」。
+开火/互防瞄准逻辑不变（仍用既有近点拾取）。观战/结束：同一 `hitRDu` 最近单位优先，其次建筑，可检视不可操作。选都阶段：缩放门控后点菜单仅「定为首都」。
 
 `clearSelection`：取消 pending 焦点、相机动画、follow、互防/敌线选中；**不**退出开火瞄准（见下）。
 

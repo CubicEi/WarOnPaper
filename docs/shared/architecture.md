@@ -27,7 +27,7 @@
 | `DT_SEC_PER_TICK` | `TICK_MS / 1000` | 每 tick 推进的墙钟秒 |
 | `TICKS_PER_SEC` / `TICKS_PER_10S` / `TICKS_PER_30S` | 由 `TICK_HZ` 派生 | 经济/快照取模间隔 |
 | `durationSecToTicks` / `durationSecToTicksCeil` / `ticksToSec` / `ticksPerSeconds` | — | 秒↔tick 助手 |
-| `COMM_WAVE_INTERVAL_SEC` / `COMM_WAVE_INTERVAL_TICKS` | `10/15` s → `durationSecToTicks` | 通信波重启间隔（墙钟；对齐旧 15Hz×10 tick） |
+| `COMM_WAVE_INTERVAL_SEC` / `COMM_WAVE_INTERVAL_TICKS` | `1` s → `durationSecToTicks`（5 Hz 下 5 tick） | 通信波重启间隔（墙钟） |
 | `ORGANIZATION_BAR_MAX` | `50` | 组织度条上限（`index.ts`） |
 | `CAPITAL_HP_MAX` | `60` | 首都 HP 上限（HUD） |
 | `STARTING_ENERGY` | `500` | 开局 E |

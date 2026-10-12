@@ -311,6 +311,20 @@ export function filterBuildingForViewer(
   };
 }
 
+/**
+ * Enemy-facing build ticks: keep only "under construction" (`1/1`) vs complete
+ * (`0/0`). Constant while building, so enemy lines produce no per-tick delta.
+ */
+export function maskedLiaisonBuildTicks(
+  line: PlacedLiaison,
+): Pick<PlacedLiaison, "buildTicksRemaining" | "buildTicksTotal"> {
+  const building = line.buildTicksRemaining > 0;
+  return {
+    buildTicksRemaining: building ? 1 : 0,
+    buildTicksTotal: building ? 1 : 0,
+  };
+}
+
 export function filterLiaisonForViewer(
   line: PlacedLiaison,
   viewerId: string,
@@ -335,21 +349,19 @@ export function filterLiaisonForViewer(
       ownerId: line.ownerId,
       nodes: line.nodes.map((n) => ({ ...n })),
       investedE: 0,
-      buildTicksRemaining: line.buildTicksRemaining,
-      buildTicksTotal: line.buildTicksTotal,
+      ...maskedLiaisonBuildTicks(line),
       visionLevel: "direct",
     };
   }
 
-  // satellite road/railway: appear complete (no progress leak for under-construction railway? railway is visible while building)
+  // satellite: road only seen once complete; railway seen while building (masked).
   return {
     id: line.id,
     kind: line.kind as LiaisonKind,
     ownerId: line.ownerId,
     nodes: line.nodes.map((n) => ({ ...n })),
     investedE: 0,
-    buildTicksRemaining: line.kind === "railway" ? line.buildTicksRemaining : 0,
-    buildTicksTotal: line.kind === "railway" ? line.buildTicksTotal : 0,
+    ...maskedLiaisonBuildTicks(line),
     visionLevel: "satellite",
   };
 }

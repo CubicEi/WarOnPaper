@@ -53,8 +53,11 @@ import {
   capitalSiteRejectReason,
   capitalSiteRejectMessage,
   availableTrainingRoom,
+  buildingLevel,
 } from "@wop/shared";
 import {
+  BUILDING_SCALE_ANIM_MS,
+  cellScreenCssPx,
   clampPan,
   drawMap,
   getBoardLayout,
@@ -63,10 +66,12 @@ import {
   mapFitMargin,
   MAP_ZOOM_MAX,
   MAP_ZOOM_MIN,
+  mmToCssPx,
   panAfterZoomAt,
   pickGridPoint,
   pickGridCoord,
   SEL_RING_OUTER,
+  type BuildingScaleAnim,
 } from "./drawMap";
 import {
   drawMinimap,
@@ -74,6 +79,12 @@ import {
   getViewRectOnMinimap,
   panFromBoardUV,
 } from "./drawMinimap";
+import {
+  liaisonBuildFraction,
+  liaisonBuiltSegments,
+  pruneLiaisonWeightCache,
+  type LiaisonBuildAnchor,
+} from "./liaisonBuildAnim";
 import {
   PointActionMenu,
   POINT_ACTIONS,
@@ -240,12 +251,17 @@ const ACTION_ARC_RADIUS = SEL_RING_OUTER + ACTION_BTN_R + 10;
 /** Unit inspect: place the unit at ~38% width (center-left), vertical center. */
 const UNIT_FOCUS_X_RATIO = 0.38;
 /**
- * Map click zoom gate: below this scale, click only zooms +1 (smooth).
- * `zoom` is the camera multiplier (MAP_ZOOM_MIN=1 … MAP_ZOOM_MAX=16).
+ * Map click zoom gate: cell on-screen edge must be ≥ this (CSS mm) before
+ * menus / inspect open. Below that, click zooms to the minimum scale that
+ * meets the threshold (pivoted at the click, capped by MAP_ZOOM_MAX).
+ * Uses CSS reference px (96 CSS px = 1 in), not devicePixelRatio.
  */
-const MAP_CLICK_ZOOM_GATE = 3;
-/** Playing-phase map click hit radius in Du (grid distance units). */
-const MAP_CLICK_HIT_R_DU = 0.3;
+const MAP_CLICK_MIN_CELL_MM = 8;
+/**
+ * Stack / point-pick hit radius as a fixed on-screen millimetre radius.
+ * Converted each click: hitRDu = mmToCssPx(MAP_CLICK_HIT_R_MM) / cellCssPx.
+ */
+const MAP_CLICK_HIT_R_MM = 10;
 /** Pan/zoom camera tween when focusing a building or fitting fire range. */
 const CAMERA_FOCUS_MS = 500;
 /** CSS ease-in-out equivalent: accelerate then decelerate. */
@@ -417,6 +433,25 @@ export function GameCanvas({
   const prevBuildingsForDestroyRef = useRef<readonly PlacedBuilding[]>([]);
   /** Own demolish requests — skip minimap destroy warnings for these ids. */
   const pendingDemolishIdsRef = useRef(new Set<string>());
+  /**
+   * Prev own-building snapshot for spawn / upgrade scale FX.
+   * `null` = not seeded yet (bootstrap / player-id change → no anim).
+   */
+  const prevBuildingsForScaleAnimRef = useRef<Map<
+    string,
+    {
+      buildingId: string;
+      level: number;
+      ownerId: string;
+      linked: boolean;
+      snapshot: PlacedBuilding;
+    }
+  > | null>(null);
+  const buildingScaleAnimsRef = useRef(new Map<string, BuildingScaleAnim>());
+  /** Tracks `myPlayerId` so identity switches re-seed without a burst of spawns. */
+  const scaleAnimPlayerIdRef = useRef<string | null | undefined>(undefined);
+  /** Own / ally under-construction liaisons: last server progress + receive time. */
+  const liaisonBuildAnchorsRef = useRef(new Map<string, LiaisonBuildAnchor>());
   const sizeRef = useRef({ width, height });
   const miniSizeRef = useRef({ width: 0, height: 0 });
   const panRef = useRef({ x: 0, y: 0 });
@@ -616,6 +651,142 @@ export function GameCanvas({
     }
     prevBuildingsForDestroyRef.current = buildings;
   }, [buildings]);
+
+  // Own building spawn (new id / gained ownership), upgrade (kind or level) &
+  // despawn (id left the list: demolish or destroyed) scale FX.
+  useEffect(() => {
+    const me = myPlayerId;
+    if (scaleAnimPlayerIdRef.current !== me) {
+      scaleAnimPlayerIdRef.current = me;
+      prevBuildingsForScaleAnimRef.current = null;
+      buildingScaleAnimsRef.current.clear();
+    }
+
+    const now = performance.now();
+    const connected = connectedIdsRef.current;
+    const next = new Map<
+      string,
+      {
+        buildingId: string;
+        level: number;
+        ownerId: string;
+        linked: boolean;
+        snapshot: PlacedBuilding;
+      }
+    >();
+    for (const b of buildings) {
+      next.set(b.id, {
+        buildingId: b.buildingId,
+        level: buildingLevel(b),
+        ownerId: b.ownerId,
+        linked: !!connected && isBuildingCommsLinked(b.id, connected),
+        snapshot: b,
+      });
+    }
+
+    const prev = prevBuildingsForScaleAnimRef.current;
+    // List emptied (state reset / leaving room) → re-seed on next fill, no FX.
+    if (buildings.length === 0) {
+      prevBuildingsForScaleAnimRef.current = null;
+      buildingScaleAnimsRef.current.clear();
+      return;
+    }
+    // Wholesale replacement (room switch / rejoin) → treat as a fresh baseline.
+    const disjoint =
+      prev != null &&
+      prev.size > 0 &&
+      !buildings.some((b) => prev.has(b.id));
+    if (prev == null || me == null || disjoint) {
+      prevBuildingsForScaleAnimRef.current = next;
+      buildingScaleAnimsRef.current.clear();
+      return;
+    }
+
+    const anims = buildingScaleAnimsRef.current;
+    for (const [id, anim] of [...anims.entries()]) {
+      if (now - anim.startedAt >= BUILDING_SCALE_ANIM_MS) anims.delete(id);
+    }
+
+    for (const b of buildings) {
+      if (b.ownerId !== me) {
+        anims.delete(b.id);
+        continue;
+      }
+      const p = prev.get(b.id);
+      if (!p || p.ownerId !== me) {
+        anims.set(b.id, { mode: "spawn", startedAt: now });
+        continue;
+      }
+      if (p.buildingId !== b.buildingId || p.level !== buildingLevel(b)) {
+        anims.set(b.id, {
+          mode: "upgrade",
+          startedAt: now,
+          fromBuildingId: p.buildingId,
+        });
+      }
+    }
+
+    for (const [id, anim] of [...anims.entries()]) {
+      if (anim.mode !== "despawn" && !next.has(id)) anims.delete(id);
+      else if (anim.mode === "despawn" && next.has(id)) anims.delete(id);
+    }
+
+    // Same-cell own replacement (e.g. artificial island → land building) is
+    // already covered by the new instance's spawn FX; no ghost on top of it.
+    const ownCells = new Set<string>();
+    for (const b of buildings) {
+      if (b.ownerId === me) ownCells.add(`${b.gx},${b.gy}`);
+    }
+    for (const [id, p] of prev) {
+      if (next.has(id) || p.ownerId !== me) continue;
+      const s = p.snapshot;
+      if (ownCells.has(`${s.gx},${s.gy}`)) continue;
+      anims.set(id, {
+        mode: "despawn",
+        startedAt: now,
+        building: s,
+        linked: p.linked,
+      });
+    }
+
+    prevBuildingsForScaleAnimRef.current = next;
+  }, [buildings, myPlayerId]);
+
+  // Liaison build front: re-anchor when server remaining ticks change. First
+  // sighting (bootstrap / rejoin) anchors at current progress — no replay from 0.
+  useEffect(() => {
+    const anchors = liaisonBuildAnchorsRef.current;
+    const now = performance.now();
+    const live = new Set<string>();
+    for (const line of liaisons) {
+      live.add(line.id);
+      if (
+        line.buildTicksRemaining <= 0 ||
+        line.buildTicksTotal <= 0 ||
+        myPlayerId == null ||
+        !isFriendly(teams, line.ownerId, myPlayerId)
+      ) {
+        anchors.delete(line.id);
+        continue;
+      }
+      const a = anchors.get(line.id);
+      if (
+        !a ||
+        a.remaining !== line.buildTicksRemaining ||
+        a.total !== line.buildTicksTotal
+      ) {
+        anchors.set(line.id, {
+          remaining: line.buildTicksRemaining,
+          total: line.buildTicksTotal,
+          at: now,
+        });
+      }
+    }
+    for (const id of [...anchors.keys()]) {
+      if (!live.has(id)) anchors.delete(id);
+    }
+    pruneLiaisonWeightCache(live);
+  }, [liaisons, myPlayerId, teams]);
   buildModeRef.current = buildMode;
   enemyLiaisonRef.current = enemyLiaison;
   mobilizeRef.current = mobilize;
@@ -738,14 +909,17 @@ export function GameCanvas({
     cameraAnimRef.current = requestAnimationFrame(step);
   };
 
-  /** Click-to-zoom: +1 scale pivoted at screen point, ease via animateCameraTo. */
-  const zoomInAtScreen = (sx: number, sy: number) => {
+  /**
+   * Click-to-zoom: animate to `targetZoom` (clamped to MAP_ZOOM_MAX) pivoted at
+   * the screen point via panAfterZoomAt + animateCameraTo.
+   */
+  const zoomInAtScreen = (sx: number, sy: number, targetZoom: number) => {
     const m = mapRef.current;
     if (!m) return;
     const { width: w, height: h } = sizeRef.current;
     const { boardW, boardH } = getBoardLayout(w, h, m);
     const z0 = zoomRef.current;
-    const z1 = Math.min(MAP_ZOOM_MAX, z0 + 1);
+    const z1 = Math.min(MAP_ZOOM_MAX, targetZoom);
     if (z1 <= z0 + 1e-6) return;
     clearSelection();
     const nextPan = clampPan(
@@ -1420,6 +1594,29 @@ export function GameCanvas({
           return b ? { gx: b.gx, gy: b.gy } : null;
         })(),
         tick: tickRef.current,
+        buildingScaleAnims: (() => {
+          const anims = buildingScaleAnimsRef.current;
+          const now = performance.now();
+          for (const [id, anim] of [...anims.entries()]) {
+            if (now - anim.startedAt >= BUILDING_SCALE_ANIM_MS) anims.delete(id);
+          }
+          return anims.size > 0 ? anims : null;
+        })(),
+        liaisonBuildProgress: (() => {
+          const anchors = liaisonBuildAnchorsRef.current;
+          if (anchors.size === 0) return null;
+          const now = performance.now();
+          const out = new Map<string, number>();
+          for (const line of liaisonsRef.current) {
+            const a = anchors.get(line.id);
+            if (!a) continue;
+            out.set(
+              line.id,
+              liaisonBuiltSegments(line, liaisonBuildFraction(a, now), terrainRef.current),
+            );
+          }
+          return out;
+        })(),
       });
       if (mini && miniCtx && miniSize.width > 0) {
         const now = performance.now();
@@ -1989,6 +2186,10 @@ export function GameCanvas({
       if (hit) {
         const phaseNow = phaseRef.current;
         const aiming = !!fireAimRef.current || !!mutualAimRef.current;
+        const { cell } = getBoardLayout(w, h, m);
+        const z0 = zoomRef.current;
+        const cellCssPx = cellScreenCssPx(cell, z0);
+        const minCellCssPx = mmToCssPx(MAP_CLICK_MIN_CELL_MM);
         if (
           !aiming &&
           (phaseNow === "playing" ||
@@ -1997,12 +2198,26 @@ export function GameCanvas({
             phaseNow === "restore_lobby" ||
             phaseNow === "spectating" ||
             phaseNow === "ended") &&
-          zoomRef.current < MAP_CLICK_ZOOM_GATE
+          cellCssPx < minCellCssPx &&
+          z0 < MAP_ZOOM_MAX - 1e-6
         ) {
-          log.info("select", "zoom-gate", zoomRef.current, "→", zoomRef.current + 1);
-          zoomInAtScreen(local.x, local.y);
+          // Zoom just enough so one cell edge ≥ MAP_CLICK_MIN_CELL_MM (CSS mm).
+          const zNeeded = minCellCssPx / cell;
+          const z1 = Math.min(MAP_ZOOM_MAX, zNeeded);
+          log.info(
+            "select",
+            "zoom-gate",
+            `cell=${cellCssPx.toFixed(1)}px`,
+            `<${MAP_CLICK_MIN_CELL_MM}mm`,
+            z0,
+            "→",
+            z1,
+          );
+          zoomInAtScreen(local.x, local.y, z1);
           return;
         }
+        // Fixed screen-mm hit radius → Du at current cell screen size.
+        const hitRDu = mmToCssPx(MAP_CLICK_HIT_R_MM) / Math.max(1e-6, cellCssPx);
 
         if (phaseNow === "playing" || phaseNow === "spectating" || phaseNow === "ended") {
           const near = findBuildingNear(buildingsRef.current, hit.gx, hit.gy, 0.2);
@@ -2148,12 +2363,12 @@ export function GameCanvas({
           }
 
           if (phaseNow === "playing") {
-            // Priority 4→3→2→1 within R=MAP_CLICK_HIT_R_DU (islands excluded from "building").
+            // Priority 4→3→2→1 within R=hitRDu (screen mm → Du; islands excluded from "building").
             const inRadius = findBuildingsInRadius(
               buildingsRef.current,
               hit.gx,
               hit.gy,
-              MAP_CLICK_HIT_R_DU,
+              hitRDu,
             );
             const islands = inRadius.filter((b) => b.buildingId === "artificial_island");
             const nearBuildings = inRadius.filter((b) => b.buildingId !== "artificial_island");
@@ -2161,7 +2376,7 @@ export function GameCanvas({
               unitsRef.current,
               hit.gx,
               hit.gy,
-              MAP_CLICK_HIT_R_DU,
+              hitRDu,
             );
             const hasBuildings = nearBuildings.length > 0;
             const hasUnits = nearUnits.length > 0;
@@ -2258,7 +2473,7 @@ export function GameCanvas({
               unitsRef.current,
               hit.gx,
               hit.gy,
-              MAP_CLICK_HIT_R_DU,
+              hitRDu,
             );
             if (nearUnit) {
               log.info("select", "unit", nearUnit.kind, nearUnit.gx, nearUnit.gy);
@@ -2274,7 +2489,7 @@ export function GameCanvas({
               buildingsRef.current,
               hit.gx,
               hit.gy,
-              MAP_CLICK_HIT_R_DU,
+              hitRDu,
             ).find((b) => b.buildingId !== "artificial_island");
             if (nearB && !shiftDown(e)) {
               setSelectionAt(nearB.gx, nearB.gy, {

@@ -1206,6 +1206,7 @@ export {
   buildingVisionLevel,
   liaisonVisionLevel,
   filterBuildingForViewer,
+  maskedLiaisonBuildTicks,
   filterLiaisonForViewer,
   filterBuildingsForViewer,
   filterLiaisonsForViewer,

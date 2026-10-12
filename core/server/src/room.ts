@@ -72,6 +72,7 @@ import {
   roadRailTerrainSurchargeE,
   filterBuildingsForViewer,
   filterLiaisonsForViewer,
+  maskedLiaisonBuildTicks,
   filterUnitsForViewer,
   filterResourceSightForViewer,
   shouldMaskUpgradeOnSatellite,
@@ -685,9 +686,9 @@ function satelliteFacadeLiaisons(): PlacedLiaison[] {
     ownerId: line.ownerId,
     nodes: line.nodes.map((n) => ({ ...n })),
     investedE: 0,
-    buildTicksRemaining:
-      line.kind === "railway" ? line.buildTicksRemaining : 0,
-    buildTicksTotal: line.kind === "railway" ? line.buildTicksTotal : 0,
+    ...(line.kind === "railway"
+      ? maskedLiaisonBuildTicks(line)
+      : { buildTicksRemaining: 0, buildTicksTotal: 0 }),
     visionLevel: "satellite" as const,
   }));
 }

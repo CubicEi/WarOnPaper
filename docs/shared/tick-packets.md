@@ -254,7 +254,7 @@ sequenceDiagram
 | `ownerId` | `string` | 所有者 |
 | `nodes` | `{ gx, gy }[]` | 折线节点（≥ 2） |
 | `investedE` | `number` | 投入 E |
-| `buildTicksRemaining` / `buildTicksTotal` | `number` | 建造进度 |
+| `buildTicksRemaining` / `buildTicksTotal` | `number` | 建造进度（敌方仅掩码 `1/1` 在建 / `0/0` 完成，§5.2） |
 | `visionLevel?` | `"satellite"` \| `"direct"` | 过滤快照上的可见级别 |
 
 ### 4.3 `UnitGroup`（`units/types.ts`）
@@ -351,8 +351,8 @@ const fullVision = role === "spectator" || phaseFor(player) === "ended";
 | 级别 | 结果 |
 |------|------|
 | 己方 | 全量 + `visionLevel: "direct"` |
-| 敌方 `direct` | 保留路径与建造 ticks；`investedE = 0` |
-| 敌方 `satellite` | 公路进度清零；铁路可保留建造 ticks（可见在建铁路） |
+| 敌方 `direct` | 保留路径；`investedE = 0`；建造 ticks 掩码为在建 `1/1`、已完成 `0/0`（`maskedLiaisonBuildTicks`，不泄露真实进度，在建期间不产生逐 tick delta） |
+| 敌方 `satellite` | 公路仅完成后可见（`0/0`）；在建铁路可见，建造 ticks 同上掩码为 `1/1` |
 | fiber 等不可卫星见 | 通常不到卫星分支（见 [vision.md](./vision.md)） |
 
 ### 5.3 单位过滤摘要（`filterUnitForViewer`）

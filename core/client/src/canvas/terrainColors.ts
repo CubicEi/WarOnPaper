@@ -18,28 +18,33 @@ export function terrainFillColor(map: TerrainMap, x: number, y: number): string 
   return TERRAIN_COLORS[cell.ground];
 }
 
-/** Draw filled terrain cells into an already-transformed layout-space context.
- *  `zoom` matches the map scale so oil/uranium borders thin when zooming in. */
+/** Draw filled terrain cells into an already-transformed layout-space context. */
 export function fillTerrainCells(
   ctx: CanvasRenderingContext2D,
   terrain: TerrainMap,
   originX: number,
   originY: number,
   cell: number,
-  zoom = 1,
 ): void {
-  // Fill ground + forest
   for (let y = 0; y < terrain.height; y++) {
     for (let x = 0; x < terrain.width; x++) {
       ctx.fillStyle = terrainFillColor(terrain, x, y);
       ctx.fillRect(originX + x * cell, originY + y * cell, cell + 0.5, cell + 0.5);
     }
   }
+}
 
-  // Borders in layout space under scale(zoom): screenPx = lineWidth * zoom.
-  // Thin with zoom the same way as grid lines.
-  const borderScreenPx = Math.max(3, (cell * 0.2) / zoom);
-  ctx.lineWidth = borderScreenPx / zoom;
+/** Oil/uranium cell borders; drawn above the grid. `borderLineWidth` is layout-space. */
+export function strokeOilUraniumBorders(
+  ctx: CanvasRenderingContext2D,
+  terrain: TerrainMap,
+  originX: number,
+  originY: number,
+  cell: number,
+  borderLineWidth: number,
+): void {
+  // Caller supplies layout lineWidth (screenPx×2 / zoom).
+  ctx.lineWidth = borderLineWidth;
   for (let y = 0; y < terrain.height; y++) {
     for (let x = 0; x < terrain.width; x++) {
       const c = terrain.cells[y * terrain.width + x];

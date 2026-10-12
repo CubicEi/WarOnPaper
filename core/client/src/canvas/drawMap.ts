@@ -38,7 +38,7 @@ import {
   workRangeCircles,
 } from "@wop/shared";
 import type { VisionSource } from "@wop/shared";
-import { fillTerrainCells } from "./terrainColors";
+import { fillTerrainCells, strokeOilUraniumBorders } from "./terrainColors";
 import { getBuildingIcon } from "./buildingIcons";
 import { getUnitIcon } from "./unitIcons";
 import { log } from "../net/log";
@@ -77,6 +77,156 @@ export const MAP_FIT_MARGIN_RATIO = 0.06;
 export const MAP_FIT_MARGIN_MIN = 56;
 export const MAP_ZOOM_MIN = 1;
 export const MAP_ZOOM_MAX = 16;
+
+/**
+ * Screen-space stroke thickness that grows with zoom.
+ * Under `scale(zoom)`, use `lineWidth = mapZoomStrokeScreenPx(...) / zoom`.
+ * Grid uses a tiny floor then ×2; oil/uranium borders use minScreenPx = 1 then ×2
+ * (screen floor 2 CSS px).
+ * Landscape (`viewW >= viewH`) multiplies the base by 1.5; portrait keeps the base.
+ * `viewW`/`viewH` are read each call (draw-time canvas CSS size), not cached at mount.
+ */
+export function mapZoomStrokeScreenPx(
+  zoom: number,
+  minScreenPx: number,
+  viewW: number,
+  viewH: number,
+): number {
+  const base = Math.max(minScreenPx, ((zoom - 1) * 2) / MAP_ZOOM_MAX);
+  return viewW >= viewH ? 1.5 * base : base;
+}
+
+/**
+ * Building HP / garrison / ammo / training bars under icons.
+ * Thickness is `cell * 0.015` in layout space with a layout floor, then capped
+ * in CSS px so narrow/portrait viewports (small layout `cell` + high zoom) do
+ * not inflate on-screen bar height via the layout floor × zoom.
+ */
+export const BUILDING_BAR_SCREEN_MAX_PX = 3;
+export const BUILDING_BAR_GAP_SCREEN_MAX_PX = 2;
+
+/** Own building spawn / upgrade icon scale animation (matches HUD CSS ease). */
+export const BUILDING_SCALE_ANIM_MS = 400;
+
+/**
+ * Own-building map icon scale FX.
+ * - `spawn`: new instance id → scale 0→1
+ * - `upgrade`: same id, `buildingId` or `level` changed → old 1→0 while new 0→1
+ * - `despawn`: id left the list (demolish / destroyed) → last-seen `building` 1→0;
+ *   drawn as a ghost only (not in `buildings`, so no hit-test / vision / links)
+ */
+export type BuildingScaleAnim =
+  | { mode: "spawn"; startedAt: number }
+  | { mode: "upgrade"; startedAt: number; fromBuildingId: string }
+  | {
+      mode: "despawn";
+      startedAt: number;
+      building: PlacedBuilding;
+      /** Comms link state on the last snapshot that still had the building. */
+      linked: boolean;
+    };
+
+/** CSS `cubic-bezier(0.22, 1, 0.36, 1)` unit curve (Newton solve on x, sample y). */
+export function buildingScaleEase(t: number): number {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  const x1 = 0.22;
+  const y1 = 1;
+  const x2 = 0.36;
+  const y2 = 1;
+  const cx = 3 * x1;
+  const bx = 3 * (x2 - x1) - cx;
+  const ax = 1 - cx - bx;
+  const cy = 3 * y1;
+  const by = 3 * (y2 - y1) - cy;
+  const ay = 1 - cy - by;
+  let u = t;
+  for (let i = 0; i < 6; i++) {
+    const x = ((ax * u + bx) * u + cx) * u - t;
+    const dx = (3 * ax * u + 2 * bx) * u + cx;
+    if (Math.abs(dx) < 1e-6) break;
+    u -= x / dx;
+    if (u < 0) u = 0;
+    else if (u > 1) u = 1;
+  }
+  return ((ay * u + by) * u + cy) * u;
+}
+
+/** Resolve current / outgoing icon scales for a building anim at `now`. */
+export function resolveBuildingScaleAnim(
+  anim: BuildingScaleAnim | undefined,
+  now: number,
+): {
+  scale: number;
+  fromScale: number;
+  fromBuildingId: string | null;
+  active: boolean;
+} {
+  if (!anim) {
+    return { scale: 1, fromScale: 0, fromBuildingId: null, active: false };
+  }
+  const raw = (now - anim.startedAt) / BUILDING_SCALE_ANIM_MS;
+  if (raw >= 1) {
+    return {
+      scale: anim.mode === "despawn" ? 0 : 1,
+      fromScale: 0,
+      fromBuildingId: null,
+      active: false,
+    };
+  }
+  const e = buildingScaleEase(Math.max(0, raw));
+  if (anim.mode === "despawn") {
+    return { scale: 1 - e, fromScale: 0, fromBuildingId: null, active: true };
+  }
+  if (anim.mode === "spawn") {
+    return { scale: e, fromScale: 0, fromBuildingId: null, active: true };
+  }
+  return {
+    scale: e,
+    fromScale: 1 - e,
+    fromBuildingId: anim.fromBuildingId,
+    active: true,
+  };
+}
+
+/** Scale layout draws around building center (icon + bars share one transform). */
+function withBuildingCenterScale(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  scale: number,
+  draw: () => void,
+): void {
+  if (!(scale > 0.001)) return;
+  if (scale >= 0.999) {
+    draw();
+    return;
+  }
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(scale, scale);
+  ctx.translate(-x, -y);
+  draw();
+  ctx.restore();
+}
+
+/**
+ * CSS reference pixel density for approximate physical size.
+ * 96 CSS px = 1 in — do NOT multiply by devicePixelRatio (that is framebuffer
+ * density, not a reliable PPI for finger/eye sizing).
+ */
+export const CSS_PX_PER_INCH = 96;
+export const MM_PER_INCH = 25.4;
+
+/** Convert millimetres to CSS pixels (approx. physical size on screen). */
+export function mmToCssPx(mm: number): number {
+  return (mm * CSS_PX_PER_INCH) / MM_PER_INCH;
+}
+
+/** On-screen cell edge length in CSS px (`cell` from getBoardLayout × zoom). */
+export function cellScreenCssPx(cell: number, zoom: number): number {
+  return cell * zoom;
+}
 
 export function mapFitMargin(width: number, height: number): number {
   return Math.max(MAP_FIT_MARGIN_MIN, Math.min(width, height) * MAP_FIT_MARGIN_RATIO);
@@ -205,6 +355,16 @@ export interface DrawMapArgs {
   fireAimAt?: { gx: number; gy: number } | null;
   /** Server tick — used for launcher/AA fire-cooldown pie sectors. */
   tick?: number;
+  /**
+   * Own-building spawn / upgrade scale FX (id → anim).
+   * Drawn in `drawBuildings`; bars share the icon scale transform.
+   */
+  buildingScaleAnims?: ReadonlyMap<string, BuildingScaleAnim> | null;
+  /**
+   * Own / ally liaison build front (id → fractional segment index from nodes[0]).
+   * Ignored for enemy lines.
+   */
+  liaisonBuildProgress?: ReadonlyMap<string, number> | null;
 }
 
 /** Fixed screen-pixel cancel control while aiming a launcher. */
@@ -584,6 +744,8 @@ function drawBuildingIconAt(
   connectedIds: ReadonlySet<string> | null,
   showCommStatus: boolean,
   teams?: TeamRoster | null,
+  scale = 1,
+  buildingIdOverride?: string | null,
 ): void {
   const x = originX + b.gx * cell;
   const y = originY + b.gy * cell;
@@ -598,27 +760,30 @@ function drawBuildingIconAt(
   if (showCommStatus && mine && !incomplete) {
     iconVariant = linked ? "online" : "offline";
   }
-  const img = getBuildingIcon(b.buildingId, iconVariant);
-  ctx.save();
-  if (img) {
-    ctx.drawImage(img, x - half, y - half, size, size);
-  } else {
-    const fallback =
-      showCommStatus && mine && !incomplete
-        ? linked
-          ? COMM_STATUS_LINKED
-          : COMM_STATUS_UNLINKED
-        : relation === "own"
-          ? "#8a8a8a"
-          : relation === "ally"
-            ? "#006eeb"
-            : "#eb6040";
-    ctx.fillStyle = fallback;
-    ctx.beginPath();
-    ctx.arc(x, y, half * 0.55, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
+  const kind = buildingIdOverride ?? b.buildingId;
+  const img = getBuildingIcon(kind, iconVariant);
+  withBuildingCenterScale(ctx, x, y, scale, () => {
+    ctx.save();
+    if (img) {
+      ctx.drawImage(img, x - half, y - half, size, size);
+    } else {
+      const fallback =
+        showCommStatus && mine && !incomplete
+          ? linked
+            ? COMM_STATUS_LINKED
+            : COMM_STATUS_UNLINKED
+          : relation === "own"
+            ? "#8a8a8a"
+            : relation === "ally"
+              ? "#006eeb"
+              : "#eb6040";
+      ctx.fillStyle = fallback;
+      ctx.beginPath();
+      ctx.arc(x, y, half * 0.55, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  });
 }
 
 /**
@@ -639,6 +804,7 @@ function drawInspectFocusHighlight(
   connectedIds: ReadonlySet<string> | null,
   showCommStatus: boolean,
   teams?: TeamRoster | null,
+  buildingScaleAnims?: ReadonlyMap<string, BuildingScaleAnim> | null,
 ): void {
   ctx.save();
   ctx.fillStyle = INSPECT_FOCUS_DIM;
@@ -648,6 +814,26 @@ function drawInspectFocusHighlight(
   if (focus.kind === "building") {
     const b = buildings?.find((x) => x.id === focus.id);
     if (b) {
+      const now = performance.now();
+      const resolved = resolveBuildingScaleAnim(
+        buildingScaleAnims?.get(b.id),
+        now,
+      );
+      if (resolved.fromBuildingId && resolved.fromScale > 0.001) {
+        drawBuildingIconAt(
+          ctx,
+          b,
+          originX,
+          originY,
+          cell,
+          myPlayerId,
+          connectedIds,
+          showCommStatus,
+          teams,
+          resolved.fromScale,
+          resolved.fromBuildingId,
+        );
+      }
       drawBuildingIconAt(
         ctx,
         b,
@@ -658,6 +844,7 @@ function drawInspectFocusHighlight(
         connectedIds,
         showCommStatus,
         teams,
+        resolved.scale,
       );
     }
     return;
@@ -703,12 +890,13 @@ function drawBuildings(
   originX: number,
   originY: number,
   cell: number,
-  _zoom: number,
+  zoom: number,
   myPlayerId: string | null,
   connectedIds?: ReadonlySet<string> | null,
   showCommStatus = false,
   tick = 0,
   teams?: TeamRoster | null,
+  buildingScaleAnims?: ReadonlyMap<string, BuildingScaleAnim> | null,
 ): void {
   const sig = buildings
     .map((b) => `${b.id}:${b.buildingId}@${b.gx},${b.gy}:own=${b.ownerId === myPlayerId}`)
@@ -717,6 +905,7 @@ function drawBuildings(
     lastDrawnBuildingSig = sig;
     log.info("draw", "buildings changed", buildings.length, sig || "(none)");
   }
+  const now = performance.now();
   for (const b of buildings) {
     const x = originX + b.gx * cell;
     const y = originY + b.gy * cell;
@@ -725,8 +914,11 @@ function drawBuildings(
     const relation = ownerRelation(b.ownerId, myPlayerId, teams);
     const mine = relation === "own";
     const incomplete = b.buildTicksRemaining > 0;
+    const anim = mine ? buildingScaleAnims?.get(b.id) : undefined;
+    const ghostLinked = anim?.mode === "despawn" ? anim.linked : undefined;
     const linked =
-      !!connectedIds && isBuildingCommsLinked(b.id, connectedIds);
+      ghostLinked ??
+      (!!connectedIds && isBuildingCommsLinked(b.id, connectedIds));
     // Comm advanced view: teal online / red offline icons for own buildings.
     // Incomplete keeps own (white) icon — no gray status ring.
     let iconVariant: "own" | "ally" | "enemy" | "online" | "offline" =
@@ -747,151 +939,187 @@ function drawBuildings(
       !showCommStatus &&
       mine &&
       connectedIds &&
-      !connectedIds.has(b.id) &&
+      !(ghostLinked ?? connectedIds.has(b.id)) &&
       b.buildingId !== "capital"
     ) {
       alpha *= 0.45;
     }
 
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    if (img) {
-      ctx.drawImage(img, x - half, y - half, size, size);
-    } else {
-      const fallback =
-        showCommStatus && mine && !incomplete
-          ? linked
-            ? COMM_STATUS_LINKED
-            : COMM_STATUS_UNLINKED
-          : relation === "own"
-            ? "#8a8a8a"
-            : relation === "ally"
-              ? "#006eeb"
-              : "#eb6040";
-      ctx.fillStyle = fallback;
-      ctx.beginPath();
-      ctx.arc(x, y, half * 0.55, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
+    const resolved = resolveBuildingScaleAnim(anim, now);
 
-    // Launch / AA cooldown: gray pie over the icon (remaining fraction of period).
-    const reloadE = BUILDING_BY_ID[b.buildingId]?.reloadE ?? 0;
-    if (reloadE > 0 && isLaunchCoolingDown(b, tick)) {
-      const total = launchCooldownTicks(reloadE);
-      const remaining = (b.fireCooldownUntilTick ?? 0) - tick;
-      if (total > 0 && remaining > 0) {
-        drawLaunchCooldownSector(
-          ctx,
-          x,
-          y,
-          half * 0.72,
-          Math.min(1, remaining / total),
-        );
-      }
+    // Upgrade crossfade: outgoing kind shrinks while the new icon grows.
+    if (resolved.fromBuildingId && resolved.fromScale > 0.001) {
+      const fromImg = getBuildingIcon(resolved.fromBuildingId, iconVariant);
+      withBuildingCenterScale(ctx, x, y, resolved.fromScale, () => {
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        if (fromImg) {
+          ctx.drawImage(fromImg, x - half, y - half, size, size);
+        } else {
+          ctx.fillStyle =
+            relation === "own"
+              ? "#8a8a8a"
+              : relation === "ally"
+                ? "#006eeb"
+                : "#eb6040";
+          ctx.beginPath();
+          ctx.arc(x, y, half * 0.55, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      });
     }
 
-    // 线性升级建筑：左下角罗马数字等级（己方可见）
-    if (mine && supportsLinearUpgrade(b.buildingId)) {
-      const lvl = buildingLevel(b);
-      const roman = romanLevelLabel(lvl);
-      // Keep well under icon body; avoid Unicode numeral fallbacks that look stroked.
-      const fontPx = Math.max(2, cell * 0.028);
+    // Icon + chrome + status bars share one center scale (spawn / upgrade new).
+    withBuildingCenterScale(ctx, x, y, resolved.scale, () => {
       ctx.save();
-      ctx.shadowBlur = 0;
-      ctx.shadowColor = "transparent";
-      ctx.lineWidth = 0;
-      ctx.font = `${fontPx}px SimSun, "Songti SC", "Noto Serif CJK SC", "宋体", serif`;
-      ctx.textAlign = "left";
-      ctx.textBaseline = "bottom";
-      ctx.fillStyle = "#ffffff";
-      const tx = x - half + cell * 0.012;
-      const ty = y + half - cell * 0.006;
-      ctx.fillText(roman, tx, ty);
+      ctx.globalAlpha = alpha;
+      if (img) {
+        ctx.drawImage(img, x - half, y - half, size, size);
+      } else {
+        const fallback =
+          showCommStatus && mine && !incomplete
+            ? linked
+              ? COMM_STATUS_LINKED
+              : COMM_STATUS_UNLINKED
+            : relation === "own"
+              ? "#8a8a8a"
+              : relation === "ally"
+                ? "#006eeb"
+                : "#eb6040";
+        ctx.fillStyle = fallback;
+        ctx.beginPath();
+        ctx.arc(x, y, half * 0.55, 0, Math.PI * 2);
+        ctx.fill();
+      }
       ctx.restore();
-    }
 
-    // HP for own/ally or enemy direct; U for own/ally (§4.5 + team mode).
-    const showHp =
-      mine ||
-      relation === "ally" ||
-      (b.visionLevel === "direct" && b.hpMax > 0);
-    const showU = mine || relation === "ally";
-    if (!showHp && !showU) continue;
-
-    const def = BUILDING_BY_ID[b.buildingId];
-    const isTrainingGround = b.buildingId === "training_ground";
-    const hpRatio = b.hpMax > 0 ? Math.max(0, Math.min(1, b.hp / b.hpMax)) : 0;
-    const storeEMax = showU ? (def?.storeEMax ?? 0) : 0;
-    const ammoMax = showU ? (def?.ammoMax ?? 0) : 0;
-    const uMax =
-      showU && storeEMax <= 0 && ammoMax <= 0 ? effectiveUmax(b) : 0;
-    const storeECur =
-      storeEMax <= 0 ? 0 : Math.max(0, Math.min(storeEMax, b.storeE ?? 0));
-    const storeERatio =
-      storeEMax > 0 ? Math.max(0, Math.min(1, storeECur / storeEMax)) : 0;
-    const ammoCur =
-      ammoMax <= 0 ? 0 : Math.max(0, Math.min(ammoMax, b.ammo ?? 0));
-    const ammoRatio =
-      ammoMax > 0 ? Math.max(0, Math.min(1, ammoCur / ammoMax)) : 0;
-    const uCur =
-      uMax <= 0 ? 0 : Math.max(0, Math.min(uMax, b.u ?? 0));
-    const uAway =
-      uMax <= 0 ? 0 : Math.max(0, Math.min(uMax - uCur, awayOccupiedU(b)));
-    const uPresentRatio = uMax > 0 ? Math.max(0, Math.min(1, uCur / uMax)) : 0;
-    const uAwayRatio = uMax > 0 ? Math.max(0, Math.min(1, uAway / uMax)) : 0;
-    const trainProgress = isTrainingGround ? trainingHeadProgress(b) : 0;
-    const trainActive =
-      isTrainingGround && (b.trainingQueue?.length ?? 0) > 0;
-
-    const barW = size * 0.9;
-    const barH = Math.max(0.5, cell * 0.015);
-    const gap = Math.max(0.5, cell * 0.008);
-    const barX = x - barW / 2;
-    const hpY = y + half * 0.85;
-    const uY = hpY + barH + gap;
-
-    if (showHp && b.hpMax > 0) {
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fillRect(barX, hpY, barW, barH);
-      ctx.fillStyle = "#c45c5c";
-      ctx.fillRect(barX, hpY, barW * hpRatio, barH);
-    }
-
-    if (storeEMax > 0) {
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fillRect(barX, uY, barW, barH);
-      ctx.fillStyle = "#5cb85c";
-      ctx.fillRect(barX, uY, barW * storeERatio, barH);
-    } else if (ammoMax > 0) {
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fillRect(barX, uY, barW, barH);
-      ctx.fillStyle = "#4a90d9";
-      ctx.fillRect(barX, uY, barW * ammoRatio, barH);
-    } else if (uMax > 0) {
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fillRect(barX, uY, barW, barH);
-      ctx.fillStyle = "#c9a227";
-      ctx.fillRect(barX, uY, barW * uPresentRatio, barH);
-      if (uAway > 0) {
-        ctx.fillStyle = "#7a6a1a";
-        ctx.fillRect(barX + barW * uPresentRatio, uY, barW * uAwayRatio, barH);
+      // Launch / AA cooldown: gray pie over the icon (remaining fraction of period).
+      const reloadE = BUILDING_BY_ID[b.buildingId]?.reloadE ?? 0;
+      if (reloadE > 0 && isLaunchCoolingDown(b, tick)) {
+        const total = launchCooldownTicks(reloadE);
+        const remaining = (b.fireCooldownUntilTick ?? 0) - tick;
+        if (total > 0 && remaining > 0) {
+          drawLaunchCooldownSector(
+            ctx,
+            x,
+            y,
+            half * 0.72,
+            Math.min(1, remaining / total),
+          );
+        }
       }
-    } else if (showU && isTrainingGround) {
-      // Same size as garrison bars; content matches BuildingInspectHud training bar.
-      ctx.fillStyle = "rgba(0,0,0,0.45)";
-      ctx.fillRect(barX, uY, barW, barH);
-      ctx.fillStyle = "#c9a227";
-      ctx.fillRect(barX, uY, barW * trainProgress, barH);
-      if (trainActive) {
-        const periodMs = 1400;
-        const t = (performance.now() % periodMs) / periodMs;
-        const runnerW = Math.max(1, barH);
-        const runnerX = barX + t * Math.max(0, barW - runnerW);
-        ctx.fillStyle = "#0a0a0a";
-        ctx.fillRect(runnerX, uY, runnerW, barH);
+
+      // 线性升级建筑：左下角罗马数字等级（己方可见）
+      if (mine && supportsLinearUpgrade(b.buildingId)) {
+        const lvl = buildingLevel(b);
+        const roman = romanLevelLabel(lvl);
+        // Keep well under icon body; avoid Unicode numeral fallbacks that look stroked.
+        const fontPx = Math.max(2, cell * 0.028);
+        ctx.save();
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = "transparent";
+        ctx.lineWidth = 0;
+        ctx.font = `${fontPx}px SimSun, "Songti SC", "Noto Serif CJK SC", "宋体", serif`;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "bottom";
+        ctx.fillStyle = "#ffffff";
+        const tx = x - half + cell * 0.012;
+        const ty = y + half - cell * 0.006;
+        ctx.fillText(roman, tx, ty);
+        ctx.restore();
       }
-    }
+
+      // HP for own/ally or enemy direct; U for own/ally (§4.5 + team mode).
+      const showHp =
+        mine ||
+        relation === "ally" ||
+        (b.visionLevel === "direct" && b.hpMax > 0);
+      const showU = mine || relation === "ally";
+      if (!showHp && !showU) return;
+
+      const def = BUILDING_BY_ID[b.buildingId];
+      const isTrainingGround = b.buildingId === "training_ground";
+      const hpRatio = b.hpMax > 0 ? Math.max(0, Math.min(1, b.hp / b.hpMax)) : 0;
+      const storeEMax = showU ? (def?.storeEMax ?? 0) : 0;
+      const ammoMax = showU ? (def?.ammoMax ?? 0) : 0;
+      const uMax =
+        showU && storeEMax <= 0 && ammoMax <= 0 ? effectiveUmax(b) : 0;
+      const storeECur =
+        storeEMax <= 0 ? 0 : Math.max(0, Math.min(storeEMax, b.storeE ?? 0));
+      const storeERatio =
+        storeEMax > 0 ? Math.max(0, Math.min(1, storeECur / storeEMax)) : 0;
+      const ammoCur =
+        ammoMax <= 0 ? 0 : Math.max(0, Math.min(ammoMax, b.ammo ?? 0));
+      const ammoRatio =
+        ammoMax > 0 ? Math.max(0, Math.min(1, ammoCur / ammoMax)) : 0;
+      const uCur =
+        uMax <= 0 ? 0 : Math.max(0, Math.min(uMax, b.u ?? 0));
+      const uAway =
+        uMax <= 0 ? 0 : Math.max(0, Math.min(uMax - uCur, awayOccupiedU(b)));
+      const uPresentRatio = uMax > 0 ? Math.max(0, Math.min(1, uCur / uMax)) : 0;
+      const uAwayRatio = uMax > 0 ? Math.max(0, Math.min(1, uAway / uMax)) : 0;
+      const trainProgress = isTrainingGround ? trainingHeadProgress(b) : 0;
+      const trainActive =
+        isTrainingGround && (b.trainingQueue?.length ?? 0) > 0;
+
+      const barW = size * 0.9;
+      // Layout size with floor, then clamp on-screen thickness (see BUILDING_BAR_*).
+      const z = Math.max(1e-6, zoom);
+      const barH = Math.min(
+        BUILDING_BAR_SCREEN_MAX_PX / z,
+        Math.max(0.5, cell * 0.015),
+      );
+      const gap = Math.min(
+        BUILDING_BAR_GAP_SCREEN_MAX_PX / z,
+        Math.max(0.5, cell * 0.008),
+      );
+      const barX = x - barW / 2;
+      const hpY = y + half * 0.85;
+      const uY = hpY + barH + gap;
+
+      if (showHp && b.hpMax > 0) {
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.fillRect(barX, hpY, barW, barH);
+        ctx.fillStyle = "#c45c5c";
+        ctx.fillRect(barX, hpY, barW * hpRatio, barH);
+      }
+
+      if (storeEMax > 0) {
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.fillRect(barX, uY, barW, barH);
+        ctx.fillStyle = "#5cb85c";
+        ctx.fillRect(barX, uY, barW * storeERatio, barH);
+      } else if (ammoMax > 0) {
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.fillRect(barX, uY, barW, barH);
+        ctx.fillStyle = "#4a90d9";
+        ctx.fillRect(barX, uY, barW * ammoRatio, barH);
+      } else if (uMax > 0) {
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.fillRect(barX, uY, barW, barH);
+        ctx.fillStyle = "#c9a227";
+        ctx.fillRect(barX, uY, barW * uPresentRatio, barH);
+        if (uAway > 0) {
+          ctx.fillStyle = "#7a6a1a";
+          ctx.fillRect(barX + barW * uPresentRatio, uY, barW * uAwayRatio, barH);
+        }
+      } else if (showU && isTrainingGround) {
+        // Same size as garrison bars; content matches BuildingInspectHud training bar.
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.fillRect(barX, uY, barW, barH);
+        ctx.fillStyle = "#c9a227";
+        ctx.fillRect(barX, uY, barW * trainProgress, barH);
+        if (trainActive) {
+          const periodMs = 1400;
+          const t = (now % periodMs) / periodMs;
+          const runnerW = Math.max(1 / z, barH);
+          const runnerX = barX + t * Math.max(0, barW - runnerW);
+          ctx.fillStyle = "#0a0a0a";
+          ctx.fillRect(runnerX, uY, runnerW, barH);
+        }
+      }
+    });
   }
 }
 
@@ -950,6 +1178,11 @@ function drawLiaisonPolyline(
      * Return undefined to fall back to `strokeColor` / default.
      */
     segmentColor?: (ax: number, ay: number, bx: number, by: number) => string | undefined;
+    /**
+     * With `incomplete`: fractional segment index already built from nodes[0]
+     * (e.g. 2.4). That prefix uses the completed style; omitted = whole line incomplete.
+     */
+    builtSegments?: number;
   },
 ): void {
   if (nodes.length < 2) return;
@@ -977,16 +1210,48 @@ function drawLiaisonPolyline(
     ctx.stroke();
   };
 
-  const strokeSegments = (colorFor: (ax: number, ay: number, bx: number, by: number) => string) => {
-    for (let i = 1; i < nodes.length; i++) {
-      const a = nodes[i - 1];
-      const b = nodes[i];
-      ctx.strokeStyle = colorFor(a.gx, a.gy, b.gx, b.gy);
-      ctx.beginPath();
-      ctx.moveTo(originX + a.gx * cell, originY + a.gy * cell);
-      ctx.lineTo(originX + b.gx * cell, originY + b.gy * cell);
-      ctx.stroke();
+  const segCount = nodes.length - 1;
+  const pointAt = (t: number): { x: number; y: number } => {
+    const i = Math.min(segCount - 1, Math.max(0, Math.floor(t)));
+    const f = Math.min(1, Math.max(0, t - i));
+    const a = nodes[i];
+    const b = nodes[i + 1];
+    return {
+      x: originX + (a.gx + (b.gx - a.gx) * f) * cell,
+      y: originY + (a.gy + (b.gy - a.gy) * f) * cell,
+    };
+  };
+
+  /** Stroke the sub-polyline between fractional segment indices t0..t1. */
+  const strokeRange = (
+    t0: number,
+    t1: number,
+    colorFor?: (ax: number, ay: number, bx: number, by: number) => string,
+  ) => {
+    if (t1 - t0 <= 1e-6) return;
+    if (colorFor) {
+      for (let i = Math.floor(t0); i < Math.ceil(t1) && i < segCount; i++) {
+        const a = nodes[i];
+        const b = nodes[i + 1];
+        const p = pointAt(Math.max(t0, i));
+        const q = pointAt(Math.min(t1, i + 1));
+        ctx.strokeStyle = colorFor(a.gx, a.gy, b.gx, b.gy);
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(q.x, q.y);
+        ctx.stroke();
+      }
+      return;
     }
+    const p = pointAt(t0);
+    ctx.beginPath();
+    ctx.moveTo(p.x, p.y);
+    for (let i = Math.floor(t0) + 1; i < t1; i++) {
+      ctx.lineTo(originX + nodes[i].gx * cell, originY + nodes[i].gy * cell);
+    }
+    const q = pointAt(t1);
+    ctx.lineTo(q.x, q.y);
+    ctx.stroke();
   };
 
   ctx.save();
@@ -1008,20 +1273,24 @@ function drawLiaisonPolyline(
 
   ctx.lineWidth = style.lineWidth;
   ctx.lineCap = style.lineCap;
-  ctx.globalAlpha = preview ? 0.7 : incomplete ? 0.4 : 0.95;
+  const colorFor = segmentColor
+    ? (ax: number, ay: number, bx: number, by: number) =>
+        segmentColor(ax, ay, bx, by) ?? defaultColor
+    : undefined;
+  if (!colorFor) ctx.strokeStyle = defaultColor;
+  let builtEnd = segCount;
+  if (preview) builtEnd = 0;
+  else if (incomplete) builtEnd = Math.min(segCount, Math.max(0, opts?.builtSegments ?? 0));
   // Kind dash pattern; incomplete/preview slightly denser dash overlay only for solid road
-  if (style.dash.length > 0) {
+  if (builtEnd > 0) {
+    ctx.globalAlpha = 0.95;
     ctx.setLineDash(style.dash);
-  } else if (preview || incomplete) {
-    ctx.setLineDash([cell * 0.4, cell * 0.25]);
-  } else {
-    ctx.setLineDash([]);
+    strokeRange(0, builtEnd, colorFor);
   }
-  if (segmentColor) {
-    strokeSegments((ax, ay, bx, by) => segmentColor(ax, ay, bx, by) ?? defaultColor);
-  } else {
-    ctx.strokeStyle = defaultColor;
-    strokeFullPath();
+  if (builtEnd < segCount) {
+    ctx.globalAlpha = preview ? 0.7 : 0.4;
+    ctx.setLineDash(style.dash.length > 0 ? style.dash : [cell * 0.4, cell * 0.25]);
+    strokeRange(builtEnd, segCount, colorFor);
   }
   ctx.restore();
 }
@@ -1080,6 +1349,7 @@ function drawLiaisons(
   connectedIds?: ReadonlySet<string> | null,
   showCommStatus = false,
   teams?: TeamRoster | null,
+  buildProgress?: ReadonlyMap<string, number> | null,
 ): void {
   const usedEdges =
     showCommStatus &&
@@ -1115,6 +1385,8 @@ function drawLiaisons(
       selected: selectedId != null && line.id === selectedId,
       relation,
       segmentColor,
+      // Enemy build progress stays hidden (whole line incomplete).
+      builtSegments: relation === "enemy" ? undefined : buildProgress?.get(line.id),
     });
   }
 }
@@ -1376,6 +1648,8 @@ export function drawMap(
     pathPreviews,
     fireAimAt,
     tick = 0,
+    buildingScaleAnims,
+    liaisonBuildProgress,
   }: DrawMapArgs,
 ): void {
   const dpr = devicePixelRatio || 1;
@@ -1394,12 +1668,13 @@ export function drawMap(
   ctx.translate(-cx, -cy);
 
   if (terrain) {
-    fillTerrainCells(ctx, terrain, originX, originY, cell, zoom);
+    // Ground / forest fills under the grid; oil/uranium borders drawn after.
+    fillTerrainCells(ctx, terrain, originX, originY, cell);
   }
 
-  // Grid stroke is in layout space under scale(zoom): screenPx = lineWidth * zoom.
-  // Base thickness tracks viewport via `cell`; zoom-in thins the on-screen stroke.
-  const gridScreenPx = Math.max(1.5, Math.min(2, cell * 0.18) / zoom);
+  // Grid stroke under scale(zoom): same zoom curve as oil/uranium, tiny floor,
+  // then ×2 on screen so zoom≈1 does not vanish entirely.
+  const gridScreenPx = mapZoomStrokeScreenPx(zoom, 0.05, width, height) * 2;
   ctx.strokeStyle = GRID;
   ctx.lineWidth = gridScreenPx / zoom;
   ctx.beginPath();
@@ -1418,14 +1693,26 @@ export function drawMap(
 
   ctx.fillStyle = "#5c5c5c";
   const step = cell >= 10 ? 1 : 2;
-  // Dot radius tracks cell size and thins with zoom (same rule as grid lines).
-  const r = Math.max(0.35, (cell * 0.04) / zoom) / zoom;
+  // Dot radius: same display-thickness rule as grid lines, slightly smaller.
+  const r = (gridScreenPx * 0.45) / zoom;
   for (let i = 0; i < map.linesX; i += step) {
     for (let j = 0; j < map.linesY; j += step) {
       ctx.beginPath();
       ctx.arc(originX + i * cell, originY + j * cell, r, 0, Math.PI * 2);
       ctx.fill();
     }
+  }
+
+  if (terrain) {
+    // Oil/uranium above grid: same zoom curve (minScreenPx=1), then ×2 on screen.
+    strokeOilUraniumBorders(
+      ctx,
+      terrain,
+      originX,
+      originY,
+      cell,
+      (mapZoomStrokeScreenPx(zoom, 1, width, height) * 2) / zoom,
+    );
   }
 
   const linked =
@@ -1445,6 +1732,7 @@ export function drawMap(
       linked,
       !!showCommStatus,
       teams,
+      liaisonBuildProgress,
     );
   }
 
@@ -1465,10 +1753,18 @@ export function drawMap(
     drawPollutionZones(ctx, pollutionZones, originX, originY, cell, zoom);
   }
 
-  if (buildings && buildings.length > 0) {
+  const despawnGhosts: PlacedBuilding[] = [];
+  if (buildingScaleAnims) {
+    for (const anim of buildingScaleAnims.values()) {
+      if (anim.mode === "despawn") despawnGhosts.push(anim.building);
+    }
+  }
+  if ((buildings && buildings.length > 0) || despawnGhosts.length > 0) {
     drawBuildings(
       ctx,
-      buildings,
+      despawnGhosts.length > 0
+        ? [...(buildings ?? []), ...despawnGhosts]
+        : buildings ?? [],
       originX,
       originY,
       cell,
@@ -1478,6 +1774,7 @@ export function drawMap(
       !!showCommStatus,
       tick,
       teams,
+      buildingScaleAnims,
     );
   }
 
@@ -1585,6 +1882,7 @@ export function drawMap(
       linked,
       !!showCommStatus,
       teams,
+      buildingScaleAnims,
     );
   }
 

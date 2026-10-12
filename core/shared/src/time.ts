@@ -55,8 +55,8 @@ export function ticksToSec(ticks: number): number {
 }
 
 /**
- * Comm diffusion wave restart interval in wall-clock seconds.
- * Restores prior 15 Hz × 10-tick cadence (`10 / 15 ≈ 0.667s`).
+ * Comm diffusion wave restart interval in wall-clock seconds
+ * (`TICK_HZ` ticks via `durationSecToTicks`).
  */
 export const COMM_WAVE_INTERVAL_SEC = 1;
 

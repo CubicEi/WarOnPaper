@@ -83,7 +83,7 @@
 
 ### `filterLiaisonForViewer`
 
-己方全量；敌方 direct 去 investedE；satellite 公路进度清零、铁路可保留建造 ticks。
+己方/友方全量；敌方（direct 与 satellite）去 investedE，建造 ticks 经 `maskedLiaisonBuildTicks` 掩码：在建 `1/1`、已完成 `0/0`——客户端仍按 `buildTicksRemaining > 0` 画未完成，但拿不到真实进度，且在建期间过滤结果恒定、不产生逐 tick `liaisonsDelta` upsert。satellite 下公路仅完成后可见；在建铁路可见（掩码）。
 
 批量：`filterBuildingsForViewer` / `filterLiaisonsForViewer`。
 
