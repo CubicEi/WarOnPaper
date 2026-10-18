@@ -10,6 +10,8 @@ export interface UnitGroup {
   kind: UnitKind;
   /** Current U count in this group. */
   u: number;
+  /** Current hull HP for a single navy_carrier; absent on old saves means full HP. */
+  hullHp?: number;
   /** Grid coords, snapped to 0.2. */
   gx: number;
   gy: number;
@@ -46,6 +48,13 @@ export interface UnitGroup {
    */
   returnGx?: number;
   returnGy?: number;
+  /** Carrier air sortie / boarding target. */
+  carrierId?: string;
+  carrierSortieState?: "outbound" | "returning_carrier" | "boarding";
+  /**
+   * 母舰停港修舰累计秒（state === "docked"）；满 CARRIER_DOCK_REPAIR_INTERVAL_SEC 回 1 HP。
+   */
+  dockRepairTimerSec?: number;
   /**
    * After finishing the current path, enter `blockading` (封锁).
    * Cleared if movement is interrupted before arrival.
@@ -91,11 +100,13 @@ export interface UnitGroup {
   mutualDefenseForBuildingId?: string;
   mutualDefenseHomeBuildingId?: string;
   /**
-   * 航母（navy_carrier）上搭载的空军 U；上限 CARRIER_AIR_CAPACITY（3）。
+   * 母舰（navy_carrier）上搭载的空军 U；上限 CARRIER_AIR_CAPACITY（5）。
    */
   embarkedAirU?: number;
   /** 机库空军所属机场（损毁时释放 awayOccupied）. */
   embarkedAirHomeBuildingId?: string;
+  /** Air currently embarked, grouped by original airport for correct return routing. */
+  embarkedAirByHome?: Array<{ homeBuildingId: string; u: number }>;
   /**
    * 防空炮对空军的持续减 U 交战状态（§7.3）。
    * 离开范围后清除；弹药在进入时一次性扣 2。

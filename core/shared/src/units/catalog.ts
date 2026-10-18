@@ -2,14 +2,15 @@
 
 export type UnitKind = "infantry" | "armor" | "navy" | "navy_carrier" | "air";
 
-/** 停留 / 移动 / 驻守 / 封锁 / 交战 / 训练途中 */
+/** 停留 / 移动 / 驻守 / 封锁 / 交战 / 训练途中 / 停港 */
 export type UnitState =
   | "idle"
   | "moving"
   | "holding"
   | "blockading"
   | "fighting"
-  | "training";
+  | "training"
+  | "docked";
 
 export interface UnitKindDef {
   kind: UnitKind;
@@ -52,9 +53,14 @@ export const UNIT_SUPPLY_O_COST = 1;
 /** 单位 vs 建筑攻城节拍 5s：单位造成 U 伤害，建筑造成 ceil(U/3) */
 export const UNIT_SIEGE_INTERVAL_SEC = 5;
 
-/** 港口建造航母：500E；母舰容纳 3U 空军（规则 §7.3） */
-export const CARRIER_BUILD_E = 500;
-export const CARRIER_AIR_CAPACITY = 3;
+/** 港口建造航母：2000E；母舰容纳 5U 空军（规则 §7.3） */
+export const CARRIER_BUILD_E = 2000;
+export const CARRIER_AIR_CAPACITY = 5;
+export const CARRIER_SORTIE_RADIUS_DU = 8;
+/** 机场空军部署上舰：−5 O / 次 */
+export const CARRIER_DEPLOY_O_COST = 5;
+/** 停港修舰：每 2 秒恢复 1 点舰体 HP */
+export const CARRIER_DOCK_REPAIR_INTERVAL_SEC = 2;
 /** 新建航母船体编制（海军 U） */
 export const CARRIER_HULL_U = 1;
 
@@ -121,14 +127,14 @@ export const UNIT_BY_KIND: Record<UnitKind, UnitKindDef> = {
     iconIdle: "/icons/symbol/units/navy_unit.png",
     iconMoving: "/icons/symbol/units/navy_unit_moving.png",
   },
-  /** 海军（含母舰）：0.4 Du/s；港口 500E 建造；容纳 3U 空军。 */
+  /** 母舰：单艘舰体 10HP；0.4 Du/s；港口 2000E 建造；容纳 5U 空军。 */
   navy_carrier: {
     kind: "navy_carrier",
-    name: "海军（含母舰）",
-    hp: 2,
+    name: "母舰",
+    hp: 10,
     speedDuPerS: 0.4,
     visionR: 4,
-    carryEMax: 10,
+    carryEMax: 20,
     duPerE: 2,
     mountainBlocked: false,
     mountainSpeedFactor: 1,

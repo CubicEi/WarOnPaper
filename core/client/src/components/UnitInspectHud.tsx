@@ -1,16 +1,15 @@
 import {
   CARRIER_AIR_CAPACITY,
+  CARRIER_DEPLOY_O_COST,
   UNIT_BY_KIND,
   UNIT_STOP_E_COST,
   UNIT_STOP_O_COST,
   canUnitRetreat,
   canUnitStop,
   carrierAirRoom,
-  carrierCapacityLabel,
   estimatePathTimeSec,
   isCarrierKind,
   isMovingState,
-  unitCoordKey,
   unitHp,
   type PlacedBuilding,
   type PlacedLiaison,
@@ -22,8 +21,7 @@ import {
 export type UnitInspectAction =
   | "retreat"
   | "stop"
-  | "embark_air"
-  | "disembark_air"
+  | "deploy_air"
   | "attack";
 
 interface Props {
@@ -41,7 +39,7 @@ interface Props {
   units?: readonly UnitGroup[];
   /** Friendly ports used to detect berthed units. */
   buildings?: readonly PlacedBuilding[];
-  onAction?: (action: UnitInspectAction, unit: UnitGroup, detail?: { airUnitId?: string }) => void;
+  onAction?: (action: UnitInspectAction, unit: UnitGroup) => void;
   /** Teammate unit: full info, no ops. */
   isAlly?: boolean;
   readOnly?: boolean;
@@ -54,6 +52,7 @@ const STATE_LABEL: Record<UnitState, string> = {
   blockading: "封锁",
   fighting: "交战",
   training: "训练途中",
+  docked: "停港",
 };
 
 function remainingPath(unit: UnitGroup): Array<{ gx: number; gy: number }> {
@@ -75,7 +74,7 @@ function formatSec(sec: number): string {
 
 /**
  * Inspect HUD to the right of a selected unit:
- * info + move ETA + retreat / stop (+ carrier embark/disembark).
+ * info + move ETA + retreat / stop (+ carrier deploy).
  * Enemy direct vision: kind + state only (no u / HP).
  */
 export function UnitInspectHud({
@@ -100,8 +99,12 @@ export function UnitInspectHud({
   const name = def.name;
   const showStrength = (owned || isAlly) && !unit.strengthHidden;
   const hpPerU = unitHp(unit.kind);
+  const carrierHullMax = UNIT_BY_KIND.navy_carrier.hp;
+  const carrierHullHp = unit.hullHp ?? carrierHullMax;
+  const embarkedU = unit.embarkedAirU ?? 0;
   const moving = isMovingState(unit.state);
   const blockading = unit.state === "blockading";
+  const holding = unit.state === "holding";
   const rem = remainingPath(unit);
   const dest = rem.length >= 2 ? rem[rem.length - 1]! : null;
   const remDu =
@@ -116,51 +119,58 @@ export function UnitInspectHud({
       ? estimatePathTimeSec(unit.kind, rem, terrain, liaisons, unit.ownerId)
       : 0;
 
+  const stopCostsResources = moving;
   const canAffordStop =
-    organization >= UNIT_STOP_O_COST && energy >= UNIT_STOP_E_COST;
+    !stopCostsResources ||
+    (organization >= UNIT_STOP_O_COST && energy >= UNIT_STOP_E_COST);
   const fighting = unit.state === "fighting";
   const dock = { buildings, units };
   const stopOk = canUnitStop(unit, dock);
   const retreatOk = canUnitRetreat(unit, dock);
-  const docked = !fighting && !stopOk;
+  const docked = unit.state === "docked";
 
   const stopTitle = fighting
     ? "交战中无法停止"
-    : !stopOk
-      ? "停泊中无法停止"
-      : !canAffordStop
-        ? `需要 ${UNIT_STOP_E_COST} E · ${UNIT_STOP_O_COST} O`
-        : blockading
-          ? `结束封锁并停在原地 · ${UNIT_STOP_E_COST} E · ${UNIT_STOP_O_COST} O`
-          : unit.state === "holding"
-            ? `结束驻守 · ${UNIT_STOP_E_COST} E · ${UNIT_STOP_O_COST} O`
-            : moving
-              ? `停止行军 · ${UNIT_STOP_E_COST} E · ${UNIT_STOP_O_COST} O`
-              : `停止并结束当前行为 · ${UNIT_STOP_E_COST} E · ${UNIT_STOP_O_COST} O`;
+    : unit.retreating
+      ? "撤退途中无法停止"
+      : !stopOk
+        ? docked
+          ? "停港中无法停止"
+          : "仅驻守、封锁或移动中可停止"
+        : stopCostsResources && !canAffordStop
+          ? `需要 ${UNIT_STOP_E_COST} E · ${UNIT_STOP_O_COST} O`
+          : blockading
+            ? "结束封锁并停在原地（不耗 O/E）"
+            : holding
+              ? "结束驻守（不耗 O/E）"
+              : moving
+                ? `停止行军 · ${UNIT_STOP_E_COST} E · ${UNIT_STOP_O_COST} O`
+                : "无法停止";
   const retreatTitle = unit.retreating
     ? "正在撤回所属建筑"
-    : "撤回所属建筑并入库（不耗 O/E，不检电台、地形与携行）";
+    : isCarrierKind(unit.kind)
+      ? "撤回所属港口旁并停港（不耗 O/E）"
+      : "撤回所属建筑并入库（不耗 O/E，不检电台、地形与携行）";
 
   const stopDisabled = !mine || !stopOk || !canAffordStop;
   const retreatDisabled = !mine || !retreatOk;
 
-  const colocatedAir =
-    mine && isCarrierKind(unit.kind)
-      ? units.find(
-          (u) =>
-            u.id !== unit.id &&
-            u.ownerId === unit.ownerId &&
-            u.kind === "air" &&
-            u.u > 0 &&
-            !isMovingState(u.state) &&
-            u.state !== "fighting" &&
-            unitCoordKey(u.gx, u.gy) === unitCoordKey(unit.gx, unit.gy),
-        )
-      : undefined;
-  const canEmbark =
-    !!colocatedAir && isCarrierKind(unit.kind) && carrierAirRoom(unit) > 0;
-  const canDisembark =
-    mine && isCarrierKind(unit.kind) && (unit.embarkedAirU ?? 0) > 0;
+  const hangarRoom = isCarrierKind(unit.kind) ? carrierAirRoom(unit, units) : 0;
+  const canDeploy =
+    mine &&
+    isCarrierKind(unit.kind) &&
+    hangarRoom > 0 &&
+    !unit.retreating &&
+    organization >= CARRIER_DEPLOY_O_COST;
+  const deployTitle = !isCarrierKind(unit.kind)
+    ? "部署"
+    : hangarRoom <= 0
+      ? "机库已满"
+      : organization < CARRIER_DEPLOY_O_COST
+        ? `需要 ${CARRIER_DEPLOY_O_COST} O`
+        : unit.retreating
+          ? "撤退中不能部署"
+          : `从机场选择空军上舰 · ${CARRIER_DEPLOY_O_COST} O · 最多 ${Math.min(5, hangarRoom)}U`;
 
   const extras: string[] = [name, STATE_LABEL[unit.state]];
   if (isAlly) extras.push("友军");
@@ -168,15 +178,12 @@ export function UnitInspectHud({
     if (def.carryEMax != null) {
       extras.push(`携行 ${unit.carriedE}/${def.carryEMax} E`);
     }
-    if (isCarrierKind(unit.kind)) {
-      extras.push(carrierCapacityLabel(unit));
-    }
   } else {
     extras.push(unit.visionLevel === "satellite" ? "卫星视野" : "直接视野");
   }
 
-  const fire = (action: UnitInspectAction, detail?: { airUnitId?: string }) => {
-    onAction?.(action, unit, detail);
+  const fire = (action: UnitInspectAction) => {
+    onAction?.(action, unit);
   };
 
   return (
@@ -186,15 +193,37 @@ export function UnitInspectHud({
         style={{ left: screenX + offset, top: screenY }}
       >
         <div className="unit-inspect-panel">
+          {owned && isCarrierKind(unit.kind) && (
+            <div className="building-inspect-box is-hp">
+              <div className="building-inspect-box-label">
+                舰体 HP {carrierHullHp}/{carrierHullMax}
+              </div>
+              <div className="building-inspect-bar-track">
+                <div
+                  className="building-inspect-bar-fill is-hp"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, (carrierHullHp / carrierHullMax) * 100))}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
           {showStrength && (
             <div className="building-inspect-box is-u">
               <div className="building-inspect-box-label">
-                编制 {unit.u} U · HP {hpPerU}/U
+                {isCarrierKind(unit.kind)
+                  ? `舰载机编制 ${embarkedU}/${CARRIER_AIR_CAPACITY} U`
+                  : `编制 ${unit.u} U · HP ${hpPerU}/U`}
               </div>
               <div className="building-inspect-bar-track">
                 <div
                   className="building-inspect-bar-fill is-u"
-                  style={{ width: "100%" }}
+                  style={{
+                    width: isCarrierKind(unit.kind)
+                      ? `${Math.max(0, Math.min(100, (embarkedU / CARRIER_AIR_CAPACITY) * 100))}%`
+                      : "100%",
+                  }}
                 />
               </div>
             </div>
@@ -224,64 +253,49 @@ export function UnitInspectHud({
               </>
             ) : blockading ? (
               <div className="building-inspect-note-line">封锁中 · 可停止/撤退</div>
-            ) : unit.state === "holding" ? (
+            ) : holding ? (
               <div className="building-inspect-note-line">驻守中 · 可停止/撤退</div>
             ) : fighting ? (
               <div className="building-inspect-note-line">交战中 · 可撤退，不可停止</div>
             ) : docked ? (
-              <div className="building-inspect-note-line">停泊中 · 可撤退，不可停止</div>
+              <div className="building-inspect-note-line">停港中 · 每 2 秒修 1 舰体 HP</div>
             ) : unit.retreating ? (
               <div className="building-inspect-note-line">正在撤回所属建筑</div>
-            ) : (
+            ) : stopOk ? (
               <div className="building-inspect-note-line">可停止/撤退</div>
+            ) : (
+              <div className="building-inspect-note-line">可撤退</div>
             )}
           </div>
         </div>
 
         {mine && (
-          <div className="unit-inspect-ops">
-            <UnitOpButton
-              label="撤退"
-              icon="/icons/symbol/operation/back.png"
-              disabled={retreatDisabled}
-              title={retreatTitle}
-              onFire={() => fire("retreat")}
-            />
-            <UnitOpButton
-              label="停止"
-              icon="/icons/symbol/operation/stop.png"
-              disabled={stopDisabled}
-              title={stopTitle}
-              onFire={() => fire("stop")}
-            />
-            {isCarrierKind(unit.kind) && (
-              <>
+          <div className="unit-inspect-controls">
+            <div className="unit-inspect-ops">
+              <UnitOpButton
+                label="撤退"
+                icon="/icons/symbol/operation/back.png"
+                disabled={retreatDisabled}
+                title={retreatTitle}
+                onFire={() => fire("retreat")}
+              />
+              <UnitOpButton
+                label="停止"
+                icon="/icons/symbol/operation/stop.png"
+                disabled={stopDisabled}
+                title={stopTitle}
+                onFire={() => fire("stop")}
+              />
+              {isCarrierKind(unit.kind) && (
                 <UnitOpButton
-                  label="上舰"
-                  disabled={!canEmbark}
-                  title={
-                    canEmbark
-                      ? `搭载同格空军（机库 ${unit.embarkedAirU ?? 0}/${CARRIER_AIR_CAPACITY}）`
-                      : carrierAirRoom(unit) <= 0
-                        ? "机库已满"
-                        : "同格无可搭载空军"
-                  }
-                  onFire={() =>
-                    fire("embark_air", { airUnitId: colocatedAir?.id })
-                  }
+                  label="部署"
+                  icon="/icons/symbol/operation/mobilize.png"
+                  disabled={!canDeploy}
+                  title={deployTitle}
+                  onFire={() => fire("deploy_air")}
                 />
-                <UnitOpButton
-                  label="放飞"
-                  disabled={!canDisembark}
-                  title={
-                    canDisembark
-                      ? `放出机库空军 ${unit.embarkedAirU}U`
-                      : "机库无空军"
-                  }
-                  onFire={() => fire("disembark_air")}
-                />
-              </>
-            )}
+              )}
+            </div>
           </div>
         )}
         {!mine && !isAlly && myPlayerId != null && (

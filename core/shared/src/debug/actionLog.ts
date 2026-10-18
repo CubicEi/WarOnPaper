@@ -202,6 +202,7 @@ export function categoryForAction(type: string): PlayerActionCategory {
       return "train";
     case "fire":
     case "attack_units":
+    case "carrier_sortie":
     case "mutual_defense":
     case "end_mutual_defense":
       return "combat";
@@ -215,6 +216,7 @@ export function categoryForAction(type: string): PlayerActionCategory {
     case "end_hold":
     case "embark_air":
     case "disembark_air":
+    case "carrier_deploy":
       return "unit";
     case "chat":
       return "chat";
@@ -393,6 +395,18 @@ export function summarizeClientAction(msg: { readonly type: string }): {
     case "disembark_air":
       summary = `放飞舰载机 ${shortId(m.carrierId)}`;
       if (m.u != null) bits.push(`U${fmtNum(m.u)}`);
+      break;
+    case "carrier_sortie":
+      summary = `航母出击 ${shortId(m.carrierId)} → ${
+        m.targetBuildingId
+          ? `建筑 ${shortId(m.targetBuildingId)}`
+          : `单位 ${shortId(m.targetUnitId)}`
+      }`;
+      bits.push(`U${fmtNum(m.u)}`);
+      break;
+    case "carrier_deploy":
+      summary = `母舰部署 ${shortId(m.carrierId)}`;
+      bits.push(unitOrderBits(m));
       break;
     case "chat":
       summary = `聊天：${String(m.text ?? "").slice(0, 40)}`;

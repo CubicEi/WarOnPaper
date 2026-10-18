@@ -75,6 +75,7 @@ import {
   maskedLiaisonBuildTicks,
   filterUnitsForViewer,
   filterResourceSightForViewer,
+  applyUnitDamage,
   shouldMaskUpgradeOnSatellite,
   isConstructionAllowedAt,
   startCommWave,
@@ -160,6 +161,8 @@ import {
   handleEndBlockade,
   handleSupplyUnits,
   handleAttackUnits,
+  handleCarrierSortie,
+  handleCarrierDeploy,
   handleHoldUnits,
   handleEndHold,
   handleMutualDefense,
@@ -179,7 +182,7 @@ export interface CreateRoomOptions {
   allowRespawn: boolean;
   mapSize?: MapSizeId;
   seed?: number | string;
-  /** Override idle timeout; default ROOM_IDLE_MS (5 min). */
+  /** Override idle timeout; default ROOM_IDLE_MS (15 min). */
   idleMs?: number;
   teams?: TeamRoster;
   teamMode?: boolean;
@@ -2470,14 +2473,20 @@ function handleFireAtUnit(
   Object.assign(source, withLaunchCooldown(source, tick));
 
   const beforeUnits = units.map((u) => ({ ...u }));
-  const hp = unitHp(target.kind);
   const beforeU = target.u;
-  const nextU = Math.max(0, Math.floor((beforeU * hp - unitDamage) / hp));
+  const damageResult = applyUnitDamage(
+    beforeU,
+    target.kind,
+    unitDamage,
+    target.hullHp,
+  );
+  const nextU = damageResult.u;
   if (nextU <= 0) {
     const idx = units.findIndex((u) => u.id === target.id);
     if (idx >= 0) units.splice(idx, 1);
   } else {
     target.u = nextU;
+    if (damageResult.hullHp != null) target.hullHp = damageResult.hullHp;
   }
   const nextBuildings = releaseAwayForUnitDiff(buildings, beforeUnits, units);
   for (let i = 0; i < buildings.length; i++) {
@@ -3617,6 +3626,38 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
             by: msg.liaisonBy,
           }
         : undefined,
+    );
+    return;
+  }
+
+  if (msg.type === "carrier_sortie") {
+    slog("msg", "carrier_sortie", msg);
+    handleCarrierSortie(
+      session,
+      unitWorld(),
+      msg.carrierId,
+      msg.u,
+      msg.targetUnitId,
+      msg.targetBuildingId,
+      phaseFor(session) === "playing",
+      sendError,
+      broadcastState,
+      slog,
+    );
+    return;
+  }
+
+  if (msg.type === "carrier_deploy") {
+    slog("msg", "carrier_deploy", msg);
+    handleCarrierDeploy(
+      session,
+      unitWorld(),
+      msg.carrierId,
+      msg.sources,
+      phaseFor(session) === "playing",
+      sendError,
+      broadcastState,
+      slog,
     );
     return;
   }

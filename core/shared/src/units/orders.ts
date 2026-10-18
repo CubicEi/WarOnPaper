@@ -55,6 +55,16 @@ import {
   resolveFreeUnitCoord,
 } from "./occupy.js";
 import { collectMovingUnitCoverage, isInsideAnyCircle } from "./radio.js";
+import {
+  applyCarrierSortieLaunch,
+  applyEmbarkAir,
+  carrierAirRoom,
+} from "./carrier.js";
+import {
+  CARRIER_AIR_CAPACITY,
+  CARRIER_DEPLOY_O_COST,
+  CARRIER_SORTIE_RADIUS_DU,
+} from "./catalog.js";
 import { garrisonRoom } from "./train.js";
 import {
   findSupplyStationAt,
@@ -140,7 +150,7 @@ interface PlanOpts {
 }
 
 function planFor(
-  unit: Pick<UnitGroup, "kind" | "ownerId" | "homeBuildingId" | "gx" | "gy">,
+  unit: Pick<UnitGroup, "kind" | "ownerId" | "homeBuildingId" | "gx" | "gy" | "carrierSortieState">,
   toGx: number,
   toGy: number,
   ctx: MoveContext,
@@ -151,7 +161,8 @@ function planFor(
   const home = ctx.buildings.find((b) => b.id === unit.homeBuildingId);
   const portNavy = isNavyKind(unit.kind) && home?.buildingId === "port";
   const rangeLabel: ActivityRangeLabel = portNavy ? "port" : "radio";
-  const coverage = ignoreCoverage
+  const sortie = unit.kind === "air" && unit.carrierSortieState === "outbound";
+  const coverage = ignoreCoverage || sortie
     ? []
     : collectMovingUnitCoverage(unit, ctx.buildings, ctx.connectedIds, ctx.teams);
   const dest = snapToUnitCoord(toGx, toGy);
@@ -350,6 +361,7 @@ function applyPath(
       pendingHoldBuildingId: undefined,
       pendingAttackUnitId: undefined,
       pendingAttackBuildingId: undefined,
+      dockRepairTimerSec: undefined,
     };
   }
   return {
@@ -368,6 +380,7 @@ function applyPath(
     holdTimerSec: undefined,
     pendingAttackUnitId: attackTargetUnitId,
     pendingAttackBuildingId: attackTargetBuildingId,
+    dockRepairTimerSec: undefined,
   };
 }
 
@@ -543,7 +556,7 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
     if (asSupply && !usesCarriedSupply(u.kind)) {
       return fail("空军无需携行补给", buildings, units);
     }
-    if (u.kind === "air" && isAttack) {
+    if (u.kind === "air" && isAttack && u.carrierSortieState !== "outbound") {
       const coverage = collectMovingUnitCoverage(
         u,
         buildings,
@@ -606,7 +619,8 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
       }
     }
     const planOpts: PlanOpts = {
-      ignoreCoverage: !!req.asTrainingDelivery || unitDeposit,
+      ignoreCoverage:
+        !!req.asTrainingDelivery || unitDeposit || unit.carrierSortieState === "outbound",
       // Navy training embarks onto ocean (below) and paths with normal navy rules.
       ignoreTerrain: false,
       // Land/navy attack: destination may be impassable (coastal building). Path to
@@ -850,7 +864,12 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
         supplyBuildingId: undefined,
       };
     }
-    if (unit.kind === "air" && !next.depositOnArrival && !req.asTrainingDelivery) {
+    if (
+      unit.kind === "air" &&
+      next.carrierSortieState !== "outbound" &&
+      !next.depositOnArrival &&
+      !req.asTrainingDelivery
+    ) {
       const home = buildings.find(
         (b) => b.id === next.homeBuildingId && b.ownerId === req.ownerId,
       );
@@ -870,7 +889,16 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
         strikeRemoved,
       );
       for (const id of strikeRemoved) removed.add(id);
-      if (!strikeRemoved.has(next.id) && next.returnGx != null && next.returnGy != null) {
+      if (!strikeRemoved.has(next.id) && next.carrierSortieState === "outbound") {
+        next = {
+          ...next,
+          state: "idle",
+          carrierSortieState: "returning_carrier",
+          retreating: true,
+          returnGx: undefined,
+          returnGy: undefined,
+        };
+      } else if (!strikeRemoved.has(next.id) && next.returnGx != null && next.returnGy != null) {
         const home = buildings.find(
           (b) => b.id === next.homeBuildingId && b.ownerId === req.ownerId,
         );
@@ -986,6 +1014,223 @@ export function applyUnitAttack(req: UnitMoveRequest, ctx: MoveContext): MoveApp
     },
     ctx,
   );
+}
+
+export interface CarrierSortieRequest {
+  ownerId: string;
+  carrierId: string;
+  u: number;
+  targetUnitId?: string;
+  targetBuildingId?: string;
+}
+
+/** Launch from a carrier hangar and reuse normal air strike pathing and combat. */
+export function applyCarrierSortie(
+  req: CarrierSortieRequest,
+  ctx: MoveContext,
+): MoveApplyResult {
+  const originalBuildings = ctx.buildings.map((building) => ({ ...building }));
+  const originalUnits = ctx.units.map((unit) => ({
+    ...unit,
+    path: unit.path?.map((point) => ({ ...point })),
+  }));
+  const reject = (reason: string) => fail(reason, originalBuildings, originalUnits);
+
+  if (!!req.targetUnitId === !!req.targetBuildingId) {
+    return reject("航母出击必须且只能指定一个目标");
+  }
+  const carrier = ctx.units.find((unit) => unit.id === req.carrierId);
+  if (!carrier || carrier.kind !== "navy_carrier" || carrier.ownerId !== req.ownerId) {
+    return reject("航母不存在或不属于你");
+  }
+  if (carrier.u <= 0 || carrier.retreating) return reject("航母当前不能出击");
+
+  let targetGx: number;
+  let targetGy: number;
+  if (req.targetUnitId) {
+    const target = ctx.units.find((unit) => unit.id === req.targetUnitId && unit.u > 0);
+    if (!target || isFriendly(ctx.teams, target.ownerId, req.ownerId)) {
+      return reject("只能攻击有效的敌方单位");
+    }
+    targetGx = target.gx;
+    targetGy = target.gy;
+  } else {
+    const target = ctx.buildings.find((building) => building.id === req.targetBuildingId);
+    if (!target || target.hp <= 0 || isFriendly(ctx.teams, target.ownerId, req.ownerId)) {
+      return reject("只能攻击有效的敌方建筑");
+    }
+    if (target.buildingId === "artificial_island") return reject("不能进攻人工岛");
+    targetGx = target.gx;
+    targetGy = target.gy;
+  }
+  if (Math.hypot(targetGx - carrier.gx, targetGy - carrier.gy) > CARRIER_SORTIE_RADIUS_DU + 1e-9) {
+    return reject(`目标超出航母 ${CARRIER_SORTIE_RADIUS_DU} Du 出击范围`);
+  }
+
+  const launched = applyCarrierSortieLaunch(
+    req.ownerId,
+    req.carrierId,
+    req.u,
+    ctx.units,
+    ctx.nextId,
+  );
+  if (!launched.ok) return reject(launched.error);
+  const sortieIds = new Set(launched.sortieIds);
+  const launchedUnits = launched.units.map((unit) => {
+    if (!sortieIds.has(unit.id)) return unit;
+    const home = ctx.buildings.find(
+      (building) => building.id === unit.homeBuildingId && building.ownerId === req.ownerId,
+    );
+    return home ? { ...unit, returnGx: home.gx, returnGy: home.gy } : unit;
+  });
+  return applyUnitAttack(
+    {
+      ownerId: req.ownerId,
+      gx: targetGx,
+      gy: targetGy,
+      unitIds: launched.sortieIds,
+      attackTargetUnitId: req.targetUnitId,
+      attackTargetBuildingId: req.targetBuildingId,
+    },
+    { ...ctx, units: launchedUnits },
+  );
+}
+
+export interface CarrierDeployRequest {
+  ownerId: string;
+  carrierId: string;
+  /** Airport garrison contributions (air only). */
+  sources: readonly UnitMoveSource[];
+}
+
+/**
+ * 母舰「部署」：从己方机场派出空军飞向母舰；到达后装入载机编制。
+ * 扣 CARRIER_DEPLOY_O_COST；途中走既有防空交战规则。
+ */
+export function applyCarrierDeploy(
+  req: CarrierDeployRequest,
+  ctx: MoveContext,
+): MoveApplyResult {
+  const originalBuildings = ctx.buildings.map((building) => ({ ...building }));
+  const originalUnits = ctx.units.map((unit) => ({
+    ...unit,
+    path: unit.path?.map((point) => ({ ...point })),
+  }));
+  const reject = (reason: string) => fail(reason, originalBuildings, originalUnits);
+
+  const carrier = ctx.units.find((unit) => unit.id === req.carrierId);
+  if (!carrier || carrier.kind !== "navy_carrier" || carrier.ownerId !== req.ownerId) {
+    return reject("母舰不存在或不属于你");
+  }
+  if (carrier.u <= 0 || carrier.retreating) {
+    return reject("母舰当前不能部署舰载机");
+  }
+  const sources = (req.sources ?? []).filter((src) => src.u > 0);
+  if (sources.length === 0) return reject("请选择机场空军");
+
+  const room = carrierAirRoom(carrier, ctx.units);
+  if (room < 1) return reject("机库已满");
+
+  let requested = 0;
+  for (const src of sources) requested += Math.floor(src.u);
+  if (requested < 1) return reject("部署数量至少为 1U");
+  if (requested > room) return reject(`机库仅剩 ${room}U 空位`);
+  if (requested > CARRIER_AIR_CAPACITY) {
+    return reject(`最多部署 ${CARRIER_AIR_CAPACITY}U`);
+  }
+
+  const buildings = originalBuildings.map((b) => ({ ...b }));
+  const units: UnitGroup[] = originalUnits.map((u) => ({
+    ...u,
+    path: u.path?.map((p) => ({ ...p })),
+  }));
+  const createdIds: string[] = [];
+  let remaining = requested;
+
+  for (const src of sources) {
+    if (remaining <= 0) break;
+    const bi = buildings.findIndex((b) => b.id === src.buildingId);
+    if (bi < 0) return reject("机场不存在");
+    const building = buildings[bi]!;
+    if (building.ownerId !== req.ownerId) return reject("只能从己方机场部署");
+    if (building.buildingId !== "airport") return reject("只能从机场部署空军");
+    if (!isBuildingComplete(building)) return reject("机场尚未建成");
+    const take = Math.min(remaining, Math.floor(src.u), building.u ?? 0);
+    if (take < 1) return reject("机场驻军不足");
+    const deployed = deployFromBuilding(building, take, ctx.nextId());
+    if ("error" in deployed) return reject(deployed.error);
+    buildings[bi] = deployed.building;
+    createdIds.push(deployed.unit.id);
+    units.push(deployed.unit);
+    remaining -= take;
+  }
+  if (remaining > 0) return reject("机场驻军不足");
+
+  const dest = snapToUnitCoord(carrier.gx, carrier.gy);
+  let nextUnits = units.map((u) => ({ ...u, path: u.path?.map((p) => ({ ...p })) }));
+  for (const id of createdIds) {
+    const idx = nextUnits.findIndex((u) => u.id === id);
+    if (idx < 0) continue;
+    const air = nextUnits[idx]!;
+    const start = snapToUnitCoord(air.gx, air.gy);
+    const planned = planAirPath(start.gx, start.gy, dest.gx, dest.gy, [], {
+      ignoreCoverage: true,
+    });
+    if (planned.error || planned.path.length === 0) {
+      return reject(planned.error ?? "无法飞向母舰");
+    }
+    const path = planned.path;
+    if (path.length <= 1) {
+      nextUnits[idx] = {
+        ...air,
+        gx: dest.gx,
+        gy: dest.gy,
+        state: "idle",
+        path: undefined,
+        pathIndex: undefined,
+        carrierId: carrier.id,
+        carrierSortieState: undefined,
+        returnGx: undefined,
+        returnGy: undefined,
+      };
+      const boarded = applyEmbarkAir(
+        req.ownerId,
+        carrier.id,
+        air.id,
+        air.u,
+        nextUnits,
+        buildings,
+      );
+      if (!boarded.ok) return reject(boarded.error);
+      nextUnits = boarded.units.map((u) => ({
+        ...u,
+        path: u.path?.map((p) => ({ ...p })),
+      }));
+      continue;
+    }
+    nextUnits[idx] = {
+      ...air,
+      carrierId: carrier.id,
+      carrierSortieState: "boarding",
+      returnGx: undefined,
+      returnGy: undefined,
+      depositOnArrival: undefined,
+      depositBuildingId: undefined,
+      retreating: undefined,
+      state: "moving",
+      path,
+      pathIndex: 1,
+    };
+  }
+
+  return {
+    ok: true,
+    organizationCost: CARRIER_DEPLOY_O_COST,
+    energyCost: 0,
+    buildings,
+    units: nextUnits.filter((u) => u.u > 0),
+    travelTimeSec: 0,
+  };
 }
 
 /** 驻守：移到建筑外，进入 holding. */
@@ -1201,6 +1446,8 @@ const retreatClearPending = {
   pendingAttackBuildingId: undefined,
   returnGx: undefined,
   returnGy: undefined,
+  carrierId: undefined,
+  carrierSortieState: undefined,
   retreating: undefined,
   fightTargetUnitId: undefined,
   siegeBuildingId: undefined,
@@ -1216,11 +1463,13 @@ const retreatClearPending = {
 /**
  * Stop / retreat.
  *
- * - 停止：陆海军除交战、停泊外均可；原地结束当前行为；−20E −3O。退却中不可停止。
- *   空军停止 = 强制返航所属建筑入库（不能停泊），费用同停止。
+ * - 停止：仅驻守 / 封锁 / 移动中（非撤退）可用。
+ *   仅移动中停止扣 −20E −3O；结束驻守 / 封锁不扣 O/E。
+ *   空军停止 = 强制返航所属建筑入库。
  * - 撤退：任何时候都可以（含交战、停泊）；不耗 O/E；不检电台与携行。
  *   陆军仍遵守地形（不得穿海）；海军/空军可忽略地形捷径。
  *   途中若进入封锁半径，由封锁结算应战。回到归属建筑入库前不能接受其他命令。
+ *   母舰撤退至所属港口旁后进入「停港」。
  */
 export function applyUnitStop(
   ownerId: string,
@@ -1242,6 +1491,7 @@ export function applyUnitStop(
   const removed = new Set<string>();
   let any = false;
   let buildingsDirty = false;
+  let stopWhileMoving = false;
 
   const clearInPlace = (u: UnitGroup): UnitGroup => {
     const free = resolveFreeUnitCoord(
@@ -1282,6 +1532,7 @@ export function applyUnitStop(
       liaisonCut: undefined,
       returnGx: undefined,
       returnGy: undefined,
+      dockRepairTimerSec: undefined,
     };
   };
 
@@ -1305,6 +1556,65 @@ export function applyUnitStop(
     const home = buildings.find((b) => b.id === u.homeBuildingId && b.ownerId === ownerId);
     if (!home) {
       return { ok: false, error: "找不到所属建筑，无法撤退" };
+    }
+    if (u.kind === "navy_carrier") {
+      const occupied = occupiedUnitKeys(units, new Set([u.id]), u);
+      for (const key of buildingCenterKeys(buildings)) occupied.add(key);
+      const harbor = findFreeUnitCoord(home.gx, home.gy, occupied, 1, (gx, gy) =>
+        terrainAllowsKind("navy", ctx.terrain, gx, gy, {
+          liaisons: ctx.liaisons,
+          ownerId,
+          buildings,
+        }),
+      );
+      if (
+        unitCoordKey(harbor.gx, harbor.gy) === unitCoordKey(home.gx, home.gy) ||
+        !terrainAllowsKind("navy", ctx.terrain, harbor.gx, harbor.gy, {
+          liaisons: ctx.liaisons,
+          ownerId,
+          buildings,
+        })
+      ) {
+        return { ok: false, error: "所属港口旁没有可停留的海格，无法撤退" };
+      }
+      const planned = planFor(
+        u,
+        harbor.gx,
+        harbor.gy,
+        { ...ctx, buildings, units, nextId: () => u.id },
+        { ignoreCoverage: true, ignoreTerrain: true },
+      );
+      const path = planned.path.length > 0
+        ? planned.path
+        : [snapToUnitCoord(u.gx, u.gy), harbor];
+      const idx = units.findIndex((unit) => unit.id === u.id);
+      if (path.length <= 1) {
+        units[idx] = {
+          ...u,
+          ...retreatClearPending,
+          gx: harbor.gx,
+          gy: harbor.gy,
+          state: "docked",
+          dockRepairTimerSec: 0,
+          path: undefined,
+          pathIndex: undefined,
+          depositOnArrival: undefined,
+          depositBuildingId: undefined,
+        };
+        return { ok: true };
+      }
+      units[idx] = {
+        ...u,
+        ...retreatClearPending,
+        retreating: true,
+        state: "moving",
+        dockRepairTimerSec: undefined,
+        path,
+        pathIndex: 1,
+        depositOnArrival: undefined,
+        depositBuildingId: undefined,
+      };
+      return { ok: true };
     }
     const atHome =
       unitCoordKey(u.gx, u.gy) === unitCoordKey(home.gx, home.gy);
@@ -1409,27 +1719,28 @@ export function applyUnitStop(
         units: [...unitsIn],
       };
     }
-    if (u.state === "fighting") {
-      return {
-        ok: false,
-        error: "交战中无法停止",
-        organizationCost: 0,
-        energyCost: 0,
-        units: [...unitsIn],
-      };
-    }
     const dock = { buildings, units };
-    if (isUnitDocked(u, dock) || !canUnitStop(u, dock)) {
+    if (!canUnitStop(u, dock)) {
+      const reason =
+        u.state === "fighting"
+          ? "交战中无法停止"
+          : isUnitDocked(u, dock)
+            ? "停泊中无法停止"
+            : u.state === "docked"
+              ? "停港中无法停止"
+              : "仅驻守、封锁或移动中可停止";
       return {
         ok: false,
-        error: isUnitDocked(u, dock) ? "停泊中无法停止" : "无法停止",
+        error: reason,
         organizationCost: 0,
         energyCost: 0,
         units: [...unitsIn],
       };
     }
 
-    // 空军不能停泊：停止 = 强制返航所属建筑入库（与撤退同路径，仍扣停止费用）。
+    if (u.state === "moving") stopWhileMoving = true;
+
+    // 空军不能停泊：停止 = 强制返航所属建筑入库（与撤退同路径；仅移动中扣停止费用）。
     if (u.kind === "air") {
       const r = beginRetreatHome(u);
       if (!r.ok) {
@@ -1461,11 +1772,12 @@ export function applyUnitStop(
     };
   }
 
+  const chargeStop = !retreat && stopWhileMoving;
   const outUnits = units.filter((u) => !removed.has(u.id) && u.u > 0);
   return {
     ok: true,
-    organizationCost: retreat ? 0 : UNIT_STOP_O_COST,
-    energyCost: retreat ? 0 : UNIT_STOP_E_COST,
+    organizationCost: chargeStop ? UNIT_STOP_O_COST : 0,
+    energyCost: chargeStop ? UNIT_STOP_E_COST : 0,
     units: outUnits,
     buildings: buildingsDirty ? buildings : undefined,
   };

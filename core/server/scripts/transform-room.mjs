@@ -30,7 +30,7 @@ export interface CreateRoomOptions {
   allowRespawn: boolean;
   mapSize?: MapSizeId;
   seed?: number | string;
-  /** Override idle timeout; default ROOM_IDLE_MS (5 min). */
+  /** Override idle timeout; default ROOM_IDLE_MS (15 min). */
   idleMs?: number;
 }
 

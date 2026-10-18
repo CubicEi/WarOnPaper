@@ -54,6 +54,8 @@ import {
   capitalSiteRejectMessage,
   availableTrainingRoom,
   buildingLevel,
+  CARRIER_SORTIE_RADIUS_DU,
+  isCarrierKind,
 } from "@wop/shared";
 import {
   BUILDING_SCALE_ANIM_MS,
@@ -154,6 +156,16 @@ interface Props {
   onBuildCarrier?: (buildingId: string) => void;
   onEmbarkAir?: (carrierId: string, airUnitId: string, u?: number) => void;
   onDisembarkAir?: (carrierId: string, u?: number) => void;
+  onCarrierSortie?: (args: {
+    carrierId: string;
+    u: number;
+    targetUnitId?: string;
+    targetBuildingId?: string;
+  }) => void;
+  onCarrierDeploy?: (args: {
+    carrierId: string;
+    sources: Array<{ buildingId: string; u: number }>;
+  }) => void;
   onDeploy?: (buildingId: string, count: number) => void;
   onTrain?: (args: {
     id: string;
@@ -385,8 +397,8 @@ export function GameCanvas({
   onRelocateCapital,
   onReload,
   onBuildCarrier,
-  onEmbarkAir,
-  onDisembarkAir,
+  onCarrierSortie,
+  onCarrierDeploy,
   onDeploy,
   onTrain,
   onFire,
@@ -497,6 +509,7 @@ export function GameCanvas({
   const onDemolishLiaisonRef = useRef(onDemolishLiaison);
   const onDemolishRef = useRef(onDemolish);
   const onFireRef = useRef(onFire);
+  const onCarrierSortieRef = useRef(onCarrierSortie);
   /** Pointer sample for liaison draw speed → blunting. */
   const liaisonSpeedRef = useRef<{
     gx: number;
@@ -534,8 +547,20 @@ export function GameCanvas({
   const [shiftDemolishHint, setShiftDemolishHint] = useState(false);
   const [fireAim, setFireAim] = useState<string | null>(null);
   const [fireAimNote, setFireAimNote] = useState("选择目标");
+  const [carrierAim, setCarrierAim] = useState<{
+    mode: "deploy" | "sortie";
+    carrierId: string;
+  } | null>(null);
+  const [carrierAimNote, setCarrierAimNote] = useState("");
   const [mobilize, setMobilize] = useState<{
-    mode: "move" | "blockade" | "supply" | "attack" | "hold" | "assign";
+    mode:
+      | "move"
+      | "blockade"
+      | "supply"
+      | "attack"
+      | "hold"
+      | "assign"
+      | "carrier_deploy";
     gx: number;
     gy: number;
     sources: Record<string, number>;
@@ -550,6 +575,7 @@ export function GameCanvas({
     liaisonBx?: number;
     liaisonBy?: number;
     assignBuildingId?: string;
+    carrierId?: string;
   } | null>(null);
   const [focusMarks, setFocusMarks] = useState<{ id: string; gx: number; gy: number }[]>([]);
   const focusMarksRef = useRef(focusMarks);
@@ -583,6 +609,7 @@ export function GameCanvas({
   const fireHintRef = useRef<HTMLDivElement>(null);
   const mutualHintRef = useRef<HTMLDivElement>(null);
   const fireAimRef = useRef<string | null>(null);
+  const carrierAimRef = useRef(carrierAim);
   const shiftHeldRef = useRef(false);
   const mouseClientRef = useRef({ x: width / 2, y: height / 2 });
   const workRangeRef = useRef<{ gx: number; gy: number; radiusDu: number }[]>([]);
@@ -614,7 +641,9 @@ export function GameCanvas({
   onDemolishLiaisonRef.current = onDemolishLiaison;
   onDemolishRef.current = onDemolish;
   onFireRef.current = onFire;
+  onCarrierSortieRef.current = onCarrierSortie;
   fireAimRef.current = fireAim;
+  carrierAimRef.current = carrierAim;
   mutualAimRef.current = mutualAim;
   selectionUiRef.current = selectionUi;
   focusMarksRef.current = focusMarks;
@@ -819,6 +848,12 @@ export function GameCanvas({
   const exitFireAim = () => {
     setFireAim(null);
     setFireAimNote("选择目标");
+  };
+
+  const exitCarrierAim = () => {
+    carrierAimRef.current = null;
+    setCarrierAim(null);
+    setCarrierAimNote("");
   };
 
   const clearSelection = () => {
@@ -1180,6 +1215,9 @@ export function GameCanvas({
 
       if (!mobilize) return { planError: null, paths };
       if (mobilize.mode === "attack" && mobilize.targetLiaisonId) {
+        return { planError: null, paths };
+      }
+      if (mobilize.mode === "carrier_deploy") {
         return { planError: null, paths };
       }
 
@@ -2185,7 +2223,10 @@ export function GameCanvas({
       );
       if (hit) {
         const phaseNow = phaseRef.current;
-        const aiming = !!fireAimRef.current || !!mutualAimRef.current;
+        const aiming =
+          !!fireAimRef.current ||
+          !!mutualAimRef.current ||
+          !!carrierAimRef.current;
         const { cell } = getBoardLayout(w, h, m);
         const z0 = zoomRef.current;
         const cellCssPx = cellScreenCssPx(cell, z0);
@@ -2218,6 +2259,62 @@ export function GameCanvas({
         }
         // Fixed screen-mm hit radius → Du at current cell screen size.
         const hitRDu = mmToCssPx(MAP_CLICK_HIT_R_MM) / Math.max(1e-6, cellCssPx);
+
+        const carrierMode = carrierAimRef.current;
+        if (phaseNow === "playing" && carrierMode) {
+          const carrier = unitsRef.current.find(
+            (unit) => unit.id === carrierMode.carrierId && unit.ownerId === myPlayerIdRef.current,
+          );
+          if (!carrier || !myPlayerIdRef.current) {
+            exitCarrierAim();
+            return;
+          }
+          if (carrierMode.mode === "deploy") {
+            exitCarrierAim();
+            return;
+          }
+
+          const targetUnit = findUnitNear(unitsRef.current, hit.gx, hit.gy, 0.35);
+          if (targetUnit) {
+            if (isFriendly(teamsRef.current, targetUnit.ownerId, carrier.ownerId)) {
+              setCarrierAimNote("只能选择敌方单位或建筑");
+              return;
+            }
+            const u = carrier.embarkedAirU ?? 0;
+            if (u <= 0) {
+              exitCarrierAim();
+              return;
+            }
+            onCarrierSortieRef.current?.({
+              carrierId: carrier.id,
+              u,
+              targetUnitId: targetUnit.id,
+            });
+            exitCarrierAim();
+            return;
+          }
+          const targetBuilding = findBuildingNear(buildingsRef.current, hit.gx, hit.gy, 0.2);
+          if (
+            !targetBuilding ||
+            targetBuilding.buildingId === "artificial_island" ||
+            isFriendly(teamsRef.current, targetBuilding.ownerId, carrier.ownerId)
+          ) {
+            setCarrierAimNote("选择敌方单位或建筑");
+            return;
+          }
+          const u = carrier.embarkedAirU ?? 0;
+          if (u <= 0) {
+            exitCarrierAim();
+            return;
+          }
+          onCarrierSortieRef.current?.({
+            carrierId: carrier.id,
+            u,
+            targetBuildingId: targetBuilding.id,
+          });
+          exitCarrierAim();
+          return;
+        }
 
         if (phaseNow === "playing" || phaseNow === "spectating" || phaseNow === "ended") {
           const near = findBuildingNear(buildingsRef.current, hit.gx, hit.gy, 0.2);
@@ -2947,19 +3044,32 @@ export function GameCanvas({
   const fireAimBuilding = fireAim
     ? buildings.find((b) => b.id === fireAim) ?? null
     : null;
-  workRangeRef.current =
-    fireAimBuilding && !buildMode && canAct
-      ? workRangeCircles(fireAimBuilding, buildings, connectedBuildingIds)
-      : inspectOpen
-        ? workRangeCircles(inspectedBuilding, buildings, connectedBuildingIds)
-        : [];
-  // Dim map while BuildingInspectHud / UnitInspectHud is showing (after focus settle).
   const unitInspectOpen =
     !!inspectedUnit &&
     !!selectionUi?.showInspect &&
     inspectHudReady &&
     !buildMode &&
     (phase === "playing" || phase === "spectating" || phase === "ended");
+  const carrierRangeCircles =
+    unitInspectOpen &&
+    inspectedUnit &&
+    isCarrierKind(inspectedUnit.kind) &&
+    (!!myPlayerId && inspectedUnit.ownerId === myPlayerId)
+      ? [
+          {
+            gx: inspectedUnit.gx,
+            gy: inspectedUnit.gy,
+            radiusDu: CARRIER_SORTIE_RADIUS_DU,
+          },
+        ]
+      : [];
+  workRangeRef.current =
+    fireAimBuilding && !buildMode && canAct
+      ? workRangeCircles(fireAimBuilding, buildings, connectedBuildingIds)
+      : inspectOpen
+        ? workRangeCircles(inspectedBuilding, buildings, connectedBuildingIds)
+        : carrierRangeCircles;
+  // Dim map while BuildingInspectHud / UnitInspectHud is showing (after focus settle).
   inspectFocusRef.current =
     inspectOpen && inspectHudReady && !fireAim && inspectedBuilding
       ? { kind: "building", id: inspectedBuilding.id }
@@ -3174,6 +3284,11 @@ export function GameCanvas({
       if (e.key === "Escape" && mutualAimRef.current) {
         e.preventDefault();
         setMutualAim(null);
+        return;
+      }
+      if (e.key === "Escape" && carrierAimRef.current) {
+        e.preventDefault();
+        exitCarrierAim();
         return;
       }
       if (e.repeat || e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
@@ -3604,7 +3719,7 @@ export function GameCanvas({
                 inspectedUnit.ownerId !== myPlayerId &&
                 sameTeam(teams, inspectedUnit.ownerId, myPlayerId))
             }
-            onAction={(action: UnitInspectAction, u, detail) => {
+            onAction={(action: UnitInspectAction, u) => {
               if (phase !== "playing") return;
               log.info("unit-action", action, u.kind, u.id.slice(0, 8));
               if (action === "retreat" || action === "stop") {
@@ -3626,20 +3741,15 @@ export function GameCanvas({
                 });
                 return;
               }
-              if (action === "embark_air") {
-                const airId = detail?.airUnitId;
-                if (airId) onEmbarkAir?.(u.id, airId);
-                else {
-                  logLocalReject({
-                    action: "embark_air",
-                    summary: `空军上舰 → ${u.id.slice(0, 8)}`,
-                    reason: "未选择空军单位",
-                  });
-                }
-                return;
-              }
-              if (action === "disembark_air") {
-                onDisembarkAir?.(u.id);
+              if (action === "deploy_air") {
+                openMobilize({
+                  mode: "carrier_deploy",
+                  gx: u.gx,
+                  gy: u.gy,
+                  sources: {},
+                  unitIds: [],
+                  carrierId: u.id,
+                });
                 return;
               }
             }}
@@ -3694,6 +3804,7 @@ export function GameCanvas({
           sources={mobilize.sources}
           unitIds={mobilize.unitIds}
           assignBuildingId={mobilize.assignBuildingId}
+          carrierId={mobilize.carrierId}
           planError={planError}
           onToggleSource={(buildingId, u) => {
             const turningOn = mobilize.sources[buildingId] == null;
@@ -3706,6 +3817,7 @@ export function GameCanvas({
               terrain &&
               myPlayerId != null &&
               mobilize.mode !== "assign" &&
+              mobilize.mode !== "carrier_deploy" &&
               !(mobilize.mode === "attack" && mobilize.targetLiaisonId)
             ) {
               try {
@@ -3878,6 +3990,19 @@ export function GameCanvas({
                 holdBuildingId: mobilize.holdBuildingId,
                 sources: args.sources,
                 unitIds: args.unitIds,
+              });
+            } else if (mobilize.mode === "carrier_deploy" && mobilize.carrierId) {
+              if (!args.sources?.length) {
+                logLocalReject({
+                  action: "carrier_deploy",
+                  summary: `母舰部署 → ${mobilize.carrierId.slice(0, 8)}`,
+                  reason: "未选择机场空军",
+                });
+                return;
+              }
+              onCarrierDeploy?.({
+                carrierId: mobilize.carrierId,
+                sources: args.sources,
               });
             } else onMoveUnits?.(args);
             closeMobilize();
@@ -4097,6 +4222,14 @@ export function GameCanvas({
       {fireAim && (
         <div ref={fireHintRef} className="shift-demolish-hint">
           {fireAimNote}
+        </div>
+      )}
+      {carrierAim && (
+        <div ref={fireHintRef} className="shift-demolish-hint">
+          {carrierAimNote ||
+            (carrierAim.mode === "deploy"
+              ? "选择同格己方空军 · Esc 取消"
+              : "选择敌方单位或建筑 · Esc 取消")}
         </div>
       )}
       {mutualAim && (

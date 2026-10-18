@@ -43,7 +43,8 @@ export function filterUnitForViewer(
       ? unit.state
       : unit.state === "blockading" ||
           unit.state === "fighting" ||
-          unit.state === "holding"
+          unit.state === "holding" ||
+          unit.state === "docked"
         ? unit.state
         : "idle",
     homeBuildingId: "",

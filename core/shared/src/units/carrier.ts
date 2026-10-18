@@ -1,5 +1,5 @@
 /**
- * 航母：港口花 500E 将驻军派出为 navy_carrier（0.4 Du/s），可装载最多 3U 空军。
+ * 母舰：港口花 2000E 将驻军派出为 navy_carrier（0.4 Du/s），可装载最多 5U 空军。
  */
 
 import type { PlacedBuilding } from "../buildings/actions.js";
@@ -8,6 +8,7 @@ import {
   CARRIER_AIR_CAPACITY,
   CARRIER_BUILD_E,
   CARRIER_HULL_U,
+  CARRIER_SORTIE_RADIUS_DU,
   UNIT_BY_KIND,
 } from "./catalog.js";
 import {
@@ -24,6 +25,7 @@ export {
   CARRIER_AIR_CAPACITY,
   CARRIER_BUILD_E,
   CARRIER_HULL_U,
+  CARRIER_SORTIE_RADIUS_DU,
 } from "./catalog.js";
 
 export type BuildCarrierResult =
@@ -50,17 +52,65 @@ export type DisembarkAirResult =
     }
   | { ok: false; error: string };
 
+export type CarrierSortieLaunchResult =
+  | { ok: true; units: UnitGroup[]; sortieIds: string[] }
+  | { ok: false; error: string };
+
 export function carrierEmbarkedU(unit: UnitGroup): number {
   return Math.max(0, unit.embarkedAirU ?? 0);
 }
 
-export function carrierAirRoom(unit: UnitGroup): number {
+export function carrierAirRoom(
+  unit: UnitGroup,
+  fieldedUnits: readonly UnitGroup[] = [],
+  excludeSortieUnitId?: string,
+): number {
   if (unit.kind !== "navy_carrier") return 0;
-  return Math.max(0, CARRIER_AIR_CAPACITY - carrierEmbarkedU(unit));
+  const sortieU = fieldedUnits.reduce(
+    (sum, candidate) =>
+      sum +
+      (candidate.id !== excludeSortieUnitId &&
+      candidate.carrierId === unit.id &&
+      candidate.carrierSortieState != null &&
+      candidate.u > 0
+        ? candidate.u
+        : 0),
+    0,
+  );
+  return Math.max(
+    0,
+    CARRIER_AIR_CAPACITY - carrierEmbarkedU(unit) - sortieU,
+  );
 }
 
-export function carrierCapacityLabel(unit: UnitGroup): string {
-  return `${carrierEmbarkedU(unit)}/${CARRIER_AIR_CAPACITY}`;
+export function carrierCapacityLabel(
+  unit: UnitGroup,
+  fieldedUnits: readonly UnitGroup[] = [],
+): string {
+  return `${CARRIER_AIR_CAPACITY - carrierAirRoom(unit, fieldedUnits)}/${CARRIER_AIR_CAPACITY}`;
+}
+
+function embarkedManifest(carrier: UnitGroup): Array<{ homeBuildingId: string; u: number }> {
+  const current = carrier.embarkedAirByHome?.filter(
+    (entry) => entry.homeBuildingId && Number.isFinite(entry.u) && entry.u > 0,
+  );
+  if (current?.length) return current.map((entry) => ({ ...entry }));
+  const u = carrierEmbarkedU(carrier);
+  const homeBuildingId = carrier.embarkedAirHomeBuildingId;
+  return u > 0 && homeBuildingId ? [{ homeBuildingId, u }] : [];
+}
+
+function withEmbarkedManifest(
+  carrier: UnitGroup,
+  manifest: Array<{ homeBuildingId: string; u: number }>,
+): UnitGroup {
+  const clean = manifest.filter((entry) => entry.u > 0);
+  return {
+    ...carrier,
+    embarkedAirU: clean.reduce((sum, entry) => sum + entry.u, 0) || undefined,
+    embarkedAirHomeBuildingId: clean[0]?.homeBuildingId,
+    embarkedAirByHome: clean.length ? clean : undefined,
+  };
 }
 
 export function carrierMoveSpeedDuPerS(): number {
@@ -97,6 +147,7 @@ export function applyBuildCarrier(
   const unit: UnitGroup = {
     ...deployed.unit,
     kind: "navy_carrier",
+    hullHp: UNIT_BY_KIND.navy_carrier.hp,
     carriedE: UNIT_BY_KIND.navy_carrier.carryEMax ?? 0,
     embarkedAirU: 0,
     embarkedAirHomeBuildingId: undefined,
@@ -107,6 +158,66 @@ export function applyBuildCarrier(
     buildings,
     units: [...unitsIn.map((u) => ({ ...u, path: u.path?.map((p) => ({ ...p })) })), unit],
   };
+}
+
+/** Create outbound aircraft groups from the carrier hangar without releasing airport slots. */
+export function applyCarrierSortieLaunch(
+  ownerId: string,
+  carrierId: string,
+  amount: number,
+  unitsIn: readonly UnitGroup[],
+  nextId: () => string,
+): CarrierSortieLaunchResult {
+  const units: UnitGroup[] = unitsIn.map((unit) => ({
+    ...unit,
+    path: unit.path?.map((point) => ({ ...point })),
+  }));
+  const carrierIndex = units.findIndex((unit) => unit.id === carrierId);
+  if (carrierIndex < 0) return { ok: false, error: "航母不存在" };
+  const carrier = units[carrierIndex]!;
+  if (carrier.ownerId !== ownerId) return { ok: false, error: "只能操作自己的航母" };
+  if (carrier.kind !== "navy_carrier") return { ok: false, error: "目标不是航母" };
+  if (carrier.retreating) return { ok: false, error: "航母撤退中，不能出击" };
+  const requested = Math.floor(amount);
+  if (!Number.isFinite(requested) || requested < 1) {
+    return { ok: false, error: "出击数量至少为 1U" };
+  }
+  if (requested > carrierEmbarkedU(carrier)) {
+    return { ok: false, error: "机库空军不足" };
+  }
+
+  const manifest = embarkedManifest(carrier);
+  let remaining = requested;
+  const launchGroups: Array<{ homeBuildingId: string; u: number }> = [];
+  for (const entry of manifest) {
+    if (remaining <= 0) break;
+    const take = Math.min(remaining, entry.u);
+    if (take <= 0) continue;
+    launchGroups.push({ homeBuildingId: entry.homeBuildingId, u: take });
+    entry.u -= take;
+    remaining -= take;
+  }
+  if (remaining > 0) return { ok: false, error: "舰载机归属数据不完整" };
+
+  units[carrierIndex] = withEmbarkedManifest(carrier, manifest);
+  const sortieIds: string[] = [];
+  for (const group of launchGroups) {
+    const aircraft = createUnitGroup({
+      id: nextId(),
+      ownerId,
+      kind: "air",
+      u: group.u,
+      gx: carrier.gx,
+      gy: carrier.gy,
+      homeBuildingId: group.homeBuildingId,
+      carriedE: 0,
+    });
+    aircraft.carrierId = carrier.id;
+    aircraft.carrierSortieState = "outbound";
+    sortieIds.push(aircraft.id);
+    units.push(aircraft);
+  }
+  return { ok: true, units, sortieIds };
 }
 
 export function applyEmbarkAir(
@@ -130,7 +241,10 @@ export function applyEmbarkAir(
   if (carrier.ownerId !== ownerId || air.ownerId !== ownerId) {
     return { ok: false, error: "只能操作自己的单位" };
   }
-  if (carrier.retreating || air.retreating) {
+  if (
+    air.retreating ||
+    (carrier.retreating && air.carrierSortieState !== "returning_carrier")
+  ) {
     return { ok: false, error: "退却中，回到归属建筑前不能接受其他命令" };
   }
   if (carrier.kind !== "navy_carrier") {
@@ -145,7 +259,11 @@ export function applyEmbarkAir(
   if (air.state !== "idle") {
     return { ok: false, error: "空军须处于停留状态" };
   }
-  const room = carrierAirRoom(carrier);
+  const room = carrierAirRoom(
+    carrier,
+    units,
+    air.carrierId === carrier.id ? air.id : undefined,
+  );
   const take = Math.min(
     room,
     Math.max(0, Math.floor(amount ?? air.u)),
@@ -154,16 +272,28 @@ export function applyEmbarkAir(
   if (take < 1) {
     return { ok: false, error: room < 1 ? "航母机库已满" : "没有可装载的空军" };
   }
-  const nextEmbarked = carrierEmbarkedU(carrier) + take;
-  const home = carrier.embarkedAirHomeBuildingId ?? air.homeBuildingId;
-  units[ci] = {
-    ...carrier,
-    embarkedAirU: nextEmbarked,
-    embarkedAirHomeBuildingId: home,
-  };
+  const manifest = embarkedManifest(carrier);
+  const existingHome = manifest.find((entry) => entry.homeBuildingId === air.homeBuildingId);
+  if (existingHome) existingHome.u += take;
+  else manifest.push({ homeBuildingId: air.homeBuildingId, u: take });
+  units[ci] = withEmbarkedManifest(carrier, manifest);
+  // Sortie aircraft never occupied home away slots; carrier-deploy boarding did.
+  const releaseHomeAway = air.carrierSortieState !== "returning_carrier";
+  if (releaseHomeAway && air.homeBuildingId) {
+    const hi = buildings.findIndex(
+      (b) => b.id === air.homeBuildingId && b.ownerId === air.ownerId,
+    );
+    if (hi >= 0) buildings[hi] = releaseAwayOccupation(buildings[hi]!, take);
+  }
   const left = air.u - take;
-  if (left > 0) units[ai] = { ...air, u: left };
-  else units.splice(ai, 1);
+  if (left > 0) {
+    units[ai] = {
+      ...air,
+      u: left,
+      carrierId: undefined,
+      carrierSortieState: undefined,
+    };
+  } else units.splice(ai, 1);
   return { ok: true, buildings, units };
 }
 
@@ -194,31 +324,39 @@ export function applyDisembarkAir(
   const total = carrierEmbarkedU(carrier);
   const take = Math.min(total, Math.max(0, Math.floor(amount ?? total)));
   if (take < 1) return { ok: false, error: "航母上没有空军" };
-  const left = total - take;
-  units[ci] = {
-    ...carrier,
-    embarkedAirU: left > 0 ? left : undefined,
-    embarkedAirHomeBuildingId:
-      left > 0 ? carrier.embarkedAirHomeBuildingId : undefined,
-  };
-  // 放飞到航母旁空位，避免同格立刻被 autoEmbark 装回.
+  let remaining = take;
+  const manifest = embarkedManifest(carrier);
+  const disembarked: Array<{ homeBuildingId: string; u: number }> = [];
+  for (const entry of manifest) {
+    if (remaining <= 0) break;
+    const amountForHome = Math.min(remaining, entry.u);
+    if (amountForHome > 0) {
+      disembarked.push({ homeBuildingId: entry.homeBuildingId, u: amountForHome });
+      entry.u -= amountForHome;
+      remaining -= amountForHome;
+    }
+  }
+  units[ci] = withEmbarkedManifest(carrier, manifest);
+  // Spawn each origin separately so aircraft can always return to its own airport.
   const occupied = occupiedUnitKeys(units, new Set());
   occupied.add(unitCoordKey(carrier.gx, carrier.gy));
   for (const b of _buildingsIn) occupied.add(unitCoordKey(b.gx, b.gy));
-  const free = findFreeUnitCoord(carrier.gx, carrier.gy, occupied);
-  units.push(
-    createUnitGroup({
-      id: nextId(),
-      ownerId: carrier.ownerId,
-      kind: "air",
-      u: take,
-      gx: free.gx,
-      gy: free.gy,
-      homeBuildingId:
-        carrier.embarkedAirHomeBuildingId ?? carrier.homeBuildingId,
-      carriedE: 0,
-    }),
-  );
+  for (const group of disembarked) {
+    const free = findFreeUnitCoord(carrier.gx, carrier.gy, occupied);
+    occupied.add(unitCoordKey(free.gx, free.gy));
+    units.push(
+      createUnitGroup({
+        id: nextId(),
+        ownerId: carrier.ownerId,
+        kind: "air",
+        u: group.u,
+        gx: free.gx,
+        gy: free.gy,
+        homeBuildingId: group.homeBuildingId,
+        carriedE: 0,
+      }),
+    );
+  }
   return { ok: true, units };
 }
 
@@ -237,10 +375,16 @@ export function releaseEmbarkedAirForCarrierDiff(
     const cur = afterById.get(prev.id);
     const destroyed = !cur || cur.u <= 0;
     if (!destroyed) continue;
-    const embarked = carrierEmbarkedU(prev);
-    const home = prev.embarkedAirHomeBuildingId;
-    if (embarked <= 0 || !home) continue;
-    lossByHome.set(home, (lossByHome.get(home) ?? 0) + embarked);
+    const manifest = embarkedManifest(prev);
+    if (!manifest.length && carrierEmbarkedU(prev) > 0 && prev.embarkedAirHomeBuildingId) {
+      manifest.push({ homeBuildingId: prev.embarkedAirHomeBuildingId, u: carrierEmbarkedU(prev) });
+    }
+    for (const entry of manifest) {
+      lossByHome.set(
+        entry.homeBuildingId,
+        (lossByHome.get(entry.homeBuildingId) ?? 0) + entry.u,
+      );
+    }
   }
   if (lossByHome.size === 0) {
     return buildings.map((b) => ({ ...b }));
@@ -254,11 +398,13 @@ export function releaseEmbarkedAirForCarrierDiff(
 /** 同格友军航母自动装载停留中的空军. */
 export function autoEmbarkCoLocatedAir(
   unitsIn: readonly UnitGroup[],
-): UnitGroup[] {
+  buildingsIn: readonly PlacedBuilding[] = [],
+): { units: UnitGroup[]; buildings: PlacedBuilding[] } {
   let units: UnitGroup[] = unitsIn.map((u) => ({
     ...u,
     path: u.path?.map((p) => ({ ...p })),
   })) as UnitGroup[];
+  let buildings = buildingsIn.map((b) => ({ ...b }));
   const removed = new Set<string>();
 
   for (let ai = 0; ai < units.length; ai++) {
@@ -273,7 +419,7 @@ export function autoEmbarkCoLocatedAir(
         c.ownerId === air.ownerId &&
         c.u > 0 &&
         unitCoordKey(c.gx, c.gy) === key &&
-        carrierAirRoom(c) > 0,
+        carrierAirRoom(c, units) > 0,
     );
     if (!carrier) continue;
     const result = applyEmbarkAir(
@@ -282,13 +428,17 @@ export function autoEmbarkCoLocatedAir(
       air.id,
       air.u,
       units,
-      [],
+      buildings,
     );
     if (!result.ok) continue;
     units = result.units as UnitGroup[];
+    buildings = result.buildings;
     // Restart scan after mutation.
     ai = -1;
   }
 
-  return units.filter((u) => !removed.has(u.id));
+  return {
+    units: units.filter((u) => !removed.has(u.id)),
+    buildings,
+  };
 }

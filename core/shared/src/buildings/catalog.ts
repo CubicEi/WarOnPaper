@@ -115,7 +115,7 @@ export const BUILDINGS: BuildingDef[] = [
   { id: "central_commander", name: "总司令部", category: "command", prereq: "warzone_commander", upgradeLevels: 40, hp: 75, u: 20, size: "large", orgBonus: 8, notes: "O +8；我方限一个", flags: { unique: true }, icon: "/icons/buildings/command/central_commander.png" },
 
   // 7.3 兵力
-  { id: "port", name: "港口", category: "military", prereq: "camp", upgradeLevels: 9, hp: 12, u: 4, size: "large", workR: 8, notes: "须建在海岸线；U 4，R 8；可建造航母（容纳 3U 空军，500E）", icon: "/icons/buildings/military/port.png" },
+  { id: "port", name: "港口", category: "military", prereq: "camp", upgradeLevels: 9, hp: 12, u: 8, size: "large", workR: 8, notes: "须建在海岸线；U 8，R 8；可建造航母（容纳 3U 空军，500E）", icon: "/icons/buildings/military/port.png" },
   { id: "gun", name: "臼炮", category: "military", prereq: "camp", upgradeLevels: 4, hp: 8, size: "medium", workR: 5, ammoMax: 10, reloadE: 80, h: 2, unitH: 2, notes: "H 2 / 对单位 2，R 5，80E装填1发", icon: "/icons/buildings/military/gun.png" },
   { id: "anti-air_gun", name: "防空炮", category: "military", prereq: "gun", upgradeLevels: 5, hp: 12, size: "medium", workR: 5, ammoMax: 8, reloadE: 100, notes: "R 5；装填 100E。拦截导弹（不含臼炮）；对空军造成持续减 U", icon: "/icons/buildings/military/anti-air_gun.png" },
   { id: "missile", name: "导弹", category: "military", prereq: "gun", upgradeLevels: 5, hp: 10, size: "medium", workR: 8, ammoMax: 5, reloadE: 200, h: 5, notes: "H 5，R 8，200E装填1发", icon: "/icons/buildings/military/missile.png" },

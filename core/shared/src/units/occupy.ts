@@ -69,11 +69,18 @@ export function isUnitDocked(unit: UnitGroup, ctx?: UnitDockContext): boolean {
   );
 }
 
-/** 停止：除交战、停泊外均可。空军不会进入停泊。 */
-export function canUnitStop(unit: UnitGroup, ctx?: UnitDockContext): boolean {
-  return unit.state !== "fighting" && !isUnitDocked(unit, ctx);
+/**
+ * 停止：仅驻守 / 封锁 / 移动中可用；撤退途中不可停止。
+ * （停泊、停留、交战、训练途中、停港等均不可。）
+ */
+export function canUnitStop(unit: UnitGroup, _ctx?: UnitDockContext): boolean {
+  if (unit.retreating) return false;
+  return (
+    unit.state === "holding" ||
+    unit.state === "blockading" ||
+    unit.state === "moving"
+  );
 }
-
 /** 撤退：任何时候都可以（含交战、停泊）。已在撤回途中则不再重复下达。 */
 export function canUnitRetreat(unit: UnitGroup, _ctx?: UnitDockContext): boolean {
   return unit.u > 0 && !unit.retreating;

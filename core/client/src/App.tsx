@@ -282,6 +282,32 @@ export function App() {
     [send],
   );
 
+  const onCarrierSortie = useCallback(
+    (args: {
+      carrierId: string;
+      u: number;
+      targetUnitId?: string;
+      targetBuildingId?: string;
+    }) => {
+      log.info("app", "carrier_sortie", args);
+      const ok = send({ type: "carrier_sortie", ...args });
+      if (!ok) log.error("app", "carrier_sortie send returned false", args);
+    },
+    [send],
+  );
+
+  const onCarrierDeploy = useCallback(
+    (args: {
+      carrierId: string;
+      sources: Array<{ buildingId: string; u: number }>;
+    }) => {
+      log.info("app", "carrier_deploy", args);
+      const ok = send({ type: "carrier_deploy", ...args });
+      if (!ok) log.error("app", "carrier_deploy send returned false", args);
+    },
+    [send],
+  );
+
   const onDeploy = useCallback(
     (id: string, count: number) => {
       log.info("app", "deploy", id, count);
@@ -622,6 +648,8 @@ export function App() {
         onBuildCarrier={onBuildCarrier}
         onEmbarkAir={onEmbarkAir}
         onDisembarkAir={onDisembarkAir}
+        onCarrierSortie={onCarrierSortie}
+        onCarrierDeploy={onCarrierDeploy}
         onDeploy={onDeploy}
         onTrain={onTrain}
         onFire={onFire}

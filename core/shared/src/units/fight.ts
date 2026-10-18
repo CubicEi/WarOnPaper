@@ -23,6 +23,7 @@ import {
   unitKindFromBuilding,
 } from "./catalog.js";
 import {
+  applyUnitDamage,
   resolveCombatRound,
   siegeDamageFromBuilding,
   siegeDamageFromUnits,
@@ -85,22 +86,35 @@ export function applyAirHitAndRunStrike(
       units[ti]!.u > 0 &&
       !isFriendly(teams, units[ti]!.ownerId, air.ownerId)
     ) {
-      const round = resolveCombatRound(air.u, "air", units[ti]!.u, units[ti]!.kind);
+      const target = units[ti]!;
+      const round = resolveCombatRound(
+        air.u,
+        "air",
+        target.u,
+        target.kind,
+        air.hullHp,
+        target.hullHp,
+      );
       if (round.ua1 <= 0) {
         removed.add(air.id);
-        air = { ...air, u: 0 };
+        air = { ...air, u: 0, ...(round.hullHpA != null ? { hullHp: round.hullHpA } : {}) };
       } else {
-        air = { ...air, u: round.ua1 };
+        air = { ...air, u: round.ua1, ...(round.hullHpA != null ? { hullHp: round.hullHpA } : {}) };
       }
       if (round.ub1 <= 0) {
         removed.add(units[ti]!.id);
-        units[ti] = { ...units[ti]!, u: 0 };
+        units[ti] = {
+          ...target,
+          u: 0,
+          ...(round.hullHpB != null ? { hullHp: round.hullHpB } : {}),
+        };
       } else {
-        const t = units[ti]!;
+        const t = target;
         const clearFight = t.fightTargetUnitId === air.id;
         units[ti] = {
           ...t,
           u: round.ub1,
+          ...(round.hullHpB != null ? { hullHp: round.hullHpB } : {}),
           ...(clearFight
             ? {
                 state: "idle" as const,
@@ -231,12 +245,19 @@ function applyUnitLoss(
   idx: number,
   nextU: number,
   removed: Set<string>,
+  hullHp?: number,
 ): void {
+  const current = units[idx]!;
+  const next = {
+    ...current,
+    u: nextU <= 0 ? 0 : nextU,
+    ...(hullHp != null ? { hullHp } : {}),
+  };
   if (nextU <= 0) {
-    removed.add(units[idx]!.id);
-    units[idx] = { ...units[idx]!, u: 0 };
+    removed.add(current.id);
+    units[idx] = next;
   } else {
-    units[idx] = { ...units[idx]!, u: nextU };
+    units[idx] = next;
   }
 }
 
@@ -649,9 +670,9 @@ export function advanceFightsAndSieges(
       const a = units[i]!;
       const b = units[ti]!;
       if (a.u <= 0 || b.u <= 0) break;
-      const round = resolveCombatRound(a.u, a.kind, b.u, b.kind);
-      applyUnitLoss(units, i, round.ua1, removed);
-      applyUnitLoss(units, ti, round.ub1, removed);
+      const round = resolveCombatRound(a.u, a.kind, b.u, b.kind, a.hullHp, b.hullHp);
+      applyUnitLoss(units, i, round.ua1, removed, round.hullHpA);
+      applyUnitLoss(units, ti, round.ub1, removed, round.hullHpB);
       if (round.ua1 <= 0 || round.ub1 <= 0) break;
     }
     foughtPairs.add(pairKey);
@@ -794,9 +815,11 @@ export function advanceFightsAndSieges(
               units[ai]!.kind,
               units[gi]!.u,
               units[gi]!.kind,
+              units[ai]!.hullHp,
+              units[gi]!.hullHp,
             );
-            applyUnitLoss(units, ai, round.ua1, removed);
-            applyUnitLoss(units, gi, round.ub1, removed);
+            applyUnitLoss(units, ai, round.ua1, removed, round.hullHpA);
+            applyUnitLoss(units, gi, round.ub1, removed, round.hullHpB);
             if (units[ai]!.u <= 0) break;
           }
         }
@@ -816,8 +839,9 @@ export function advanceFightsAndSieges(
             units[ai]!.kind,
             remainingG,
             gKind,
+            units[ai]!.hullHp,
           );
-          applyUnitLoss(units, ai, round.ua1, removed);
+          applyUnitLoss(units, ai, round.ua1, removed, round.hullHpA);
           remainingG = round.ub1;
         }
         buildings[bi] = { ...buildings[bi]!, u: remainingG };
@@ -845,7 +869,17 @@ export function advanceFightsAndSieges(
             : Math.floor((dmgToUnits * w.u) / totalU);
         leftRet -= share;
         if (!removed.has(units[w.i]!.id)) {
-          applyUnitLoss(units, w.i, units[w.i]!.u - share, removed);
+          if (units[w.i]!.kind === "navy_carrier") {
+            const hit = applyUnitDamage(
+              units[w.i]!.u,
+              "navy_carrier",
+              share,
+              units[w.i]!.hullHp,
+            );
+            applyUnitLoss(units, w.i, hit.u, removed, hit.hullHp);
+          } else {
+            applyUnitLoss(units, w.i, units[w.i]!.u - share, removed);
+          }
         }
       }
 

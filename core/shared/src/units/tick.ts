@@ -2,7 +2,11 @@ import type { TerrainMap } from "../terrain/types.js";
 import type { PlacedBuilding } from "../buildings/actions.js";
 import type { PlacedLiaison } from "../buildings/liaison.js";
 import type { TeamRoster } from "../teams.js";
-import { UNIT_BY_KIND } from "./catalog.js";
+import {
+  CARRIER_DOCK_REPAIR_INTERVAL_SEC,
+  CARRIER_SORTIE_RADIUS_DU,
+  UNIT_BY_KIND,
+} from "./catalog.js";
 import type { UnitGroup } from "./types.js";
 import { speedAt, terrainAllowsKind, findFreeUnitCoord, planAirPath } from "./pathfind.js";
 import {
@@ -24,6 +28,75 @@ import { autoEmbarkCoLocatedAir } from "./carrier.js";
 import { applyAirHitAndRunStrike } from "./fight.js";
 
 const EPS = 1e-6;
+
+function clearCarrierAttack(unit: UnitGroup): void {
+  unit.pendingAttackUnitId = undefined;
+  unit.pendingAttackBuildingId = undefined;
+  unit.fightTargetUnitId = undefined;
+  unit.siegeBuildingId = undefined;
+  unit.combatTimerSec = undefined;
+  unit.siegeTimerSec = undefined;
+  unit.siegeDamageDealt = undefined;
+  unit.siegeAirDamageDealt = undefined;
+}
+
+function beginCarrierReturn(unit: UnitGroup): void {
+  clearCarrierAttack(unit);
+  unit.carrierSortieState = "returning_carrier";
+  unit.retreating = true;
+  unit.state = "idle";
+  unit.path = undefined;
+  unit.pathIndex = undefined;
+}
+
+function divertCarrierSortieToAirport(
+  unit: UnitGroup,
+  buildings: readonly PlacedBuilding[],
+): void {
+  clearCarrierAttack(unit);
+  const home = buildings.find((building) => building.id === unit.homeBuildingId && building.ownerId === unit.ownerId);
+  if (home) {
+    unit.returnGx = home.gx;
+    unit.returnGy = home.gy;
+  }
+  unit.carrierId = undefined;
+  unit.carrierSortieState = undefined;
+  unit.retreating = undefined;
+  unit.state = "idle";
+  unit.path = undefined;
+  unit.pathIndex = undefined;
+}
+
+function finishCarrierReturn(unit: UnitGroup, carrier: UnitGroup): void {
+  unit.gx = carrier.gx;
+  unit.gy = carrier.gy;
+  clearCarrierAttack(unit);
+  // Keep carrierSortieState until applyEmbarkAir (boarding vs returning sortie).
+  unit.retreating = undefined;
+  unit.state = "idle";
+  unit.path = undefined;
+  unit.pathIndex = undefined;
+}
+
+function carrierSortieTarget(
+  unit: UnitGroup,
+  units: readonly UnitGroup[],
+  buildings: readonly PlacedBuilding[],
+): { gx: number; gy: number } | undefined {
+  const targetUnitId = unit.pendingAttackUnitId ?? unit.fightTargetUnitId;
+  if (targetUnitId) {
+    const target = units.find((candidate) => candidate.id === targetUnitId && candidate.u > 0);
+    return target ? { gx: target.gx, gy: target.gy } : undefined;
+  }
+  const targetBuildingId = unit.pendingAttackBuildingId ?? unit.siegeBuildingId;
+  if (!targetBuildingId) return undefined;
+  const target = buildings.find((candidate) => candidate.id === targetBuildingId && candidate.hp > 0);
+  return target ? { gx: target.gx, gy: target.gy } : undefined;
+}
+
+function sortieDistance(a: { gx: number; gy: number }, b: { gx: number; gy: number }): number {
+  return Math.hypot(a.gx - b.gx, a.gy - b.gy);
+}
 
 export interface TickMoveResult {
   units: UnitGroup[];
@@ -71,7 +144,52 @@ export function advanceUnits(
       depositedU,
     );
 
-  for (const unit of units) {
+  const movementOrder = [...units].sort((a, b) => {
+    const priority = (unit: UnitGroup) =>
+      unit.kind === "navy_carrier" ? 0 : unit.kind !== "air" ? 1 : unit.carrierId ? 2 : 3;
+    return priority(a) - priority(b);
+  });
+  for (const unit of movementOrder) {
+    if (unit.kind === "air" && unit.carrierId) {
+      let carrier = units.find(
+        (candidate) => candidate.id === unit.carrierId && candidate.kind === "navy_carrier" && candidate.u > 0,
+      );
+      if (!carrier) {
+        divertCarrierSortieToAirport(unit, buildings);
+      } else if (unit.carrierSortieState === "outbound") {
+        const target = carrierSortieTarget(unit, units, buildings);
+        if (
+          sortieDistance(unit, carrier) > CARRIER_SORTIE_RADIUS_DU + 1e-9 ||
+          !target ||
+          sortieDistance(target, carrier) > CARRIER_SORTIE_RADIUS_DU + 1e-9
+        ) {
+          beginCarrierReturn(unit);
+        }
+      }
+
+      if (
+        unit.carrierSortieState === "returning_carrier" ||
+        unit.carrierSortieState === "boarding"
+      ) {
+        carrier = units.find(
+          (candidate) => candidate.id === unit.carrierId && candidate.kind === "navy_carrier" && candidate.u > 0,
+        );
+        if (!carrier) {
+          divertCarrierSortieToAirport(unit, buildings);
+        } else {
+          const destination = snapToUnitCoord(carrier.gx, carrier.gy);
+          const current = snapToUnitCoord(unit.gx, unit.gy);
+          if (unitCoordKey(current.gx, current.gy) === unitCoordKey(destination.gx, destination.gy)) {
+            finishCarrierReturn(unit, carrier);
+            continue;
+          }
+          unit.state = "moving";
+          unit.path = [current, destination];
+          unit.pathIndex = 1;
+        }
+      }
+    }
+
     if (
       unit.kind === "air" &&
       unit.state === "idle" &&
@@ -102,7 +220,12 @@ export function advanceUnits(
     }
 
     // Training delivery / retreat-to-home may leave radio and port range freely.
-    const ignoreCoverage = unit.state === "training" || !!unit.depositOnArrival;
+    const ignoreCoverage =
+      unit.state === "training" ||
+      !!unit.depositOnArrival ||
+      !!unit.retreating ||
+      !!unit.carrierId ||
+      unit.carrierSortieState === "boarding";
     const coverage = ignoreCoverage
       ? []
       : collectMovingUnitCoverage(
@@ -112,7 +235,7 @@ export function advanceUnits(
           teams,
         );
     // Retreat / training deposit does not consume carried E en route.
-    const skipFuel = !!unit.depositOnArrival || unit.state === "training";
+    const skipFuel = !!unit.depositOnArrival || unit.state === "training" || !!unit.retreating;
 
     let budget = dtSec;
     while (budget > EPS && idx < path.length) {
@@ -224,6 +347,18 @@ export function advanceUnits(
     if (unit.state !== "moving" && unit.state !== "training") continue;
 
     if (idx >= path.length) {
+      if (
+        (unit.carrierSortieState === "returning_carrier" ||
+          unit.carrierSortieState === "boarding") &&
+        unit.carrierId
+      ) {
+        const carrier = units.find(
+          (candidate) => candidate.id === unit.carrierId && candidate.kind === "navy_carrier" && candidate.u > 0,
+        );
+        if (carrier) finishCarrierReturn(unit, carrier);
+        else divertCarrierSortieToAirport(unit, buildings);
+        continue;
+      }
       const pendingAttack =
         !!unit.pendingAttackUnitId || !!unit.pendingAttackBuildingId;
       if (
@@ -246,11 +381,46 @@ export function advanceUnits(
   // Skip U already入库 this tick — those are not losses (and training never occupied away).
   const afterAway = releaseAwayForUnitDiff(buildings, unitsIn, surviving, depositedU);
 
+  const repaired = advanceCarrierDockRepair(surviving, dtSec);
+
+  const embarked = autoEmbarkCoLocatedAir(repaired, afterAway);
+
   return {
-    units: autoEmbarkCoLocatedAir(surviving),
-    buildings: afterAway,
+    units: embarked.units,
+    buildings: embarked.buildings,
     removedIds: [...removed],
   };
+}
+
+/** 停港母舰：每 2 秒恢复 1 点舰体 HP。 */
+function advanceCarrierDockRepair(
+  unitsIn: readonly UnitGroup[],
+  dtSec: number,
+): UnitGroup[] {
+  if (!(dtSec > 0)) return [...unitsIn];
+  const maxHp = UNIT_BY_KIND.navy_carrier.hp;
+  return unitsIn.map((unit) => {
+    if (unit.kind !== "navy_carrier" || unit.state !== "docked" || unit.u <= 0) {
+      return unit;
+    }
+    const hull = unit.hullHp ?? maxHp;
+    if (hull >= maxHp) {
+      return unit.dockRepairTimerSec
+        ? { ...unit, dockRepairTimerSec: undefined }
+        : unit;
+    }
+    let timer = (unit.dockRepairTimerSec ?? 0) + dtSec;
+    let nextHull = hull;
+    while (timer + 1e-9 >= CARRIER_DOCK_REPAIR_INTERVAL_SEC && nextHull < maxHp) {
+      timer -= CARRIER_DOCK_REPAIR_INTERVAL_SEC;
+      nextHull += 1;
+    }
+    return {
+      ...unit,
+      hullHp: nextHull,
+      dockRepairTimerSec: nextHull >= maxHp ? undefined : timer,
+    };
+  });
 }
 
 function stopForSupply(
@@ -304,6 +474,8 @@ function settleIdle(
   const supplyBuildingId = unit.supplyBuildingId;
   // Capture before state→idle: training delivery must not release awayOccupiedU.
   const fromTrainingDelivery = unit.state === "training";
+  const wasCarrierRetreat =
+    unit.kind === "navy_carrier" && !!unit.retreating && !unit.depositOnArrival;
   unit.path = undefined;
   unit.pathIndex = undefined;
   unit.pendingBlockade = undefined;
@@ -345,7 +517,9 @@ function settleIdle(
         removed,
       );
       if (removed.has(unit.id)) return;
-      if (!tryStartAirReturn(unit, buildings, removed, liveUnits, reserved, depositedU)) {
+      if (unit.carrierSortieState === "outbound" && unit.carrierId) {
+        beginCarrierReturn(unit);
+      } else if (!tryStartAirReturn(unit, buildings, removed, liveUnits, reserved, depositedU)) {
         nudgeOffBuildingCenters(unit, buildings, allUnits, removed, reserved, terrain, liaisons);
       }
       return;
@@ -448,6 +622,12 @@ function settleIdle(
   unit.depositOnArrival = undefined;
   unit.depositBuildingId = undefined;
   unit.retreating = undefined;
+
+  if (wasCarrierRetreat) {
+    unit.state = "docked";
+    unit.dockRepairTimerSec = 0;
+    return;
+  }
 
   nudgeOffBuildingCenters(unit, buildings, allUnits, removed, reserved, terrain, liaisons);
 }
@@ -559,6 +739,19 @@ function yieldOffBuildingCenters(
     if (unit.depositOnArrival) continue;
     const key = unitCoordKey(unit.gx, unit.gy);
     if (!centers.has(key)) continue;
+    if (
+      unit.kind === "air" &&
+      unit.carrierId &&
+      units.some(
+        (candidate) =>
+          candidate.id === unit.carrierId &&
+          candidate.kind === "navy_carrier" &&
+          candidate.u > 0 &&
+          unitCoordKey(candidate.gx, candidate.gy) === key,
+      )
+    ) {
+      continue;
+    }
     // Navy may remain docked on a port building cell (coastline, not pure ocean).
     const dockedAtPort =
       (unit.kind === "navy" || unit.kind === "navy_carrier") &&

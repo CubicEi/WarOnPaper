@@ -98,9 +98,17 @@ export function advanceBlockades(
         const a = units[bi]!;
         const b = units[ei]!;
         if (a.u <= 0 || b.u <= 0) continue;
-        const round = resolveCombatRound(a.u, a.kind, b.u, b.kind);
-        units[bi] = { ...a, u: round.ua1 };
-        units[ei] = { ...b, u: round.ub1 };
+        const round = resolveCombatRound(a.u, a.kind, b.u, b.kind, a.hullHp, b.hullHp);
+        units[bi] = {
+          ...a,
+          u: round.ua1,
+          ...(round.hullHpA != null ? { hullHp: round.hullHpA } : {}),
+        };
+        units[ei] = {
+          ...b,
+          u: round.ub1,
+          ...(round.hullHpB != null ? { hullHp: round.hullHpB } : {}),
+        };
         if (round.ub1 <= 0) removed.add(b.id);
         if (round.ua1 <= 0) {
           removed.add(a.id);

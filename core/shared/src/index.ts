@@ -92,7 +92,7 @@ export interface PlayerHudState {
 }
 
 /** Idle room destroy threshold (manager + GameRoom hooks). */
-export const ROOM_IDLE_MS = 5 * 60 * 1000;
+export const ROOM_IDLE_MS = 15 * 60 * 1000;
 
 export type { PlacedBuilding, BuildCostPreview, RepairCostPreview } from "./buildings/actions.js";
 export {
@@ -634,6 +634,18 @@ export type ClientToServer =
       u?: number;
     }
   | {
+      type: "carrier_sortie";
+      carrierId: string;
+      u: number;
+      targetUnitId?: string;
+      targetBuildingId?: string;
+    }
+  | {
+      type: "carrier_deploy";
+      carrierId: string;
+      sources: Array<{ buildingId: string; u: number }>;
+    }
+  | {
       type: "chat";
       /** Plain text; server truncates. */
       text: string;
@@ -994,6 +1006,9 @@ export {
   CARRIER_BUILD_E,
   CARRIER_AIR_CAPACITY,
   CARRIER_HULL_U,
+  CARRIER_SORTIE_RADIUS_DU,
+  CARRIER_DEPLOY_O_COST,
+  CARRIER_DOCK_REPAIR_INTERVAL_SEC,
   ROAD_MOVE_SPEED,
   RAIL_MOVE_SPEED,
   unitKindFromBuilding,
@@ -1067,6 +1082,8 @@ export {
   applyUnitBlockade,
   applyUnitSupply,
   applyUnitAttack,
+  applyCarrierSortie,
+  applyCarrierDeploy,
   applyUnitHold,
   applyMutualDefense,
   applyEndMutualDefense,
@@ -1082,6 +1099,8 @@ export type {
   MoveContext,
   MoveApplyResult,
   StopApplyResult,
+  CarrierSortieRequest,
+  CarrierDeployRequest,
   EndBlockadeResult,
   MutualDefenseResult,
   EndHoldResult,
@@ -1089,6 +1108,7 @@ export type {
 export { advanceUnits } from "./units/tick.js";
 export type { TickMoveResult } from "./units/tick.js";
 export {
+  applyUnitDamage,
   resolveCombatRound,
   cannotDamageAir,
   siegeDamageFromUnits,

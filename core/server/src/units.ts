@@ -11,6 +11,8 @@ import {
   applyUnitBlockade,
   applyUnitSupply,
   applyUnitAttack,
+  applyCarrierSortie,
+  applyCarrierDeploy,
   applyLiaisonAttack,
   applyUnitHold,
   applyMutualDefense,
@@ -628,6 +630,126 @@ export function handleAttackUnits(
     targetUnitId,
     targetBuildingId,
     targetLiaisonId: targetLiaison?.id,
+  });
+  broadcast();
+}
+
+export function handleCarrierSortie(
+  session: UnitSession,
+  world: UnitWorld,
+  carrierId: string,
+  u: number,
+  targetUnitId: string | undefined,
+  targetBuildingId: string | undefined,
+  playing: boolean,
+  sendError: (ws: WebSocket, code: string, message: string) => void,
+  broadcast: () => void,
+  log: (scope: string, ...args: unknown[]) => void,
+): void {
+  if (!playing) {
+    sendError(session.ws, "not_playing", "请先选定首都");
+    return;
+  }
+  if (!world.terrain) {
+    sendError(session.ws, "no_terrain", "尚未生成地形");
+    return;
+  }
+  const result = applyCarrierSortie(
+    { ownerId: session.id, carrierId, u, targetUnitId, targetBuildingId },
+    {
+      map: world.map,
+      terrain: world.terrain,
+      buildings: world.buildings,
+      liaisons: world.liaisons,
+      units: world.units,
+      connectedIds: world.connectedByOwner.get(session.id) ?? new Set(),
+      teams: world.teams,
+      nextId: () => randomUUID(),
+    },
+  );
+  if (!result.ok) {
+    sendError(session.ws, "carrier_sortie_rejected", result.error ?? "航母出击失败");
+    return;
+  }
+  if (session.hud.organization < result.organizationCost) {
+    sendError(
+      session.ws,
+      "not_enough_org",
+      `组织度不足（需要 ${result.organizationCost} O）`,
+    );
+    return;
+  }
+  session.hud.organization -= result.organizationCost;
+  world.buildings.length = 0;
+  world.buildings.push(...result.buildings);
+  world.units.length = 0;
+  world.units.push(...result.units);
+  log("carrier_sortie", "ok", {
+    player: session.id.slice(0, 8),
+    carrier: carrierId.slice(0, 8),
+    u,
+    targetUnitId,
+    targetBuildingId,
+    costO: result.organizationCost,
+    O: session.hud.organization,
+  });
+  broadcast();
+}
+
+export function handleCarrierDeploy(
+  session: UnitSession,
+  world: UnitWorld,
+  carrierId: string,
+  sources: Array<{ buildingId: string; u: number }> | undefined,
+  playing: boolean,
+  sendError: (ws: WebSocket, code: string, message: string) => void,
+  broadcast: () => void,
+  log: (scope: string, ...args: unknown[]) => void,
+): void {
+  if (!playing) {
+    sendError(session.ws, "not_playing", "请先选定首都");
+    return;
+  }
+  if (!world.terrain) {
+    sendError(session.ws, "no_terrain", "尚未生成地形");
+    return;
+  }
+  const result = applyCarrierDeploy(
+    { ownerId: session.id, carrierId, sources: sources ?? [] },
+    {
+      map: world.map,
+      terrain: world.terrain,
+      buildings: world.buildings,
+      liaisons: world.liaisons,
+      units: world.units,
+      connectedIds: world.connectedByOwner.get(session.id) ?? new Set(),
+      teams: world.teams,
+      nextId: () => randomUUID(),
+    },
+  );
+  if (!result.ok) {
+    sendError(session.ws, "carrier_deploy_rejected", result.error ?? "母舰部署失败");
+    return;
+  }
+  if (session.hud.organization < result.organizationCost) {
+    sendError(
+      session.ws,
+      "not_enough_org",
+      `组织度不足（需要 ${result.organizationCost} O）`,
+    );
+    return;
+  }
+  session.hud.organization -= result.organizationCost;
+  world.buildings.length = 0;
+  world.buildings.push(...result.buildings);
+  world.units.length = 0;
+  world.units.push(...result.units);
+  log("carrier_deploy", "ok", {
+    player: session.id.slice(0, 8),
+    carrier: carrierId.slice(0, 8),
+    sources: (sources ?? []).map((s) => `${s.buildingId.slice(0, 8)}:${s.u}`),
+    costO: result.organizationCost,
+    O: session.hud.organization,
   });
   broadcast();
 }

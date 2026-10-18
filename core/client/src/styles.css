@@ -1232,6 +1232,39 @@ body,
   pointer-events: auto;
 }
 
+.unit-inspect-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.unit-inspect-ops--secondary {
+  min-height: 42px;
+}
+
+.building-inspect-op.unit-inspect-op--round {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  justify-content: center;
+  border: 1px solid #c8c4bc;
+  border-radius: 50%;
+  background: #ffffff;
+  color: #1a1a1a;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+.building-inspect-op.unit-inspect-op--round .point-action-label {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.building-inspect-op.unit-inspect-op--round:hover:not(:disabled) {
+  background: #f2f2f2;
+}
+
 .unit-inspect-icon-placeholder {
   /* Empty icon slot; keeps OpButton layout without an image. */
   background: #ffffff;
