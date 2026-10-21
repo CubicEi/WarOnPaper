@@ -365,6 +365,10 @@ export interface DrawMapArgs {
    * Ignored for enemy lines.
    */
   liaisonBuildProgress?: ReadonlyMap<string, number> | null;
+  /**
+   * Read档准备大厅：全图卫星预览、无直接视野洞，跳过雾层以免盖住小型建筑/线缆。
+   */
+  skipSatelliteFog?: boolean;
 }
 
 /** Fixed screen-pixel cancel control while aiming a launcher. */
@@ -1650,6 +1654,7 @@ export function drawMap(
     tick = 0,
     buildingScaleAnims,
     liaisonBuildProgress,
+    skipSatelliteFog = false,
   }: DrawMapArgs,
 ): void {
   const dpr = devicePixelRatio || 1;
@@ -1829,7 +1834,7 @@ export function drawMap(
         teams,
       ).filter((s) => !s.airOnly)
     : [];
-  if (myPlayerId) {
+  if (myPlayerId && !skipSatelliteFog) {
     drawSatelliteFog(ctx, originX, originY, boardW, boardH, cell, fogSources);
   }
 

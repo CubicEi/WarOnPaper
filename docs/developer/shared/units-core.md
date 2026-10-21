@@ -194,6 +194,7 @@
 | `applyBuildCarrier` | 港口扣 `CARRIER_HULL_U` 派出 `navy_carrier`，费用 `CARRIER_BUILD_E`（通信由调用方先验） |
 | `applyEmbarkAir` | 同格 idle 空军装入 `embarkedAirU`，释放原 away，野外组消失或减员 |
 | `applyDisembarkAir` | 弹出空军组 |
+| `carrierSortieWorkCircles` / `isInsideCarrierSortieRange` | 舰载机出击/打击范围 R=8（以母舰当前坐标为圆心） |
 | `carrierAirRoom` / `carrierCapacityLabel` / `carrierMoveSpeedDuPerS` | UI/逻辑辅助 |
 | `autoEmbarkCoLocatedAir` | tick 末同格自动装载（由 `advanceUnits` 调用） |
 | `releaseEmbarkedAirForCarrierDiff` | 航母损毁时释放机库空军对机场的 away |

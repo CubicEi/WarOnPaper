@@ -549,6 +549,12 @@ export type ClientToServer =
       sources?: Array<{ buildingId: string; u: number }>;
       /** Already fielded unit group ids. */
       unitIds?: string[];
+      /** Launch from carrier hangar rows before moving. */
+      embarkedSources?: Array<{
+        carrierId: string;
+        homeBuildingId: string;
+        u: number;
+      }>;
     }
   | {
       type: "assign_home";
@@ -568,6 +574,11 @@ export type ClientToServer =
       gy: number;
       sources?: Array<{ buildingId: string; u: number }>;
       unitIds?: string[];
+      embarkedSources?: Array<{
+        carrierId: string;
+        homeBuildingId: string;
+        u: number;
+      }>;
     }
   | {
       type: "end_blockade";
@@ -581,11 +592,21 @@ export type ClientToServer =
       gy: number;
       sources?: Array<{ buildingId: string; u: number }>;
       unitIds?: string[];
+      embarkedSources?: Array<{
+        carrierId: string;
+        homeBuildingId: string;
+        u: number;
+      }>;
     }
   | {
       type: "attack_units";
       sources?: Array<{ buildingId: string; u: number }>;
       unitIds?: string[];
+      embarkedSources?: Array<{
+        carrierId: string;
+        homeBuildingId: string;
+        u: number;
+      }>;
       targetUnitId?: string;
       targetBuildingId?: string;
       /** 敌方联络线 instance id。与单位/建筑目标互斥。 */
@@ -601,6 +622,11 @@ export type ClientToServer =
       holdBuildingId: string;
       sources?: Array<{ buildingId: string; u: number }>;
       unitIds?: string[];
+      embarkedSources?: Array<{
+        carrierId: string;
+        homeBuildingId: string;
+        u: number;
+      }>;
     }
   | {
       type: "end_hold";
@@ -986,6 +1012,8 @@ export {
   UNIT_COORD_STEP,
   UNIT_MOVE_O_COST,
   UNIT_STOP_E_COST,
+  UNIT_SIEGE_STOP_E_COST,
+  UNIT_SIEGE_STOP_O_COST,
   UNIT_STOP_O_COST,
   UNIT_BLOCKADE_O_COST,
   UNIT_BLOCKADE_ENTER_E_PER_U,
@@ -1015,7 +1043,12 @@ export {
   garrisonLockedInBuilding,
   isCarrierKind,
 } from "./units/catalog.js";
-export type { UnitGroup, UnitMoveRequest, UnitMoveSource } from "./units/types.js";
+export type {
+  EmbarkedSortieSource,
+  UnitGroup,
+  UnitMoveRequest,
+  UnitMoveSource,
+} from "./units/types.js";
 export {
   snapToUnitCoord,
   unitCoordKey,
@@ -1063,12 +1096,16 @@ export type { PathPlanResult, TransportKind, TerrainAllowOpts } from "./units/pa
 export {
   filterUnitForViewer,
   filterUnitsForViewer,
+  restoreHolderOverviewUnits,
+  filterUnitsForRestoreHolderViewer,
+  filterUnitsForRestoreLobbyViewer,
   unitHp,
   isMovingState,
 } from "./units/filter.js";
 export {
   isUnitDocked,
   canUnitStop,
+  isSiegeBuildingHpPhase,
   canUnitRetreat,
   occupiedUnitKeys,
   buildingCenterKeys,
@@ -1114,10 +1151,22 @@ export {
   siegeDamageFromUnits,
   siegeDamageFromBuilding,
   attackOrganizationCost,
+  hpPerU,
+  totalUnitHp,
+  departureMaxHp,
+  normalizeUHp,
+  fullUHp,
 } from "./units/combat.js";
+export {
+  unitNeedsHpRepair,
+  repairWorstSubUnit,
+  applyRandomHpDamage,
+} from "./units/unitHp.js";
+export { SUPPLY_STATION_HP_REPAIR_INTERVAL_SEC } from "./units/catalog.js";
 export {
   advanceHolds,
   advanceFightsAndSieges,
+  releaseAllSiegeTargetsForBuilding,
   applyAirHitAndRunStrike,
   findHoldCoordOutside,
   isBuildingHeld,
@@ -1145,6 +1194,8 @@ export {
   carrierAirRoom,
   carrierCapacityLabel,
   carrierMoveSpeedDuPerS,
+  carrierSortieWorkCircles,
+  isInsideCarrierSortieRange,
 } from "./units/carrier.js";
 export type {
   BuildCarrierResult,
@@ -1231,6 +1282,16 @@ export {
   filterBuildingsForViewer,
   filterLiaisonsForViewer,
   filterResourceSightForViewer,
+  collectRestoreDownloaderOwnerIds,
+  restoreHolderOverviewBuilding,
+  restoreHolderOverviewLiaison,
+  restoreHolderOverviewBuildings,
+  restoreHolderOverviewLiaisons,
+  filterBuildingsForRestoreHolderViewer,
+  filterLiaisonsForRestoreHolderViewer,
+  filterBuildingsForRestoreLobbyViewer,
+  filterLiaisonsForRestoreLobbyViewer,
+  filterResourceSightForRestoreLobbyViewer,
   resourceSightSamplePoint,
   shouldMaskUpgradeOnSatellite,
   buildRoadRailAdjacency,

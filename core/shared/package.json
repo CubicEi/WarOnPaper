@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test test/carrier.test.mjs",
+    "test": "node --test test/carrier.test.mjs test/unitHp.test.mjs test/restoreLobbyVision.test.mjs test/siege.test.mjs",
     "dev": "tsc -p tsconfig.json --watch"
   },
   "devDependencies": {

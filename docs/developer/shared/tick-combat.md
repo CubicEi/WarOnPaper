@@ -41,7 +41,7 @@ U'_A = \lfloor (U_A \cdot HP_A - dmg_A) / HP_A \rfloor
 
 - `cannotDamageAir` — 非空军打空军无伤  
 - `siegeDamageFromUnits(u)` — 对建筑 HP = floor(U)  
-- `siegeDamageFromBuilding(u)` — 对单位减编制 = ceil(U/3)  
+- `siegeDamageFromBuilding(u)` — 对单位 HP 伤害总量 = ceil(U/3)，经 `applyUnitDamage` 随机落点  
 - `attackOrganizationCost` — 含空/海则 3O 否则 2O  
 
 ---

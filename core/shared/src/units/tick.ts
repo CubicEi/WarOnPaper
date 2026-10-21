@@ -5,8 +5,10 @@ import type { TeamRoster } from "../teams.js";
 import {
   CARRIER_DOCK_REPAIR_INTERVAL_SEC,
   CARRIER_SORTIE_RADIUS_DU,
+  SUPPLY_STATION_HP_REPAIR_INTERVAL_SEC,
   UNIT_BY_KIND,
 } from "./catalog.js";
+import { repairWorstSubUnit, unitNeedsHpRepair } from "./unitHp.js";
 import type { UnitGroup } from "./types.js";
 import { speedAt, terrainAllowsKind, findFreeUnitCoord, planAirPath } from "./pathfind.js";
 import {
@@ -24,7 +26,8 @@ import {
   resupplyUnitFromStation,
   usesCarriedSupply,
 } from "./supply.js";
-import { autoEmbarkCoLocatedAir } from "./carrier.js";
+import { applyEmbarkAir, autoEmbarkCoLocatedAir } from "./carrier.js";
+import type { EmbarkAirResult } from "./carrier.js";
 import { applyAirHitAndRunStrike } from "./fight.js";
 
 const EPS = 1e-6;
@@ -73,9 +76,74 @@ function finishCarrierReturn(unit: UnitGroup, carrier: UnitGroup): void {
   clearCarrierAttack(unit);
   // Keep carrierSortieState until applyEmbarkAir (boarding vs returning sortie).
   unit.retreating = undefined;
+  unit.returnGx = undefined;
+  unit.returnGy = undefined;
   unit.state = "idle";
   unit.path = undefined;
   unit.pathIndex = undefined;
+}
+
+function mergeEmbarkResult(
+  units: UnitGroup[],
+  buildings: PlacedBuilding[],
+  result: EmbarkAirResult & { ok: true },
+): void {
+  const nextById = new Map(result.units.map((unit) => [unit.id, unit]));
+  for (let i = units.length - 1; i >= 0; i--) {
+    const id = units[i]!.id;
+    const next = nextById.get(id);
+    if (next) units[i] = next;
+    else units.splice(i, 1);
+  }
+  for (const unit of result.units) {
+    if (!units.some((candidate) => candidate.id === unit.id)) {
+      units.push(unit);
+    }
+  }
+  for (const building of result.buildings) {
+    const idx = buildings.findIndex((candidate) => candidate.id === building.id);
+    if (idx >= 0) buildings[idx] = building;
+  }
+}
+
+/** Boarding / sortie return: delete field air and merge into carrier hangar manifest. */
+function tryEmbarkAfterCarrierArrival(
+  unit: UnitGroup,
+  units: UnitGroup[],
+  buildings: PlacedBuilding[],
+): void {
+  if (
+    unit.kind !== "air" ||
+    !unit.carrierId ||
+    unit.u <= 0 ||
+    unit.state !== "idle" ||
+    (unit.carrierSortieState !== "boarding" &&
+      unit.carrierSortieState !== "returning_carrier")
+  ) {
+    return;
+  }
+  const carrier = units.find(
+    (candidate) =>
+      candidate.id === unit.carrierId &&
+      candidate.kind === "navy_carrier" &&
+      candidate.u > 0,
+  );
+  if (!carrier) return;
+  if (
+    unitCoordKey(unit.gx, unit.gy) !== unitCoordKey(carrier.gx, carrier.gy)
+  ) {
+    return;
+  }
+  const result = applyEmbarkAir(
+    unit.ownerId,
+    carrier.id,
+    unit.id,
+    unit.u,
+    units,
+    buildings,
+  );
+  if (!result.ok) return;
+  mergeEmbarkResult(units, buildings, result);
 }
 
 function carrierSortieTarget(
@@ -181,6 +249,7 @@ export function advanceUnits(
           const current = snapToUnitCoord(unit.gx, unit.gy);
           if (unitCoordKey(current.gx, current.gy) === unitCoordKey(destination.gx, destination.gy)) {
             finishCarrierReturn(unit, carrier);
+            tryEmbarkAfterCarrierArrival(unit, units, buildings);
             continue;
           }
           unit.state = "moving";
@@ -355,8 +424,10 @@ export function advanceUnits(
         const carrier = units.find(
           (candidate) => candidate.id === unit.carrierId && candidate.kind === "navy_carrier" && candidate.u > 0,
         );
-        if (carrier) finishCarrierReturn(unit, carrier);
-        else divertCarrierSortieToAirport(unit, buildings);
+        if (carrier) {
+          finishCarrierReturn(unit, carrier);
+          tryEmbarkAfterCarrierArrival(unit, units, buildings);
+        } else divertCarrierSortieToAirport(unit, buildings);
         continue;
       }
       const pendingAttack =
@@ -382,14 +453,66 @@ export function advanceUnits(
   const afterAway = releaseAwayForUnitDiff(buildings, unitsIn, surviving, depositedU);
 
   const repaired = advanceCarrierDockRepair(surviving, dtSec);
+  const supplyRepaired = advanceSupplyStationHpRepair(repaired, afterAway, dtSec);
 
-  const embarked = autoEmbarkCoLocatedAir(repaired, afterAway);
+  const embarked = autoEmbarkCoLocatedAir(supplyRepaired, afterAway);
 
   return {
     units: embarked.units,
     buildings: embarked.buildings,
     removedIds: [...removed],
   };
+}
+
+/** 补给站旁：每秒为受损最重的一个 U 恢复 1 HP。 */
+function advanceSupplyStationHpRepair(
+  unitsIn: readonly UnitGroup[],
+  buildings: readonly PlacedBuilding[],
+  dtSec: number,
+): UnitGroup[] {
+  if (!(dtSec > 0)) return [...unitsIn];
+  return unitsIn.map((unit) => {
+    if (!unit.supplyRepairActive || unit.kind === "navy_carrier" || unit.u <= 0) {
+      return unit;
+    }
+    const station = findSupplyStationAt(
+      buildings,
+      unit.ownerId,
+      unit.gx,
+      unit.gy,
+    );
+    if (!station) {
+      return {
+        ...unit,
+        supplyRepairActive: undefined,
+        supplyRepairTimerSec: undefined,
+      };
+    }
+    let cur = unit;
+    if (!unitNeedsHpRepair(cur)) {
+      return {
+        ...cur,
+        supplyRepairActive: undefined,
+        supplyRepairTimerSec: undefined,
+      };
+    }
+    let timer = (cur.supplyRepairTimerSec ?? 0) + dtSec;
+    while (
+      timer + 1e-9 >= SUPPLY_STATION_HP_REPAIR_INTERVAL_SEC &&
+      unitNeedsHpRepair(cur)
+    ) {
+      timer -= SUPPLY_STATION_HP_REPAIR_INTERVAL_SEC;
+      const repaired = repairWorstSubUnit(cur.u, cur.kind, cur.uHp);
+      cur = { ...cur, u: repaired.u, uHp: repaired.uHp };
+      if (!repaired.repaired) break;
+    }
+    const done = !unitNeedsHpRepair(cur);
+    return {
+      ...cur,
+      supplyRepairTimerSec: done ? undefined : timer,
+      supplyRepairActive: done ? undefined : true,
+    };
+  });
 }
 
 /** 停港母舰：每 2 秒恢复 1 点舰体 HP。 */
@@ -531,6 +654,14 @@ function settleIdle(
       unit.combatTimerSec = 0;
       unit.siegeBuildingId = undefined;
     } else if (attackBuildingId) {
+      const target = buildings.find((b) => b.id === attackBuildingId);
+      if (!target || target.ownerId === unit.ownerId) {
+        nudgeOffBuildingCenters(unit, buildings, allUnits, removed, reserved, terrain, liaisons);
+        unit.state = "idle";
+        unit.depositOnArrival = undefined;
+        unit.depositBuildingId = undefined;
+        return;
+      }
       unit.state = "fighting";
       unit.siegeBuildingId = attackBuildingId;
       unit.siegeTimerSec = 0;
@@ -564,6 +695,10 @@ function settleIdle(
         unit.carriedE = result.unit.carriedE;
         const bi = buildings.findIndex((b) => b.id === station.id);
         if (bi >= 0) buildings[bi] = result.building;
+      }
+      if (unitNeedsHpRepair(unit)) {
+        unit.supplyRepairActive = true;
+        unit.supplyRepairTimerSec = 0;
       }
     }
     return;
@@ -686,6 +821,7 @@ function tryStartAirReturn(
   depositedU?: Map<string, number>,
 ): boolean {
   if (unit.kind !== "air" || unit.retreating) return false;
+  if (unit.carrierId) return false;
   if (unit.returnGx == null || unit.returnGy == null) return false;
   if (unit.depositOnArrival) return false;
   // Do not abort an inbound attack: pending fight must start at the target first.

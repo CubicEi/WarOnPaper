@@ -60,7 +60,7 @@ export function ResearchProgressIndicator({ tick, activeResearch }: Props) {
 
   const def = BUILDING_BY_ID[buildingId];
   const icon = buildingUiIcon(
-    def?.icon ?? `/icons/buildings/military/${buildingId}.png`,
+    def?.icon ?? `/icons/buildings/military/${buildingId}.svg`,
   );
 
   let progress = 1;

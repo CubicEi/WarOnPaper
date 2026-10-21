@@ -48,26 +48,19 @@ body {
   background: #1a221c;
 }
 
-.title-map-layer {
+.title-map-canvas {
   position: absolute;
-  left: 50%;
-  top: 50%;
-  opacity: 0;
-  transition: opacity 0.45s ease;
-  will-change: transform, opacity;
-}
-
-.title-map-layer.is-visible {
-  opacity: 1;
-}
-
-.title-map-img {
+  inset: 0;
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: fill;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
+  opacity: 0;
+  transition: opacity 0.45s ease;
+  will-change: opacity;
+}
+
+.title-map-canvas.is-visible {
+  opacity: 1;
 }
 
 /* Dim wash so hero type stays readable over the map */

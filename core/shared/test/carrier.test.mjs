@@ -212,6 +212,54 @@ test("returning sortie can reclaim its reserved hangar slot", () => {
   ]);
 });
 
+test("carrier sortie uses carrier R=8 range, not home airport work range", () => {
+  const airport = {
+    ...portWithHull(),
+    id: "airport-a",
+    buildingId: "airport",
+    gx: 0,
+    gy: 0,
+    u: 5,
+  };
+  const carrier = {
+    ...carrierAt(10, 10),
+    embarkedAirU: 1,
+    embarkedAirByHome: [{ homeBuildingId: airport.id, u: 1 }],
+  };
+  const target = {
+    id: "target",
+    ownerId: "enemy",
+    kind: "infantry",
+    u: 1,
+    gx: 17,
+    gy: 10,
+    carriedE: 0,
+    state: "idle",
+    homeBuildingId: "enemy-base",
+  };
+  const world = {
+    map: MAP_SIZES["89x59"],
+    terrain: oceanTerrain(),
+    buildings: [portWithHull(), airport],
+    liaisons: [],
+    units: [carrier, target],
+    connectedIds: new Set(),
+    nextId: (() => {
+      let id = 0;
+      return () => `sortie-${++id}`;
+    })(),
+  };
+  const order = applyCarrierSortie(
+    { ownerId: "owner", carrierId: carrier.id, u: 1, targetUnitId: target.id },
+    world,
+  );
+  assert.equal(order.ok, true);
+  if (!order.ok) return;
+  const sortie = order.units.find((unit) => unit.carrierSortieState === "outbound");
+  assert.ok(sortie);
+  assert.equal(sortie.returnGx, undefined);
+});
+
 test("sortie aborts when the moving carrier takes its target out of range", () => {
   const carrier = carrierAt(10, 10, "moving", [
     { gx: 10, gy: 10 },

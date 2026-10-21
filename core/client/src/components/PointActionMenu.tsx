@@ -36,7 +36,7 @@ export const CAPITAL_PICK_ACTIONS: PointActionDef[] = [
     id: "set_capital",
     label: "定为首都",
     angleDeg: 0,
-    icon: "/icons/buildings - black/settlement/capital.png",
+    icon: "/icons/buildings - black/settlement/capital.svg",
   },
 ];
 

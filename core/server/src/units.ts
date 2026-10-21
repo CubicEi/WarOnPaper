@@ -213,6 +213,9 @@ export function handleMoveUnits(
   gy: number,
   sources: Array<{ buildingId: string; u: number }> | undefined,
   unitIds: string[] | undefined,
+  embarkedSources:
+    | Array<{ carrierId: string; homeBuildingId: string; u: number }>
+    | undefined,
   playing: boolean,
   sendError: (ws: WebSocket, code: string, message: string) => void,
   broadcast: () => void,
@@ -227,7 +230,14 @@ export function handleMoveUnits(
     return;
   }
   const result = applyUnitMove(
-    { ownerId: session.id, gx, gy, sources, unitIds },
+    {
+      ownerId: session.id,
+      gx,
+      gy,
+      sources,
+      unitIds,
+      embarkedSources,
+    },
     {
       map: world.map,
       terrain: world.terrain,
@@ -395,6 +405,9 @@ export function handleBlockadeUnits(
   gy: number,
   sources: Array<{ buildingId: string; u: number }> | undefined,
   unitIds: string[] | undefined,
+  embarkedSources:
+    | Array<{ carrierId: string; homeBuildingId: string; u: number }>
+    | undefined,
   playing: boolean,
   sendError: (ws: WebSocket, code: string, message: string) => void,
   broadcast: () => void,
@@ -409,7 +422,7 @@ export function handleBlockadeUnits(
     return;
   }
   const result = applyUnitBlockade(
-    { ownerId: session.id, gx, gy, sources, unitIds },
+    { ownerId: session.id, gx, gy, sources, unitIds, embarkedSources },
     {
       map: world.map,
       terrain: world.terrain,
@@ -482,6 +495,9 @@ export function handleSupplyUnits(
   gy: number,
   sources: Array<{ buildingId: string; u: number }> | undefined,
   unitIds: string[] | undefined,
+  embarkedSources:
+    | Array<{ carrierId: string; homeBuildingId: string; u: number }>
+    | undefined,
   playing: boolean,
   sendError: (ws: WebSocket, code: string, message: string) => void,
   broadcast: () => void,
@@ -502,6 +518,7 @@ export function handleSupplyUnits(
       gy,
       sources,
       unitIds,
+      embarkedSources,
       supplyBuildingId,
     },
     {
@@ -543,6 +560,9 @@ export function handleAttackUnits(
   world: UnitWorld,
   sources: Array<{ buildingId: string; u: number }> | undefined,
   unitIds: string[] | undefined,
+  embarkedSources:
+    | Array<{ carrierId: string; homeBuildingId: string; u: number }>
+    | undefined,
   targetUnitId: string | undefined,
   targetBuildingId: string | undefined,
   playing: boolean,
@@ -588,6 +608,7 @@ export function handleAttackUnits(
           gy: 0,
           sources,
           unitIds,
+          embarkedSources,
         },
         ctx,
         {
@@ -605,6 +626,7 @@ export function handleAttackUnits(
           gy: attackTarget?.gy ?? 0,
           sources,
           unitIds,
+          embarkedSources,
           attackTargetUnitId: targetUnitId,
           attackTargetBuildingId: targetBuildingId,
         },
@@ -760,6 +782,9 @@ export function handleHoldUnits(
   holdBuildingId: string,
   sources: Array<{ buildingId: string; u: number }> | undefined,
   unitIds: string[] | undefined,
+  embarkedSources:
+    | Array<{ carrierId: string; homeBuildingId: string; u: number }>
+    | undefined,
   playing: boolean,
   sendError: (ws: WebSocket, code: string, message: string) => void,
   broadcast: () => void,
@@ -781,6 +806,7 @@ export function handleHoldUnits(
       gy: b?.gy ?? 0,
       sources,
       unitIds,
+      embarkedSources,
       holdBuildingId,
     },
     {

@@ -2,14 +2,19 @@ import {
   CARRIER_AIR_CAPACITY,
   CARRIER_DEPLOY_O_COST,
   UNIT_BY_KIND,
+  UNIT_SIEGE_STOP_E_COST,
+  UNIT_SIEGE_STOP_O_COST,
   UNIT_STOP_E_COST,
   UNIT_STOP_O_COST,
   canUnitRetreat,
   canUnitStop,
+  isSiegeBuildingHpPhase,
   carrierAirRoom,
   estimatePathTimeSec,
   isCarrierKind,
   isMovingState,
+  departureMaxHp,
+  totalUnitHp,
   unitHp,
   type PlacedBuilding,
   type PlacedLiaison,
@@ -99,6 +104,8 @@ export function UnitInspectHud({
   const name = def.name;
   const showStrength = (owned || isAlly) && !unit.strengthHidden;
   const hpPerU = unitHp(unit.kind);
+  const fieldHpTotal = totalUnitHp(unit);
+  const fieldHpMax = departureMaxHp(unit);
   const carrierHullMax = UNIT_BY_KIND.navy_carrier.hp;
   const carrierHullHp = unit.hullHp ?? carrierHullMax;
   const embarkedU = unit.embarkedAirU ?? 0;
@@ -119,33 +126,45 @@ export function UnitInspectHud({
       ? estimatePathTimeSec(unit.kind, rem, terrain, liaisons, unit.ownerId)
       : 0;
 
-  const stopCostsResources = moving;
+  const siegeHpStop = isSiegeBuildingHpPhase(unit, buildings, units);
+  const stopCostsResources = moving || siegeHpStop;
+  const stopOCost = siegeHpStop ? UNIT_SIEGE_STOP_O_COST : UNIT_STOP_O_COST;
+  const stopECost = siegeHpStop ? UNIT_SIEGE_STOP_E_COST : UNIT_STOP_E_COST;
   const canAffordStop =
     !stopCostsResources ||
-    (organization >= UNIT_STOP_O_COST && energy >= UNIT_STOP_E_COST);
+    (organization >= stopOCost && energy >= stopECost);
   const fighting = unit.state === "fighting";
   const dock = { buildings, units };
   const stopOk = canUnitStop(unit, dock);
   const retreatOk = canUnitRetreat(unit, dock);
   const docked = unit.state === "docked";
 
-  const stopTitle = fighting
-    ? "交战中无法停止"
-    : unit.retreating
-      ? "撤退途中无法停止"
-      : !stopOk
-        ? docked
-          ? "停港中无法停止"
-          : "仅驻守、封锁或移动中可停止"
-        : stopCostsResources && !canAffordStop
-          ? `需要 ${UNIT_STOP_E_COST} E · ${UNIT_STOP_O_COST} O`
-          : blockading
-            ? "结束封锁并停在原地（不耗 O/E）"
-            : holding
-              ? "结束驻守（不耗 O/E）"
-              : moving
-                ? `停止行军 · ${UNIT_STOP_E_COST} E · ${UNIT_STOP_O_COST} O`
-                : "无法停止";
+  const stopTitle =
+    fighting && !siegeHpStop
+      ? "交战中无法停止"
+      : unit.retreating
+        ? "撤退途中无法停止"
+        : !stopOk
+          ? docked
+            ? "停港中无法停止"
+            : "仅驻守、封锁或移动中可停止"
+          : stopCostsResources && !canAffordStop
+            ? stopECost > 0
+              ? `需要 ${stopECost} E · ${stopOCost} O`
+              : `需要 ${stopOCost} O`
+            : siegeHpStop
+              ? unit.pendingSiegeStop
+                ? "已下令停止 · 再打一节拍后停留"
+                : stopECost > 0
+                  ? `停止攻城 · ${stopECost} E · ${stopOCost} O（再打一节拍）`
+                  : `停止攻城 · ${stopOCost} O（再打一节拍）`
+              : blockading
+                ? "结束封锁并停在原地（不耗 O/E）"
+                : holding
+                  ? "结束驻守（不耗 O/E）"
+                  : moving
+                    ? `停止行军 · ${UNIT_STOP_E_COST} E · ${UNIT_STOP_O_COST} O`
+                    : "无法停止";
   const retreatTitle = unit.retreating
     ? "正在撤回所属建筑"
     : isCarrierKind(unit.kind)
@@ -209,12 +228,34 @@ export function UnitInspectHud({
             </div>
           )}
 
+          {showStrength && !isCarrierKind(unit.kind) && (
+            <div className="building-inspect-box is-hp">
+              <div className="building-inspect-box-label">
+                编制 HP {fieldHpTotal}/{fieldHpMax}
+              </div>
+              <div className="building-inspect-bar-track">
+                <div
+                  className="building-inspect-bar-fill is-hp"
+                  style={{
+                    width: `${Math.max(
+                      0,
+                      Math.min(
+                        100,
+                        fieldHpMax > 0 ? (fieldHpTotal / fieldHpMax) * 100 : 0,
+                      ),
+                    )}%`,
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
           {showStrength && (
             <div className="building-inspect-box is-u">
               <div className="building-inspect-box-label">
                 {isCarrierKind(unit.kind)
                   ? `舰载机编制 ${embarkedU}/${CARRIER_AIR_CAPACITY} U`
-                  : `编制 ${unit.u} U · HP ${hpPerU}/U`}
+                  : `编制 ${unit.u} U · ${hpPerU} HP/U`}
               </div>
               <div className="building-inspect-bar-track">
                 <div
@@ -222,7 +263,13 @@ export function UnitInspectHud({
                   style={{
                     width: isCarrierKind(unit.kind)
                       ? `${Math.max(0, Math.min(100, (embarkedU / CARRIER_AIR_CAPACITY) * 100))}%`
-                      : "100%",
+                      : `${Math.max(
+                          0,
+                          Math.min(
+                            100,
+                            fieldHpMax > 0 ? (fieldHpTotal / fieldHpMax) * 100 : 100,
+                          ),
+                        )}%`,
                   }}
                 />
               </div>
@@ -255,6 +302,12 @@ export function UnitInspectHud({
               <div className="building-inspect-note-line">封锁中 · 可停止/撤退</div>
             ) : holding ? (
               <div className="building-inspect-note-line">驻守中 · 可停止/撤退</div>
+            ) : fighting && siegeHpStop ? (
+              <div className="building-inspect-note-line">
+                {unit.pendingSiegeStop
+                  ? "拆城防中 · 下一节拍后停留"
+                  : "拆城防中 · 可停止（再打一节拍）"}
+              </div>
             ) : fighting ? (
               <div className="building-inspect-note-line">交战中 · 可撤退，不可停止</div>
             ) : docked ? (

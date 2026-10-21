@@ -14,6 +14,8 @@ import {
   UNIT_HOLD_O_COST,
   UNIT_MOVE_O_COST,
   UNIT_MUTUAL_DEFENSE_O_COST,
+  UNIT_SIEGE_STOP_E_COST,
+  UNIT_SIEGE_STOP_O_COST,
   UNIT_STOP_E_COST,
   UNIT_STOP_O_COST,
   UNIT_SUPPLY_O_COST,
@@ -50,6 +52,7 @@ import {
 import {
   buildingCenterKeys,
   canUnitStop,
+  isSiegeBuildingHpPhase,
   isUnitDocked,
   occupiedUnitKeys,
   resolveFreeUnitCoord,
@@ -57,8 +60,10 @@ import {
 import { collectMovingUnitCoverage, isInsideAnyCircle } from "./radio.js";
 import {
   applyCarrierSortieLaunch,
+  applyCarrierSortieLaunchFromHome,
   applyEmbarkAir,
   carrierAirRoom,
+  isInsideCarrierSortieRange,
 } from "./carrier.js";
 import {
   CARRIER_AIR_CAPACITY,
@@ -72,6 +77,7 @@ import {
   resupplyUnitFromStation,
   usesCarriedSupply,
 } from "./supply.js";
+import { unitNeedsHpRepair } from "./unitHp.js";
 import type { UnitGroup, UnitMoveRequest, UnitMoveSource } from "./types.js";
 import { isFriendly, sameTeam, type TeamRoster } from "../teams.js";
 
@@ -147,6 +153,39 @@ interface PlanOpts {
    * standable cell.
    */
   allowImpassableGoal?: boolean;
+}
+
+function airStrikeTargetInRange(
+  unit: Pick<
+    UnitGroup,
+    "kind" | "ownerId" | "homeBuildingId" | "carrierId" | "carrierSortieState"
+  >,
+  destGx: number,
+  destGy: number,
+  ctx: MoveContext,
+  units: readonly UnitGroup[],
+): string | undefined {
+  if (unit.kind !== "air") return undefined;
+  if (unit.carrierSortieState === "outbound" && unit.carrierId) {
+    const carrier = units.find((candidate) => candidate.id === unit.carrierId);
+    if (!carrier || carrier.kind !== "navy_carrier" || carrier.u <= 0) {
+      return "航母不存在";
+    }
+    if (!isInsideCarrierSortieRange(destGx, destGy, carrier)) {
+      return `目标超出航母 ${CARRIER_SORTIE_RADIUS_DU} Du 出击范围`;
+    }
+    return undefined;
+  }
+  const coverage = collectMovingUnitCoverage(
+    unit,
+    ctx.buildings,
+    ctx.connectedIds,
+    ctx.teams,
+  );
+  if (!isInsideAnyCircle(destGx, destGy, coverage)) {
+    return "目标不在所属机场工作范围内（含关联雷达）";
+  }
+  return undefined;
 }
 
 function planFor(
@@ -381,6 +420,8 @@ function applyPath(
     pendingAttackUnitId: attackTargetUnitId,
     pendingAttackBuildingId: attackTargetBuildingId,
     dockRepairTimerSec: undefined,
+    supplyRepairActive: undefined,
+    supplyRepairTimerSec: undefined,
   };
 }
 
@@ -423,7 +464,28 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
   }
 
   const buildings = ctx.buildings.map((b) => ({ ...b }));
-  const units = ctx.units.map((u) => ({ ...u, path: u.path?.map((p) => ({ ...p })) }));
+  let units = ctx.units.map((u) => ({ ...u, path: u.path?.map((p) => ({ ...p })) }));
+  const fieldUnitIds: string[] = [...(req.unitIds ?? [])];
+  if (req.embarkedSources?.length) {
+    for (const src of req.embarkedSources) {
+      const launched = applyCarrierSortieLaunchFromHome(
+        req.ownerId,
+        src.carrierId,
+        src.homeBuildingId,
+        src.u,
+        units,
+        ctx.nextId,
+      );
+      if (!launched.ok) {
+        return fail(launched.error, buildings, units);
+      }
+      units = launched.units.map((u) => ({
+        ...u,
+        path: u.path?.map((p) => ({ ...p })),
+      }));
+      fieldUnitIds.push(...launched.sortieIds);
+    }
+  }
 
   const asSupply = !!req.asSupply;
   const asHold = !!req.asHold;
@@ -522,24 +584,22 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
     if (asSupply && !usesCarriedSupply(deployed.unit.kind)) {
       return fail("空军无需携行补给", buildings, units);
     }
-    // Air sortie: target must be inside home airport work range (incl. linked radar).
     if (deployed.unit.kind === "air" && isAttack) {
-      const coverage = collectMovingUnitCoverage(
+      const rangeError = airStrikeTargetInRange(
         deployed.unit,
-        buildings,
-        ctx.connectedIds,
-        ctx.teams,
+        dest.gx,
+        dest.gy,
+        ctx,
+        units,
       );
-      if (!isInsideAnyCircle(dest.gx, dest.gy, coverage)) {
-        return fail("目标不在所属机场工作范围内（含关联雷达）", buildings, units);
-      }
+      if (rangeError) return fail(rangeError, buildings, units);
     }
     const idx = buildings.findIndex((x) => x.id === b.id);
     buildings[idx] = deployed.building;
     created.push(deployed.unit);
   }
 
-  for (const id of req.unitIds ?? []) {
+  for (const id of fieldUnitIds) {
     const u = units.find((x) => x.id === id);
     if (!u || u.ownerId !== req.ownerId) {
       return fail("单位不存在或不属于你", buildings, units);
@@ -556,16 +616,15 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
     if (asSupply && !usesCarriedSupply(u.kind)) {
       return fail("空军无需携行补给", buildings, units);
     }
-    if (u.kind === "air" && isAttack && u.carrierSortieState !== "outbound") {
-      const coverage = collectMovingUnitCoverage(
+    if (u.kind === "air" && isAttack) {
+      const rangeError = airStrikeTargetInRange(
         u,
-        buildings,
-        ctx.connectedIds,
-        ctx.teams,
+        dest.gx,
+        dest.gy,
+        ctx,
+        units,
       );
-      if (!isInsideAnyCircle(dest.gx, dest.gy, coverage)) {
-        return fail("目标不在所属机场工作范围内（含关联雷达）", buildings, units);
-      }
+      if (rangeError) return fail(rangeError, buildings, units);
     }
     movingIds.add(id);
   }
@@ -862,11 +921,17 @@ export function applyUnitMove(req: UnitMoveRequest, ctx: MoveContext): MoveApply
         ...filled.unit,
         pendingSupply: undefined,
         supplyBuildingId: undefined,
+        ...(unitNeedsHpRepair(filled.unit)
+          ? { supplyRepairActive: true, supplyRepairTimerSec: 0 }
+          : {}),
       };
     }
     if (
       unit.kind === "air" &&
+      !next.carrierId &&
       next.carrierSortieState !== "outbound" &&
+      next.carrierSortieState !== "returning_carrier" &&
+      next.carrierSortieState !== "boarding" &&
       !next.depositOnArrival &&
       !req.asTrainingDelivery
     ) {
@@ -1063,7 +1128,7 @@ export function applyCarrierSortie(
     targetGx = target.gx;
     targetGy = target.gy;
   }
-  if (Math.hypot(targetGx - carrier.gx, targetGy - carrier.gy) > CARRIER_SORTIE_RADIUS_DU + 1e-9) {
+  if (!isInsideCarrierSortieRange(targetGx, targetGy, carrier)) {
     return reject(`目标超出航母 ${CARRIER_SORTIE_RADIUS_DU} Du 出击范围`);
   }
 
@@ -1075,14 +1140,6 @@ export function applyCarrierSortie(
     ctx.nextId,
   );
   if (!launched.ok) return reject(launched.error);
-  const sortieIds = new Set(launched.sortieIds);
-  const launchedUnits = launched.units.map((unit) => {
-    if (!sortieIds.has(unit.id)) return unit;
-    const home = ctx.buildings.find(
-      (building) => building.id === unit.homeBuildingId && building.ownerId === req.ownerId,
-    );
-    return home ? { ...unit, returnGx: home.gx, returnGy: home.gy } : unit;
-  });
   return applyUnitAttack(
     {
       ownerId: req.ownerId,
@@ -1092,7 +1149,7 @@ export function applyCarrierSortie(
       attackTargetUnitId: req.targetUnitId,
       attackTargetBuildingId: req.targetBuildingId,
     },
-    { ...ctx, units: launchedUnits },
+    { ...ctx, units: launched.units },
   );
 }
 
@@ -1455,6 +1512,7 @@ const retreatClearPending = {
   siegeTimerSec: undefined,
   siegeDamageDealt: undefined,
   siegeAirDamageDealt: undefined,
+  pendingSiegeStop: undefined,
   mutualDefenseForBuildingId: undefined,
   mutualDefenseHomeBuildingId: undefined,
   liaisonCut: undefined,
@@ -1463,9 +1521,9 @@ const retreatClearPending = {
 /**
  * Stop / retreat.
  *
- * - 停止：仅驻守 / 封锁 / 移动中（非撤退）可用。
- *   仅移动中停止扣 −20E −3O；结束驻守 / 封锁不扣 O/E。
- *   空军停止 = 强制返航所属建筑入库。
+ * - 停止：驻守 / 封锁 / 移动中（非撤退）；或攻城 HP 阶段（非打守军）。
+ *   移动中停止扣 −20E −3O；攻城 HP 阶段停止扣调动 2 倍 O（无 E），再打一节拍后停留。
+ *   结束驻守 / 封锁不扣 O/E。空军停止 = 强制返航所属建筑入库。
  * - 撤退：任何时候都可以（含交战、停泊）；不耗 O/E；不检电台与携行。
  *   陆军仍遵守地形（不得穿海）；海军/空军可忽略地形捷径。
  *   途中若进入封锁半径，由封锁结算应战。回到归属建筑入库前不能接受其他命令。
@@ -1492,6 +1550,7 @@ export function applyUnitStop(
   let any = false;
   let buildingsDirty = false;
   let stopWhileMoving = false;
+  let siegeStopCount = 0;
 
   const clearInPlace = (u: UnitGroup): UnitGroup => {
     const free = resolveFreeUnitCoord(
@@ -1720,6 +1779,7 @@ export function applyUnitStop(
       };
     }
     const dock = { buildings, units };
+    const siegeHpStop = isSiegeBuildingHpPhase(u, buildings, units);
     if (!canUnitStop(u, dock)) {
       const reason =
         u.state === "fighting"
@@ -1736,6 +1796,17 @@ export function applyUnitStop(
         energyCost: 0,
         units: [...unitsIn],
       };
+    }
+
+    if (siegeHpStop) {
+      if (u.pendingSiegeStop) {
+        any = true;
+        continue;
+      }
+      units[idx] = { ...u, pendingSiegeStop: true };
+      siegeStopCount += 1;
+      any = true;
+      continue;
     }
 
     if (u.state === "moving") stopWhileMoving = true;
@@ -1772,12 +1843,21 @@ export function applyUnitStop(
     };
   }
 
-  const chargeStop = !retreat && stopWhileMoving;
   const outUnits = units.filter((u) => !removed.has(u.id) && u.u > 0);
   return {
     ok: true,
-    organizationCost: chargeStop ? UNIT_STOP_O_COST : 0,
-    energyCost: chargeStop ? UNIT_STOP_E_COST : 0,
+    organizationCost:
+      !retreat && stopWhileMoving
+        ? UNIT_STOP_O_COST
+        : !retreat && siegeStopCount > 0
+          ? UNIT_SIEGE_STOP_O_COST * siegeStopCount
+          : 0,
+    energyCost:
+      !retreat && stopWhileMoving
+        ? UNIT_STOP_E_COST
+        : !retreat && siegeStopCount > 0
+          ? UNIT_SIEGE_STOP_E_COST * siegeStopCount
+          : 0,
     units: outUnits,
     buildings: buildingsDirty ? buildings : undefined,
   };

@@ -7,6 +7,7 @@ import {
   type UnitKind,
 } from "./catalog.js";
 import type { UnitGroup } from "./types.js";
+import { fullUHp } from "./unitHp.js";
 
 /** Snap to unit coordinate step (0.2). */
 export function snapToUnitCoord(gx: number, gy: number): { gx: number; gy: number } {
@@ -145,6 +146,8 @@ export function deployFromBuilding(
     ownerId: building.ownerId,
     kind,
     u: amount,
+    uHp: fullUHp(kind, amount),
+    departureU: amount,
     gx: pos.gx,
     gy: pos.gy,
     carriedE,
@@ -229,11 +232,14 @@ export function createUnitGroup(args: {
   state?: UnitGroup["state"];
 }): UnitGroup {
   const pos = snapToUnitCoord(args.gx, args.gy);
+  const u = args.u;
   return {
     id: args.id,
     ownerId: args.ownerId,
     kind: args.kind,
-    u: args.u,
+    u,
+    uHp: fullUHp(args.kind, u),
+    departureU: u,
     gx: pos.gx,
     gy: pos.gy,
     carriedE: args.carriedE ?? defaultCarriedE(args.kind),

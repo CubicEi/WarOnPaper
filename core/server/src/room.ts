@@ -72,7 +72,14 @@ import {
   roadRailTerrainSurchargeE,
   filterBuildingsForViewer,
   filterLiaisonsForViewer,
-  maskedLiaisonBuildTicks,
+  collectRestoreDownloaderOwnerIds,
+  filterBuildingsForRestoreHolderViewer,
+  filterBuildingsForRestoreLobbyViewer,
+  filterLiaisonsForRestoreHolderViewer,
+  filterLiaisonsForRestoreLobbyViewer,
+  filterResourceSightForRestoreLobbyViewer,
+  filterUnitsForRestoreHolderViewer,
+  filterUnitsForRestoreLobbyViewer,
   filterUnitsForViewer,
   filterResourceSightForViewer,
   applyUnitDamage,
@@ -606,6 +613,12 @@ function isRestoreHolder(playerId: string): boolean {
   );
 }
 
+/** Seated players who inherited a save seat (live→save), excluding the uploader holder. */
+function restoreDownloaderOwnerIds(): Set<string> {
+  if (!holderPlayerId) return new Set();
+  return collectRestoreDownloaderOwnerIds(liveToSave, holderPlayerId);
+}
+
 function hasMappedSave(playerId: string): boolean {
   return liveToSave.has(playerId);
 }
@@ -651,48 +664,6 @@ function buildRestoreIdentities(): RestoreIdentityOption[] {
           ),
       ),
     claimed: claimed.has(p.playerId),
-  }));
-}
-
-/** Satellite-only facade for restore_lobby (no direct vision until playing). */
-function satelliteFacadeBuildings(): PlacedBuilding[] {
-  return buildings
-    .filter((b) => {
-      // Show all buildings that satellite would see, plus all for restore overview
-      return true;
-    })
-    .map((b) => {
-      const facadeId = b.satelliteBuildingId ?? b.buildingId;
-      return {
-        id: b.id,
-        buildingId: facadeId,
-        ownerId: b.ownerId,
-        gx: b.gx,
-        gy: b.gy,
-        hp: 0,
-        hpMax: 0,
-        u: 0,
-        storeE: 0,
-        ammo: 0,
-        investedE: 0,
-        buildTicksRemaining: 0,
-        buildTicksTotal: 0,
-        visionLevel: "satellite" as const,
-      };
-    });
-}
-
-function satelliteFacadeLiaisons(): PlacedLiaison[] {
-  return liaisons.map((line) => ({
-    id: line.id,
-    kind: line.kind,
-    ownerId: line.ownerId,
-    nodes: line.nodes.map((n) => ({ ...n })),
-    investedE: 0,
-    ...(line.kind === "railway"
-      ? maskedLiaisonBuildTicks(line)
-      : { buildTicksRemaining: 0, buildTicksTotal: 0 }),
-    visionLevel: "satellite" as const,
   }));
 }
 
@@ -745,20 +716,31 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
   const linked = teamLinkedIds(player.id);
   const role: SnapshotRole = spectatorIds.has(player.id) ? "spectator" : "player";
   const restoreLobby = inRestoreLobby();
+  const holderOverview =
+    restoreLobby && isRestoreHolder(player.id);
+  const downloaderOwners = holderOverview
+    ? restoreDownloaderOwnerIds()
+    : null;
   const fullVision =
     role === "spectator" || phaseFor(player) === "ended";
   const allSight = terrain ? collectResourceSight(terrain) : [];
-  const resourceSight =
-    fullVision || restoreLobby
-      ? allSight
-      : filterResourceSightForViewer(
+  const resourceSight = fullVision
+    ? allSight
+    : restoreLobby
+      ? filterResourceSightForRestoreLobbyViewer(
           allSight,
           player.id,
           buildings,
-          units,
-          linked,
           teams,
-        );
+        )
+      : filterResourceSightForViewer(
+            allSight,
+            player.id,
+            buildings,
+            units,
+            linked,
+            teams,
+          );
   const myAllyReqs = allyGarrisonRequests.filter((r) => {
     const b = buildings.find((x) => x.id === r.buildingId);
     return b?.ownerId === player.id;
@@ -766,12 +748,21 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
   const myInvites = teamInvites.filter(
     (inv) => inv.toPlayerId === player.id || inv.fromPlayerId === player.id,
   );
-  return {
-    tick,
-    map: MAP,
-    you: { ...player.hud },
-    buildings: restoreLobby
-      ? satelliteFacadeBuildings()
+  const snapBuildings = holderOverview
+    ? filterBuildingsForRestoreHolderViewer(
+        buildings,
+        player.id,
+        downloaderOwners!,
+        liaisons,
+        teams,
+      )
+    : restoreLobby
+      ? filterBuildingsForRestoreLobbyViewer(
+          buildings,
+          player.id,
+          liaisons,
+          teams,
+        )
       : fullVision
         ? buildings.map((b) => ({ ...b }))
         : filterBuildingsForViewer(
@@ -781,11 +772,27 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
             linked,
             units,
             teams,
-          ),
-    liaisons: restoreLobby
-      ? satelliteFacadeLiaisons()
+          );
+  const snapLiaisons = holderOverview
+    ? filterLiaisonsForRestoreHolderViewer(
+        liaisons,
+        buildings,
+        player.id,
+        downloaderOwners!,
+        teams,
+      )
+    : restoreLobby
+      ? filterLiaisonsForRestoreLobbyViewer(
+          liaisons,
+          buildings,
+          player.id,
+          teams,
+        )
       : fullVision
-        ? liaisons.map((l) => ({ ...l, nodes: l.nodes.map((n) => ({ ...n })) }))
+        ? liaisons.map((l) => ({
+            ...l,
+            nodes: l.nodes.map((n) => ({ ...n })),
+          }))
         : filterLiaisonsForViewer(
             liaisons,
             buildings,
@@ -793,12 +800,32 @@ function snapshotFor(player: PlayerSession): GameStateSnapshot {
             linked,
             units,
             teams,
-          ),
-    units: restoreLobby
-      ? [] // satellite lobby: buildings/liaisons only; units reveal after playing
+          );
+  const snapUnits = holderOverview
+    ? filterUnitsForRestoreHolderViewer(
+        units,
+        player.id,
+        downloaderOwners!,
+        buildings,
+        teams,
+      )
+    : restoreLobby
+      ? filterUnitsForRestoreLobbyViewer(
+          units,
+          player.id,
+          buildings,
+          teams,
+        )
       : fullVision
         ? units.map((u) => ({ ...u }))
-        : filterUnitsForViewer(units, player.id, buildings, linked, teams),
+        : filterUnitsForViewer(units, player.id, buildings, linked, teams);
+  return {
+    tick,
+    map: MAP,
+    you: { ...player.hud },
+    buildings: snapBuildings,
+    liaisons: snapLiaisons,
+    units: snapUnits,
     connectedBuildingIds: restoreLobby ? [] : linked,
     pollutionZones: pollutionZones.map((z) => ({ ...z })),
     phase: phaseFor(player),
@@ -2479,6 +2506,7 @@ function handleFireAtUnit(
     target.kind,
     unitDamage,
     target.hullHp,
+    target.uHp,
   );
   const nextU = damageResult.u;
   if (nextU <= 0) {
@@ -2487,6 +2515,7 @@ function handleFireAtUnit(
   } else {
     target.u = nextU;
     if (damageResult.hullHp != null) target.hullHp = damageResult.hullHp;
+    if (damageResult.uHp != null) target.uHp = damageResult.uHp;
   }
   const nextBuildings = releaseAwayForUnitDiff(buildings, beforeUnits, units);
   for (let i = 0; i < buildings.length; i++) {
@@ -3509,6 +3538,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       msg.gy,
       msg.sources,
       msg.unitIds,
+      msg.embarkedSources,
       phaseFor(session) === "playing",
       sendError,
       broadcastState,
@@ -3556,6 +3586,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       msg.gy,
       msg.sources,
       msg.unitIds,
+      msg.embarkedSources,
       phaseFor(session) === "playing",
       sendError,
       broadcastState,
@@ -3588,6 +3619,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       msg.gy,
       msg.sources,
       msg.unitIds,
+      msg.embarkedSources,
       phaseFor(session) === "playing",
       sendError,
       broadcastState,
@@ -3607,6 +3639,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       unitWorld(),
       msg.sources,
       msg.unitIds,
+      msg.embarkedSources,
       msg.targetUnitId,
       msg.targetBuildingId,
       phaseFor(session) === "playing",
@@ -3670,6 +3703,7 @@ function dispatchPlayerMessage(session: PlayerSession, msg: ClientToServer): voi
       msg.holdBuildingId,
       msg.sources,
       msg.unitIds,
+      msg.embarkedSources,
       phaseFor(session) === "playing",
       sendError,
       broadcastState,

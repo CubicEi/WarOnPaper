@@ -10,6 +10,10 @@ export interface UnitGroup {
   kind: UnitKind;
   /** Current U count in this group. */
   u: number;
+  /** Per-sub-unit HP (length === u); absent on old saves means full HP per U. */
+  uHp?: number[];
+  /** U count when this group left garrison (mobilize); used for inspect HP bar. */
+  departureU?: number;
   /** Current hull HP for a single navy_carrier; absent on old saves means full HP. */
   hullHp?: number;
   /** Grid coords, snapped to 0.2. */
@@ -56,6 +60,11 @@ export interface UnitGroup {
    */
   dockRepairTimerSec?: number;
   /**
+   * 补给站到达后按受损最重 U 顺序修 HP（1 HP/s）；离开范围或满血后清除。
+   */
+  supplyRepairActive?: boolean;
+  supplyRepairTimerSec?: number;
+  /**
    * After finishing the current path, enter `blockading` (封锁).
    * Cleared if movement is interrupted before arrival.
    */
@@ -88,6 +97,10 @@ export interface UnitGroup {
   siegeDamageDealt?: number;
   /** Cumulative HP damage dealt by air units this siege. */
   siegeAirDamageDealt?: number;
+  /**
+   * 攻城 HP 阶段下达停止：再参与一次攻城节拍后退出交战并停留。
+   */
+  pendingSiegeStop?: boolean;
   /** After path finishes: enter holding for this building. */
   pendingHoldBuildingId?: string;
   /** Building currently held (驻守). */
@@ -147,6 +160,13 @@ export interface UnitMoveSource {
   u: number;
 }
 
+/** Launch hangar air from a carrier before a move order (per airport manifest row). */
+export interface EmbarkedSortieSource {
+  carrierId: string;
+  homeBuildingId: string;
+  u: number;
+}
+
 export interface UnitMoveRequest {
   ownerId: string;
   /** Target snapped to 0.2. */
@@ -156,6 +176,8 @@ export interface UnitMoveRequest {
   sources?: readonly UnitMoveSource[];
   /** Already-fielded unit group ids. */
   unitIds?: readonly string[];
+  /** Deploy from carrier hangar (creates outbound air groups, then moves with unitIds). */
+  embarkedSources?: readonly EmbarkedSortieSource[];
   /**
    * Internal / training: mark state as training and deposit into building on arrival.
    */

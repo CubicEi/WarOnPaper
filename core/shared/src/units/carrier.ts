@@ -20,6 +20,7 @@ import {
 import { occupiedUnitKeys } from "./occupy.js";
 import { findFreeUnitCoord } from "./pathfind.js";
 import type { UnitGroup } from "./types.js";
+import type { WorkRangeCircle } from "../buildings/workRange.js";
 
 export {
   CARRIER_AIR_CAPACITY,
@@ -115,6 +116,28 @@ function withEmbarkedManifest(
 
 export function carrierMoveSpeedDuPerS(): number {
   return UNIT_BY_KIND.navy_carrier.speedDuPerS;
+}
+
+/** Carrier sortie / deploy strike range (R = CARRIER_SORTIE_RADIUS_DU) at the carrier's current position. */
+export function carrierSortieWorkCircles(
+  carrier: Pick<UnitGroup, "kind" | "gx" | "gy">,
+): WorkRangeCircle[] {
+  if (carrier.kind !== "navy_carrier") return [];
+  return [
+    { gx: carrier.gx, gy: carrier.gy, radiusDu: CARRIER_SORTIE_RADIUS_DU },
+  ];
+}
+
+export function isInsideCarrierSortieRange(
+  gx: number,
+  gy: number,
+  carrier: Pick<UnitGroup, "kind" | "gx" | "gy">,
+): boolean {
+  if (carrier.kind !== "navy_carrier") return false;
+  return (
+    Math.hypot(gx - carrier.gx, gy - carrier.gy) <=
+    CARRIER_SORTIE_RADIUS_DU + 1e-9
+  );
 }
 
 /**
@@ -218,6 +241,54 @@ export function applyCarrierSortieLaunch(
     units.push(aircraft);
   }
   return { ok: true, units, sortieIds };
+}
+
+/** Launch only from one airport manifest row on the carrier. */
+export function applyCarrierSortieLaunchFromHome(
+  ownerId: string,
+  carrierId: string,
+  homeBuildingId: string,
+  amount: number,
+  unitsIn: readonly UnitGroup[],
+  nextId: () => string,
+): CarrierSortieLaunchResult {
+  const units: UnitGroup[] = unitsIn.map((unit) => ({
+    ...unit,
+    path: unit.path?.map((point) => ({ ...point })),
+  }));
+  const carrierIndex = units.findIndex((unit) => unit.id === carrierId);
+  if (carrierIndex < 0) return { ok: false, error: "航母不存在" };
+  const carrier = units[carrierIndex]!;
+  if (carrier.ownerId !== ownerId) return { ok: false, error: "只能操作自己的航母" };
+  if (carrier.kind !== "navy_carrier") return { ok: false, error: "目标不是航母" };
+  if (carrier.retreating) return { ok: false, error: "航母撤退中，不能出击" };
+  const requested = Math.floor(amount);
+  if (!Number.isFinite(requested) || requested < 1) {
+    return { ok: false, error: "出击数量至少为 1U" };
+  }
+
+  const manifest = embarkedManifest(carrier);
+  const entry = manifest.find((row) => row.homeBuildingId === homeBuildingId);
+  if (!entry || entry.u < requested) {
+    return { ok: false, error: "该机库编制不足" };
+  }
+  entry.u -= requested;
+  units[carrierIndex] = withEmbarkedManifest(carrier, manifest);
+
+  const aircraft = createUnitGroup({
+    id: nextId(),
+    ownerId,
+    kind: "air",
+    u: requested,
+    gx: carrier.gx,
+    gy: carrier.gy,
+    homeBuildingId,
+    carriedE: 0,
+  });
+  aircraft.carrierId = carrier.id;
+  aircraft.carrierSortieState = "outbound";
+  units.push(aircraft);
+  return { ok: true, units, sortieIds: [aircraft.id] };
 }
 
 export function applyEmbarkAir(

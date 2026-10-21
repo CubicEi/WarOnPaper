@@ -18,14 +18,17 @@ const TERRAIN_COLORS = {
 const GRID = "#4a4a4a";
 
 /** White (own) building icons from core/assets — same paths as catalog. */
-const OIL_WELL_ICON = "/icons/buildings/energy/oil_well.png";
-const THERMAL_FACTORY_ICON = "/icons/buildings/energy/thermal_factory.png";
-const URANIUM_MINER_ICON = "/icons/buildings/energy/uranium_miner.png";
-const URANIUM_FACTORY_ICON = "/icons/buildings/energy/uranium_factory.png";
+const OIL_WELL_ICON = "/icons/buildings/energy/oil_well.svg";
+const THERMAL_FACTORY_ICON = "/icons/buildings/energy/thermal_factory.svg";
+const URANIUM_MINER_ICON = "/icons/buildings/energy/uranium_miner.svg";
+const URANIUM_FACTORY_ICON = "/icons/buildings/energy/uranium_factory.svg";
+
+/** SVG building icons are authored at 256×256 (viewBox). */
+const ICON_NATIVE_PX = 256;
+/** Same ratio as in-game `drawBuildings` (`cell * 0.85`). */
+const ICON_CELL_RATIO = 0.85;
 
 const SWITCH_MS = 10_000;
-/** Pixels per map cell in the baked raster (icons ~34px at 0.85× cell). */
-const CELL_PX = 40;
 const ZOOM_MIN = 2.2;
 const ZOOM_MAX = 2.85;
 /** Screen pixels per second while a map is shown. */
@@ -45,8 +48,15 @@ const DIAG_DIRS: ReadonlyArray<readonly [number, number]> = [
   [-1, -1],
 ];
 
+type PlacedIcon = {
+  icon: CanvasImageSource;
+  gx: number;
+  gy: number;
+};
+
 type Slide = {
-  url: string;
+  terrain: TerrainMap;
+  placements: readonly PlacedIcon[];
   aspect: number;
   zoom: number;
   /** Unit direction for pan. */
@@ -55,32 +65,70 @@ type Slide = {
 };
 
 type IconSet = {
-  oilWell: HTMLImageElement | null;
-  thermalFactory: HTMLImageElement | null;
-  uraniumMiner: HTMLImageElement | null;
-  uraniumFactory: HTMLImageElement | null;
+  oilWell: CanvasImageSource | null;
+  thermalFactory: CanvasImageSource | null;
+  uraniumMiner: CanvasImageSource | null;
+  uraniumFactory: CanvasImageSource | null;
 };
 
 type GridPt = { gx: number; gy: number };
 
 let iconsPromise: Promise<IconSet> | null = null;
 
-function loadImage(src: string): Promise<HTMLImageElement | null> {
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => resolve(null);
-    img.src = src;
-  });
+/**
+ * Decode an SVG (or raster) icon at its authored pixel size so canvas
+ * `drawImage` scales from the native 256×256 bitmap, not a tiny default intrinsic
+ * (SVG assets ship with width/height="100%").
+ */
+async function loadIconNative(src: string): Promise<CanvasImageSource | null> {
+  try {
+    const res = await fetch(src);
+    if (!res.ok) return null;
+    const ctype = res.headers.get("content-type") ?? "";
+    let blob: Blob;
+    if (ctype.includes("svg") || src.endsWith(".svg")) {
+      let text = await res.text();
+      text = text
+        .replace(/\swidth="100%"/i, ` width="${ICON_NATIVE_PX}"`)
+        .replace(/\sheight="100%"/i, ` height="${ICON_NATIVE_PX}"`);
+      blob = new Blob([text], { type: "image/svg+xml" });
+    } else {
+      blob = await res.blob();
+    }
+    if (typeof createImageBitmap === "function") {
+      try {
+        return await createImageBitmap(blob, {
+          resizeWidth: ICON_NATIVE_PX,
+          resizeHeight: ICON_NATIVE_PX,
+          resizeQuality: "high",
+        });
+      } catch {
+        // Fall through to HTMLImageElement (some engines reject SVG bitmaps).
+      }
+    }
+    const url = URL.createObjectURL(blob);
+    try {
+      return await new Promise<HTMLImageElement | null>((resolve) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = () => resolve(null);
+        el.src = url;
+      });
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  } catch {
+    return null;
+  }
 }
 
 function ensureIcons(): Promise<IconSet> {
   if (!iconsPromise) {
     iconsPromise = Promise.all([
-      loadImage(OIL_WELL_ICON),
-      loadImage(THERMAL_FACTORY_ICON),
-      loadImage(URANIUM_MINER_ICON),
-      loadImage(URANIUM_FACTORY_ICON),
+      loadIconNative(OIL_WELL_ICON),
+      loadIconNative(THERMAL_FACTORY_ICON),
+      loadIconNative(URANIUM_MINER_ICON),
+      loadIconNative(URANIUM_FACTORY_ICON),
     ]).then(([oilWell, thermalFactory, uraniumMiner, uraniumFactory]) => ({
       oilWell,
       thermalFactory,
@@ -147,81 +195,13 @@ function shuffleInPlace<T>(arr: T[]): T[] {
   return arr;
 }
 
-function rasterizeTerrain(terrain: TerrainMap, icons: IconSet): string {
-  const canvas = document.createElement("canvas");
-  canvas.width = terrain.width * CELL_PX;
-  canvas.height = terrain.height * CELL_PX;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return "";
-
-  // Ground + forest fills
-  for (let y = 0; y < terrain.height; y++) {
-    for (let x = 0; x < terrain.width; x++) {
-      ctx.fillStyle = terrainFillColor(terrain, x, y);
-      ctx.fillRect(x * CELL_PX, y * CELL_PX, CELL_PX + 0.5, CELL_PX + 0.5);
-    }
-  }
-
-  // Oil / uranium borders (including ocean uranium — resource only)
-  ctx.lineWidth = Math.max(1, CELL_PX * 0.18);
-  for (let y = 0; y < terrain.height; y++) {
-    for (let x = 0; x < terrain.width; x++) {
-      const c = terrain.cells[y * terrain.width + x];
-      if (!c?.resource) continue;
-      if (c.resource.kind === "oil") {
-        ctx.strokeStyle = TERRAIN_COLORS.oil;
-        ctx.strokeRect(
-          x * CELL_PX + 0.5,
-          y * CELL_PX + 0.5,
-          CELL_PX - 1,
-          CELL_PX - 1,
-        );
-      } else if (c.resource.kind === "uranium") {
-        ctx.strokeStyle = TERRAIN_COLORS.uranium;
-        ctx.strokeRect(
-          x * CELL_PX + 0.5,
-          y * CELL_PX + 0.5,
-          CELL_PX - 1,
-          CELL_PX - 1,
-        );
-      }
-    }
-  }
-
-  // Cell grid (same spirit as in-game GRID)
-  ctx.strokeStyle = GRID;
-  ctx.lineWidth = Math.max(1, CELL_PX * 0.06);
-  ctx.beginPath();
-  for (let i = 0; i <= terrain.width; i++) {
-    const x = i * CELL_PX + 0.5;
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, canvas.height);
-  }
-  for (let j = 0; j <= terrain.height; j++) {
-    const y = j * CELL_PX + 0.5;
-    ctx.moveTo(0, y);
-    ctx.lineTo(canvas.width, y);
-  }
-  ctx.stroke();
-
-  // Buildings on 格点 (grid nodes), same as in-game: center on node.
-  // Per deposit: 50% → 1–3 extractors on land deposit corners; then 1 refinery
-  // on an adjacent empty land node (ortho preferred, then diagonal).
-  const iconSize = CELL_PX * 0.85;
-  const half = iconSize / 2;
+/**
+ * Place extractors / refineries (same rules as before). Drawing is deferred to
+ * the live canvas pass so icons stay at native SVG resolution.
+ */
+function placeDecorations(terrain: TerrainMap, icons: IconSet): PlacedIcon[] {
   const occupied = new Set<string>();
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-
-  const drawAtNode = (icon: HTMLImageElement, gx: number, gy: number) => {
-    ctx.drawImage(
-      icon,
-      gx * CELL_PX - half,
-      gy * CELL_PX - half,
-      iconSize,
-      iconSize,
-    );
-  };
+  const placements: PlacedIcon[] = [];
 
   for (const dep of terrain.deposits) {
     const landCells = dep.cells.filter(({ x, y }) => {
@@ -231,7 +211,6 @@ function rasterizeTerrain(terrain: TerrainMap, icons: IconSet): string {
     if (landCells.length === 0) continue;
     if (Math.random() >= 0.5) continue;
 
-    // Corners of land deposit cells → candidate grid nodes (integer 格点).
     const nodeKeys = new Set<string>();
     const nodes: GridPt[] = [];
     for (const { x, y } of landCells) {
@@ -262,10 +241,9 @@ function rasterizeTerrain(terrain: TerrainMap, icons: IconSet): string {
     const picks = shuffleInPlace(nodes.slice()).slice(0, count);
     for (const { gx, gy } of picks) {
       occupied.add(`${gx},${gy}`);
-      drawAtNode(extractorIcon, gx, gy);
+      placements.push({ icon: extractorIcon, gx, gy });
     }
 
-    // One refinery next to the extractor cluster (not one per extractor).
     if (!refineryIcon) continue;
     let refinerySpots = collectAdjacentLandNodes(
       terrain,
@@ -284,10 +262,91 @@ function rasterizeTerrain(terrain: TerrainMap, icons: IconSet): string {
     if (refinerySpots.length === 0) continue;
     const ref = shuffleInPlace(refinerySpots.slice())[0]!;
     occupied.add(`${ref.gx},${ref.gy}`);
-    drawAtNode(refineryIcon, ref.gx, ref.gy);
+    placements.push({ icon: refineryIcon, gx: ref.gx, gy: ref.gy });
   }
 
-  return canvas.toDataURL("image/png");
+  return placements;
+}
+
+/**
+ * Draw like in-game `drawMap` terrain stack:
+ * fill → grid → oil/uranium borders → building icons.
+ * `cell` is CSS px per map cell in the current camera frame.
+ */
+function drawSlide(
+  ctx: CanvasRenderingContext2D,
+  slide: Slide,
+  originX: number,
+  originY: number,
+  cell: number,
+): void {
+  const { terrain, placements } = slide;
+
+  for (let y = 0; y < terrain.height; y++) {
+    for (let x = 0; x < terrain.width; x++) {
+      ctx.fillStyle = terrainFillColor(terrain, x, y);
+      ctx.fillRect(
+        originX + x * cell,
+        originY + y * cell,
+        cell + 0.5,
+        cell + 0.5,
+      );
+    }
+  }
+
+  ctx.strokeStyle = GRID;
+  ctx.lineWidth = Math.max(1, cell * 0.06);
+  ctx.beginPath();
+  for (let i = 0; i <= terrain.width; i++) {
+    const x = originX + i * cell + 0.5;
+    ctx.moveTo(x, originY);
+    ctx.lineTo(x, originY + terrain.height * cell);
+  }
+  for (let j = 0; j <= terrain.height; j++) {
+    const y = originY + j * cell + 0.5;
+    ctx.moveTo(originX, y);
+    ctx.lineTo(originX + terrain.width * cell, y);
+  }
+  ctx.stroke();
+
+  ctx.lineWidth = Math.max(1, cell * 0.18);
+  for (let y = 0; y < terrain.height; y++) {
+    for (let x = 0; x < terrain.width; x++) {
+      const c = terrain.cells[y * terrain.width + x];
+      if (!c?.resource) continue;
+      if (c.resource.kind === "oil") {
+        ctx.strokeStyle = TERRAIN_COLORS.oil;
+        ctx.strokeRect(
+          originX + x * cell + 0.5,
+          originY + y * cell + 0.5,
+          cell - 1,
+          cell - 1,
+        );
+      } else if (c.resource.kind === "uranium") {
+        ctx.strokeStyle = TERRAIN_COLORS.uranium;
+        ctx.strokeRect(
+          originX + x * cell + 0.5,
+          originY + y * cell + 0.5,
+          cell - 1,
+          cell - 1,
+        );
+      }
+    }
+  }
+
+  const iconSize = cell * ICON_CELL_RATIO;
+  const half = iconSize / 2;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  for (const { icon, gx, gy } of placements) {
+    ctx.drawImage(
+      icon,
+      originX + gx * cell - half,
+      originY + gy * cell - half,
+      iconSize,
+      iconSize,
+    );
+  }
 }
 
 async function pickSlide(
@@ -300,13 +359,14 @@ async function pickSlide(
   }
   const map = MAP_SIZES[(Math.random() * MAP_SIZES.length) | 0]!;
   const terrain = generateTerrain({ map, seed });
-  const url = rasterizeTerrain(terrain, icons);
+  const placements = placeDecorations(terrain, icons);
   const angle = Math.random() * Math.PI * 2;
   const zoom = ZOOM_MIN + Math.random() * (ZOOM_MAX - ZOOM_MIN);
   return {
     seed,
     slide: {
-      url,
+      terrain,
+      placements,
       aspect: terrain.width / terrain.height,
       zoom,
       dirX: Math.cos(angle),
@@ -335,13 +395,24 @@ function coverSize(
 }
 
 export function TitleMapBackdrop() {
-  const [slide, setSlide] = useState<Slide | null>(null);
   const [visible, setVisible] = useState(false);
   const seedRef = useRef<number | null>(null);
-  const layerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const slideRef = useRef<Slide | null>(null);
   const originRef = useRef({ x: 0, y: 0 });
   const startedAtRef = useRef(0);
+
+  const resetCameraOrigin = (slide: Slide) => {
+    const viewW = window.innerWidth;
+    const viewH = window.innerHeight;
+    const { w, h } = coverSize(viewW, viewH, slide.aspect, slide.zoom);
+    const maxX = Math.max(0, (w - viewW) / 2);
+    const maxY = Math.max(0, (h - viewH) / 2);
+    originRef.current = {
+      x: -slide.dirX * maxX * 0.85,
+      y: -slide.dirY * maxY * 0.85,
+    };
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -350,7 +421,8 @@ export function TitleMapBackdrop() {
       if (cancelled) return;
       seedRef.current = seed;
       slideRef.current = first;
-      setSlide(first);
+      startedAtRef.current = performance.now();
+      resetCameraOrigin(first);
       requestAnimationFrame(() => {
         if (!cancelled) setVisible(true);
       });
@@ -372,7 +444,8 @@ export function TitleMapBackdrop() {
           if (cancelled) return;
           seedRef.current = seed;
           slideRef.current = next;
-          setSlide(next);
+          startedAtRef.current = performance.now();
+          resetCameraOrigin(next);
           requestAnimationFrame(() => {
             if (!cancelled) setVisible(true);
           });
@@ -387,38 +460,42 @@ export function TitleMapBackdrop() {
   }, []);
 
   useEffect(() => {
-    if (!slide) return;
-    const viewW = window.innerWidth;
-    const viewH = window.innerHeight;
-    const { w, h } = coverSize(viewW, viewH, slide.aspect, slide.zoom);
-    const maxX = Math.max(0, (w - viewW) / 2);
-    const maxY = Math.max(0, (h - viewH) / 2);
-    originRef.current = {
-      x: -slide.dirX * maxX * 0.85,
-      y: -slide.dirY * maxY * 0.85,
-    };
-    startedAtRef.current = performance.now();
-  }, [slide]);
-
-  useEffect(() => {
     let raf = 0;
     const tick = (now: number) => {
-      const s = slideRef.current;
-      const el = layerRef.current;
-      if (s && el) {
+      const slide = slideRef.current;
+      const canvas = canvasRef.current;
+      if (slide && canvas) {
         const viewW = window.innerWidth;
         const viewH = window.innerHeight;
-        const { w, h } = coverSize(viewW, viewH, s.aspect, s.zoom);
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        const bw = Math.max(1, Math.round(viewW * dpr));
+        const bh = Math.max(1, Math.round(viewH * dpr));
+        if (canvas.width !== bw || canvas.height !== bh) {
+          canvas.width = bw;
+          canvas.height = bh;
+        }
+        canvas.style.width = `${viewW}px`;
+        canvas.style.height = `${viewH}px`;
+
+        const { w, h } = coverSize(viewW, viewH, slide.aspect, slide.zoom);
         const maxX = Math.max(0, (w - viewW) / 2);
         const maxY = Math.max(0, (h - viewH) / 2);
         const t = (now - startedAtRef.current) / 1000;
-        let x = originRef.current.x + s.dirX * PAN_SPEED * t;
-        let y = originRef.current.y + s.dirY * PAN_SPEED * t;
+        let x = originRef.current.x + slide.dirX * PAN_SPEED * t;
+        let y = originRef.current.y + slide.dirY * PAN_SPEED * t;
         x = Math.max(-maxX, Math.min(maxX, x));
         y = Math.max(-maxY, Math.min(maxY, y));
-        el.style.width = `${w}px`;
-        el.style.height = `${h}px`;
-        el.style.transform = `translate(-50%, -50%) translate(${x}px, ${y}px)`;
+
+        const cell = w / slide.terrain.width;
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          ctx.clearRect(0, 0, viewW, viewH);
+          // Map layer centered on viewport, then pan (same as former CSS translate).
+          const originX = (viewW - w) / 2 + x;
+          const originY = (viewH - h) / 2 + y;
+          drawSlide(ctx, slide, originX, originY, cell);
+        }
       }
       raf = requestAnimationFrame(tick);
     };
@@ -428,19 +505,10 @@ export function TitleMapBackdrop() {
 
   return (
     <div className="title-map-backdrop" aria-hidden="true">
-      <div
-        ref={layerRef}
-        className={`title-map-layer${visible ? " is-visible" : ""}`}
-      >
-        {slide?.url ? (
-          <img
-            className="title-map-img"
-            src={slide.url}
-            alt=""
-            draggable={false}
-          />
-        ) : null}
-      </div>
+      <canvas
+        ref={canvasRef}
+        className={`title-map-canvas${visible ? " is-visible" : ""}`}
+      />
       <div className="title-map-veil" />
     </div>
   );

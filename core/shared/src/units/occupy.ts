@@ -26,10 +26,12 @@ function hangarRoom(unit: Pick<UnitGroup, "kind" | "embarkedAirU">): number {
  */
 export interface UnitDockContext {
   buildings?: readonly {
+    id?: string;
     ownerId: string;
     buildingId: string;
     gx: number;
     gy: number;
+    u?: number;
   }[];
   units?: readonly {
     id: string;
@@ -38,7 +40,36 @@ export interface UnitDockContext {
     gx: number;
     gy: number;
     u: number;
+    state?: UnitGroup["state"];
+    holdBuildingId?: string;
+    mutualDefenseForBuildingId?: string;
   }[];
+}
+
+/** 正在拆城防（驻军已清空、无城外驻守/互防守军交战）。 */
+export function isSiegeBuildingHpPhase(
+  unit: UnitGroup,
+  buildings: NonNullable<UnitDockContext["buildings"]>,
+  units?: UnitDockContext["units"],
+): boolean {
+  if (unit.state !== "fighting" || !unit.siegeBuildingId || unit.fightTargetUnitId) {
+    return false;
+  }
+  if (unit.kind === "air") return false;
+  const b = buildings?.find((x) => x.id === unit.siegeBuildingId);
+  if (!b || b.ownerId === unit.ownerId) return false;
+  if ((b.u ?? 0) > 0) return false;
+  if (units) {
+    const buildingId = unit.siegeBuildingId;
+    const guards = units.some(
+      (u) =>
+        u.u > 0 &&
+        u.ownerId === b.ownerId &&
+        (u.holdBuildingId === buildingId || u.mutualDefenseForBuildingId === buildingId),
+    );
+    if (guards) return false;
+  }
+  return true;
 }
 
 /**
@@ -70,16 +101,22 @@ export function isUnitDocked(unit: UnitGroup, ctx?: UnitDockContext): boolean {
 }
 
 /**
- * 停止：仅驻守 / 封锁 / 移动中可用；撤退途中不可停止。
- * （停泊、停留、交战、训练途中、停港等均不可。）
+ * 停止：驻守 / 封锁 / 移动中；或攻城 HP 阶段（非打守军）。
+ * 撤退途中不可停止。（停泊、停留、训练途中、停港等不可，交战打守军时不可。）
  */
-export function canUnitStop(unit: UnitGroup, _ctx?: UnitDockContext): boolean {
+export function canUnitStop(unit: UnitGroup, ctx?: UnitDockContext): boolean {
   if (unit.retreating) return false;
-  return (
+  if (
     unit.state === "holding" ||
     unit.state === "blockading" ||
     unit.state === "moving"
-  );
+  ) {
+    return true;
+  }
+  if (ctx?.buildings) {
+    return isSiegeBuildingHpPhase(unit, ctx.buildings, ctx.units);
+  }
+  return false;
 }
 /** 撤退：任何时候都可以（含交战、停泊）。已在撤回途中则不再重复下达。 */
 export function canUnitRetreat(unit: UnitGroup, _ctx?: UnitDockContext): boolean {

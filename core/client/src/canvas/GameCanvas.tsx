@@ -99,6 +99,10 @@ import {
 } from "../components/RadialPickMenu";
 import { BuildModeOverlay } from "../components/BuildModeOverlay";
 import { MobilizePanel } from "../components/MobilizePanel";
+import {
+  parseEmbarkMobilizeId,
+  splitMobilizeUnitIds,
+} from "../components/mobilizeEmbark.js";
 import { TrainPanel } from "../components/TrainPanel";
 import { BuildingInspectHud, type BuildingInspectAction } from "../components/BuildingInspectHud";
 import { UnitInspectHud, type UnitInspectAction } from "../components/UnitInspectHud";
@@ -183,6 +187,11 @@ interface Props {
     gy: number;
     sources?: Array<{ buildingId: string; u: number }>;
     unitIds?: string[];
+    embarkedSources?: Array<{
+      carrierId: string;
+      homeBuildingId: string;
+      u: number;
+    }>;
   }) => void;
   onStopUnits?: (unitIds: string[], retreat?: boolean) => void;
   onBlockadeUnits?: (args: {
@@ -190,6 +199,11 @@ interface Props {
     gy: number;
     sources?: Array<{ buildingId: string; u: number }>;
     unitIds?: string[];
+    embarkedSources?: Array<{
+      carrierId: string;
+      homeBuildingId: string;
+      u: number;
+    }>;
   }) => void;
   onEndBlockade?: (unitIds: string[]) => void;
   onSupplyUnits?: (args: {
@@ -198,10 +212,20 @@ interface Props {
     gy: number;
     sources?: Array<{ buildingId: string; u: number }>;
     unitIds?: string[];
+    embarkedSources?: Array<{
+      carrierId: string;
+      homeBuildingId: string;
+      u: number;
+    }>;
   }) => void;
   onAttackUnits?: (args: {
     sources?: Array<{ buildingId: string; u: number }>;
     unitIds?: string[];
+    embarkedSources?: Array<{
+      carrierId: string;
+      homeBuildingId: string;
+      u: number;
+    }>;
     targetUnitId?: string;
     targetBuildingId?: string;
     targetLiaisonId?: string;
@@ -214,6 +238,11 @@ interface Props {
     holdBuildingId: string;
     sources?: Array<{ buildingId: string; u: number }>;
     unitIds?: string[];
+    embarkedSources?: Array<{
+      carrierId: string;
+      homeBuildingId: string;
+      u: number;
+    }>;
   }) => void;
   onEndHold?: (unitIds: string[]) => void;
   onAssignHome?: (args: { buildingId: string; unitIds: string[] }) => void;
@@ -1225,11 +1254,19 @@ export function GameCanvas({
         buildingId,
         u,
       }));
-      const unitIds = mobilize.unitIds;
-      if (mobilize.mode !== "assign" && sources.length === 0 && unitIds.length === 0) {
+      const { fieldUnitIds, embarkedSources } = splitMobilizeUnitIds(
+        mobilize.unitIds,
+        units,
+      );
+      if (
+        mobilize.mode !== "assign" &&
+        sources.length === 0 &&
+        fieldUnitIds.length === 0 &&
+        embarkedSources.length === 0
+      ) {
         return { planError: null, paths };
       }
-      if (mobilize.mode === "assign" && unitIds.length === 0) {
+      if (mobilize.mode === "assign" && fieldUnitIds.length === 0) {
         return { planError: null, paths };
       }
 
@@ -1238,7 +1275,7 @@ export function GameCanvas({
         const result = applyAssignHome(
           myPlayerId,
           mobilize.assignBuildingId,
-          unitIds,
+          fieldUnitIds,
           ctx,
         );
         return {
@@ -1272,7 +1309,9 @@ export function GameCanvas({
         {
           ...base,
           sources: sources.length > 0 ? sources : undefined,
-          unitIds: unitIds.length > 0 ? unitIds : undefined,
+          unitIds: fieldUnitIds.length > 0 ? fieldUnitIds : undefined,
+          embarkedSources:
+            embarkedSources.length > 0 ? embarkedSources : undefined,
         },
         ctx,
       );
@@ -3874,7 +3913,10 @@ export function GameCanvas({
           }}
           onToggleUnit={(id) => {
             const turningOn = !mobilize.unitIds.includes(id);
-            const u = units.find((x) => x.id === id);
+            const embark = parseEmbarkMobilizeId(id);
+            const u = embark
+              ? units.find((x) => x.id === embark.carrierId)
+              : units.find((x) => x.id === id);
             let path: Array<{ gx: number; gy: number }> | null = null;
             if (
               turningOn &&
@@ -3887,12 +3929,18 @@ export function GameCanvas({
             ) {
               try {
                 let n = 0;
+                const { fieldUnitIds, embarkedSources } = splitMobilizeUnitIds(
+                  turningOn ? [...mobilize.unitIds, id] : mobilize.unitIds.filter((x) => x !== id),
+                  units,
+                );
                 const result = previewUnitMove(
                   {
                     ownerId: myPlayerId,
                     gx: mobilize.gx,
                     gy: mobilize.gy,
-                    unitIds: [id],
+                    unitIds: fieldUnitIds.length > 0 ? fieldUnitIds : undefined,
+                    embarkedSources:
+                      embarkedSources.length > 0 ? embarkedSources : undefined,
                     asBlockade: mobilize.mode === "blockade",
                     asSupply: mobilize.mode === "supply",
                     supplyBuildingId: mobilize.supplyBuildingId,
@@ -3942,11 +3990,17 @@ export function GameCanvas({
               buildingId,
               u,
             }));
+            const { fieldUnitIds, embarkedSources } = splitMobilizeUnitIds(
+              mobilize.unitIds,
+              units,
+            );
             const args = {
               gx: mobilize.gx,
               gy: mobilize.gy,
               sources: sources.length > 0 ? sources : undefined,
-              unitIds: mobilize.unitIds.length > 0 ? mobilize.unitIds : undefined,
+              unitIds: fieldUnitIds.length > 0 ? fieldUnitIds : undefined,
+              embarkedSources:
+                embarkedSources.length > 0 ? embarkedSources : undefined,
             };
             if (mobilize.mode === "assign" && mobilize.assignBuildingId) {
               const target = buildings.find(
@@ -3958,13 +4012,13 @@ export function GameCanvas({
                 target.ownerId !== myPlayerId &&
                 sameTeam(teams, target.ownerId, myPlayerId)
               ) {
-                for (const uid of mobilize.unitIds) {
+                for (const uid of fieldUnitIds) {
                   onAllyGarrisonRequest?.(uid, target.id);
                 }
               } else {
                 onAssignHome?.({
                   buildingId: mobilize.assignBuildingId,
-                  unitIds: mobilize.unitIds,
+                  unitIds: fieldUnitIds,
                 });
               }
             } else if (mobilize.mode === "blockade") onBlockadeUnits?.(args);
@@ -3977,6 +4031,7 @@ export function GameCanvas({
               onAttackUnits?.({
                 sources: args.sources,
                 unitIds: args.unitIds,
+                embarkedSources: args.embarkedSources,
                 targetUnitId: mobilize.targetUnitId,
                 targetBuildingId: mobilize.targetBuildingId,
                 targetLiaisonId: mobilize.targetLiaisonId,
@@ -3990,6 +4045,7 @@ export function GameCanvas({
                 holdBuildingId: mobilize.holdBuildingId,
                 sources: args.sources,
                 unitIds: args.unitIds,
+                embarkedSources: args.embarkedSources,
               });
             } else if (mobilize.mode === "carrier_deploy" && mobilize.carrierId) {
               if (!args.sources?.length) {

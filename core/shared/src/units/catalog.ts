@@ -38,6 +38,9 @@ export const UNIT_MOVE_O_COST = 1;
 /** 行动表：停止行军 −20 E、−3 O */
 export const UNIT_STOP_E_COST = 20;
 export const UNIT_STOP_O_COST = 3;
+/** 攻城 HP 阶段停止：调动费用的 2 倍（仅 O；调动本身不扣 E） */
+export const UNIT_SIEGE_STOP_O_COST = 5;
+export const UNIT_SIEGE_STOP_E_COST = 40;
 
 /** 封锁：进入 −5 O、−2 E/单位；之后每 5 秒 −2 E/单位；交战半径 R=2 */
 export const UNIT_BLOCKADE_O_COST = 5;
@@ -61,6 +64,8 @@ export const CARRIER_SORTIE_RADIUS_DU = 8;
 export const CARRIER_DEPLOY_O_COST = 5;
 /** 停港修舰：每 2 秒恢复 1 点舰体 HP */
 export const CARRIER_DOCK_REPAIR_INTERVAL_SEC = 2;
+/** 补给站修单位 HP：每 1 秒恢复 1 HP（仅一个 U 槽位）。 */
+export const SUPPLY_STATION_HP_REPAIR_INTERVAL_SEC = 1;
 /** 新建航母船体编制（海军 U） */
 export const CARRIER_HULL_U = 1;
 

@@ -600,3 +600,191 @@ export function filterResourceSightForViewer(
     return isInDirectVision(gx, gy, sources);
   });
 }
+
+/** Live + save ids for seated downloaders (inherit identity), excluding the holder. */
+export function collectRestoreDownloaderOwnerIds(
+  liveToSave: ReadonlyMap<string, string> | Iterable<[string, string]>,
+  holderPlayerId: string,
+): Set<string> {
+  const ids = new Set<string>();
+  for (const [live, save] of liveToSave) {
+    if (live === holderPlayerId) continue;
+    ids.add(live);
+    ids.add(save);
+  }
+  return ids;
+}
+
+/** Read档大厅 · 持有者对某下载者资产：卫星门面展示建筑（含小型）。 */
+export function restoreHolderOverviewBuilding(
+  b: PlacedBuilding,
+): PlacedBuilding {
+  const facadeId = b.satelliteBuildingId ?? b.buildingId;
+  return {
+    id: b.id,
+    buildingId: facadeId,
+    ownerId: b.ownerId,
+    gx: b.gx,
+    gy: b.gy,
+    hp: 0,
+    hpMax: 0,
+    u: 0,
+    storeE: 0,
+    ammo: 0,
+    investedE: 0,
+    buildTicksRemaining: 0,
+    buildTicksTotal: 0,
+    visionLevel: "satellite" as const,
+  };
+}
+
+/**
+ * Read档大厅 · 存档持有者全图预览（§5.3）：卫星门面展示全部建筑（含小型）。
+ */
+export function restoreHolderOverviewBuildings(
+  buildings: readonly PlacedBuilding[],
+): PlacedBuilding[] {
+  return buildings.map((b) => restoreHolderOverviewBuilding(b));
+}
+
+/** Read档大厅 · 持有者对某下载者资产：联络线（含线缆），卫星门面。 */
+export function restoreHolderOverviewLiaison(
+  line: PlacedLiaison,
+): PlacedLiaison {
+  return {
+    id: line.id,
+    kind: line.kind,
+    ownerId: line.ownerId,
+    nodes: line.nodes.map((n) => ({ ...n })),
+    investedE: 0,
+    ...(line.kind === "railway"
+      ? maskedLiaisonBuildTicks(line)
+      : { buildTicksRemaining: 0, buildTicksTotal: 0 }),
+    visionLevel: "satellite" as const,
+  };
+}
+
+/** Read档大厅 · 持有者全图预览：全部联络线（含线缆），卫星门面。 */
+export function restoreHolderOverviewLiaisons(
+  liaisons: readonly PlacedLiaison[],
+): PlacedLiaison[] {
+  return liaisons.map((line) => restoreHolderOverviewLiaison(line));
+}
+
+/**
+ * Read档大厅 · 持有者：仅对已入座下载者全量卫星门面；其余座位仍走普通卫星规则。
+ */
+export function filterBuildingsForRestoreHolderViewer(
+  buildings: readonly PlacedBuilding[],
+  holderId: string,
+  downloaderOwnerIds: ReadonlySet<string>,
+  liaisons: readonly PlacedLiaison[] = [],
+  teams?: TeamRoster | null,
+): PlacedBuilding[] {
+  const sources = collectAllDirectVisionSources(
+    buildings,
+    [],
+    holderId,
+    [],
+    teams,
+  );
+  const out: PlacedBuilding[] = [];
+  for (const b of buildings) {
+    if (
+      !isFriendly(teams, b.ownerId, holderId) &&
+      downloaderOwnerIds.has(b.ownerId)
+    ) {
+      out.push(restoreHolderOverviewBuilding(b));
+      continue;
+    }
+    const filtered = filterBuildingForViewer(
+      b,
+      holderId,
+      sources,
+      liaisons,
+      buildings,
+      [],
+      [],
+      teams,
+    );
+    if (filtered) out.push(filtered);
+  }
+  return out;
+}
+
+/** Restore lobby holder: downloader liaisons fully visible; others satellite-only. */
+export function filterLiaisonsForRestoreHolderViewer(
+  liaisons: readonly PlacedLiaison[],
+  buildings: readonly PlacedBuilding[],
+  holderId: string,
+  downloaderOwnerIds: ReadonlySet<string>,
+  teams?: TeamRoster | null,
+): PlacedLiaison[] {
+  const sources = collectAllDirectVisionSources(
+    buildings,
+    [],
+    holderId,
+    [],
+    teams,
+  );
+  const out: PlacedLiaison[] = [];
+  for (const line of liaisons) {
+    if (
+      !isFriendly(teams, line.ownerId, holderId) &&
+      downloaderOwnerIds.has(line.ownerId)
+    ) {
+      out.push(restoreHolderOverviewLiaison(line));
+      continue;
+    }
+    const filtered = filterLiaisonForViewer(
+      line,
+      holderId,
+      sources,
+      teams,
+    );
+    if (filtered) out.push(filtered);
+  }
+  return out;
+}
+
+/** Restore lobby non-holder: satellite rules only (no direct vision until playing). */
+export function filterBuildingsForRestoreLobbyViewer(
+  buildings: readonly PlacedBuilding[],
+  viewerId: string,
+  liaisons: readonly PlacedLiaison[] = [],
+  teams?: TeamRoster | null,
+): PlacedBuilding[] {
+  return filterBuildingsForViewer(
+    buildings,
+    viewerId,
+    liaisons,
+    [],
+    [],
+    teams,
+  );
+}
+
+export function filterLiaisonsForRestoreLobbyViewer(
+  liaisons: readonly PlacedLiaison[],
+  buildings: readonly PlacedBuilding[],
+  viewerId: string,
+  teams?: TeamRoster | null,
+): PlacedLiaison[] {
+  return filterLiaisonsForViewer(liaisons, buildings, viewerId, [], [], teams);
+}
+
+export function filterResourceSightForRestoreLobbyViewer(
+  cells: readonly import("../terrain/types.js").ResourceSightCell[],
+  viewerId: string,
+  buildings: readonly PlacedBuilding[],
+  teams?: TeamRoster | null,
+): import("../terrain/types.js").ResourceSightCell[] {
+  return filterResourceSightForViewer(
+    cells,
+    viewerId,
+    buildings,
+    [],
+    [],
+    teams,
+  );
+}

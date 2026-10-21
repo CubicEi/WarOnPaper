@@ -325,7 +325,8 @@ const fullVision = role === "spectator" || phaseFor(player) === "ended";
 
 | 观众条件 | `buildings` / `liaisons` / `units` / `resourceSight` |
 |----------|------------------------------------------------------|
-| `restore_lobby` | **卫星门面**：建筑/联络线经 `satelliteFacade*`（HP/库存等清零，`visionLevel: "satellite"`）；`units = []`；`resourceSight` 全量（不过滤） |
+| `restore_lobby` + `restoreHolder` | **持有者 scoped 预览**：仅已入座下载者（`liveToSave` 除 holder）的建筑/联络线/单位走 `restoreHolderOverview*` 门面；其余座位仍 `filter*ForRestoreLobbyViewer`；`resourceSight` 同非持有者卫星规则 |
+| `restore_lobby`（非持有者） | `filter*ForRestoreLobbyViewer`（无直接视野，仅卫星规则 + 己方全量）；`connectedBuildingIds = []` |
 | `role === "spectator"` 或 `phase === "ended"` | 浅拷贝权威数组（全量） |
 | 普通 `player` | 分别调用 `filterBuildingsForViewer` / `filterLiaisonsForViewer` / `filterUnitsForViewer` / `filterResourceSightForViewer`（传入 `teams`，友方按己方待遇） |
 

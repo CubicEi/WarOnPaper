@@ -49,7 +49,8 @@ function collectIconPreloadUrls(): string[] {
         continue;
       }
       if (!st.isFile()) continue;
-      if (!name.toLowerCase().endsWith(".png")) continue;
+      const lower = name.toLowerCase();
+      if (!lower.endsWith(".png") && !lower.endsWith(".svg")) continue;
       urls.push(`${urlPrefix}/${seg}`);
     }
   };
@@ -76,7 +77,8 @@ function iconPreloadUrlsPlugin(): Plugin {
       server.watcher.add(path.join(coreAssetsPath, "icons"));
       server.watcher.add(path.join(coreAssetsPath, "ui"));
       const reload = (file: string) => {
-        if (!file.toLowerCase().endsWith(".png")) return;
+        const f = file.toLowerCase();
+        if (!f.endsWith(".png") && !f.endsWith(".svg")) return;
         const mod = server.moduleGraph.getModuleById(ICON_PRELOAD_ID);
         if (mod) void server.reloadModule(mod);
       };

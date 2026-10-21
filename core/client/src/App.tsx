@@ -346,6 +346,11 @@ export function App() {
       gy: number;
       sources?: Array<{ buildingId: string; u: number }>;
       unitIds?: string[];
+      embarkedSources?: Array<{
+        carrierId: string;
+        homeBuildingId: string;
+        u: number;
+      }>;
     }) => {
       log.info("app", "move_units", args);
       send({ type: "move_units", ...args });
@@ -375,6 +380,11 @@ export function App() {
       gy: number;
       sources?: Array<{ buildingId: string; u: number }>;
       unitIds?: string[];
+      embarkedSources?: Array<{
+        carrierId: string;
+        homeBuildingId: string;
+        u: number;
+      }>;
     }) => {
       log.info("app", "blockade_units", args);
       send({ type: "blockade_units", ...args });
@@ -394,6 +404,11 @@ export function App() {
     (args: {
       sources?: Array<{ buildingId: string; u: number }>;
       unitIds?: string[];
+      embarkedSources?: Array<{
+        carrierId: string;
+        homeBuildingId: string;
+        u: number;
+      }>;
       targetUnitId?: string;
       targetBuildingId?: string;
       targetLiaisonId?: string;
@@ -413,6 +428,11 @@ export function App() {
       holdBuildingId: string;
       sources?: Array<{ buildingId: string; u: number }>;
       unitIds?: string[];
+      embarkedSources?: Array<{
+        carrierId: string;
+        homeBuildingId: string;
+        u: number;
+      }>;
     }) => {
       log.info("app", "hold_units", args);
       send({ type: "hold_units", ...args });
@@ -451,6 +471,11 @@ export function App() {
       gy: number;
       sources?: Array<{ buildingId: string; u: number }>;
       unitIds?: string[];
+      embarkedSources?: Array<{
+        carrierId: string;
+        homeBuildingId: string;
+        u: number;
+      }>;
     }) => {
       log.info("app", "supply_units", args);
       send({ type: "supply_units", ...args });

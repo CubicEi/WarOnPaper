@@ -19,6 +19,12 @@ import {
   attackOrganizationCost,
 } from "@wop/shared";
 import type { PlacedBuilding, UnitGroup } from "@wop/shared";
+import {
+  embarkMobilizeId,
+  embarkedUForRow,
+  embarkMobilizeRowKey,
+  parseEmbarkMobilizeId,
+} from "./mobilizeEmbark.js";
 
 export type MobilizeMode =
   | "move"
@@ -87,7 +93,7 @@ function embarkedAirRows(
     if (manifest?.length) {
       for (const entry of manifest) {
         rows.push({
-          key: `${carrier.id}:${entry.homeBuildingId}`,
+          key: embarkMobilizeRowKey(carrier.id, entry.homeBuildingId),
           carrierId: carrier.id,
           gx: carrier.gx,
           gy: carrier.gy,
@@ -101,7 +107,7 @@ function embarkedAirRows(
     const homeBuildingId = carrier.embarkedAirHomeBuildingId;
     if (u > 0 && homeBuildingId) {
       rows.push({
-        key: `${carrier.id}:${homeBuildingId}`,
+        key: embarkMobilizeRowKey(carrier.id, homeBuildingId),
         carrierId: carrier.id,
         gx: carrier.gx,
         gy: carrier.gy,
@@ -226,6 +232,12 @@ export function MobilizePanel({
       return sum + (b ? Math.min(u, b.u ?? 0) : 0);
     }, 0) +
     unitIds.reduce((sum, id) => {
+      const embark = parseEmbarkMobilizeId(id);
+      if (embark) {
+        return (
+          sum + embarkedUForRow(units, embark.carrierId, embark.homeBuildingId)
+        );
+      }
       const u = units.find((x) => x.id === id);
       return sum + (u?.u ?? 0);
     }, 0);
@@ -384,11 +396,24 @@ export function MobilizePanel({
             home != null
               ? (BUILDING_BY_ID[home.buildingId]?.name ?? home.buildingId)
               : row.homeBuildingId;
+          const selId = embarkMobilizeId(row.key);
+          const on = unitIds.includes(selId);
+          const disabled =
+            isCarrierDeploy ||
+            isAssign ||
+            row.u < 1 ||
+            (isSupply && !usesCarriedSupply("air"));
           return (
             <li key={row.key}>
-              <span className="mobilize-embarked">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={on}
+                  disabled={disabled}
+                  onChange={() => onToggleUnit(selId)}
+                />
                 母舰 · {UNIT_BY_KIND.air.name} {row.u}U · 机库（{homeName}）
-              </span>
+              </label>
             </li>
           );
         })}

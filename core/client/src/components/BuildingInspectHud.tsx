@@ -48,7 +48,7 @@ const OP_DEFENSE = "/icons/symbol/operation/defense.png";
 const OP_MUTUAL = "/icons/symbol/operation/mutual_defense.png";
 const OP_STOP = "/icons/symbol/operation/stop.png";
 const OP_ATTACK = "/icons/symbol/operation/attack.png";
-const SUPPLY_ICON = "/icons/buildings%20-%20black/energy/supply_station.png";
+const SUPPLY_ICON = "/icons/buildings%20-%20black/energy/supply_station.svg";
 
 /** Fixed slider length (px). Increase zone above origin, cancel below. */
 const RELOAD_SLIDER_H = 148;

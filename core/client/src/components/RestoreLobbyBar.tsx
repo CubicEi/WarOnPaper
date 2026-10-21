@@ -38,8 +38,8 @@ export function RestoreLobbyBar({
       : restoreHolder
         ? "你是存档持有者（继承保存人）· 全图卫星预览 · 全员准备后开始"
         : canPickCapital
-          ? "全图卫星预览 · 请选都、继承未占用身份，或准备"
-          : "全图卫星预览 · 可放弃首都后重选 · 全员准备后开始";
+          ? "卫星视野 · 请选都、继承未占用身份，或准备"
+          : "卫星视野 · 可放弃首都后重选 · 全员准备后开始";
 
   return (
     <div className="restore-lobby-bar">

@@ -76,6 +76,104 @@ export function filterUnitsForViewer(
   return out;
 }
 
+function stripEnemyUnitForOverview(unit: UnitGroup): UnitGroup {
+  const moving = unit.state === "moving" || unit.state === "training";
+  return {
+    id: unit.id,
+    ownerId: unit.ownerId,
+    kind: unit.kind,
+    u: 0,
+    gx: unit.gx,
+    gy: unit.gy,
+    carriedE: 0,
+    state: moving
+      ? unit.state
+      : unit.state === "blockading" ||
+          unit.state === "fighting" ||
+          unit.state === "holding" ||
+          unit.state === "docked"
+        ? unit.state
+        : "idle",
+    homeBuildingId: "",
+    visionLevel: "satellite",
+    strengthHidden: true,
+  };
+}
+
+/**
+ * Read档大厅 · 存档持有者：展示全部单位（敌方仅位置/兵种，无 U）。
+ */
+export function restoreHolderOverviewUnits(
+  units: readonly UnitGroup[],
+  viewerId: string,
+  teams?: TeamRoster | null,
+): UnitGroup[] {
+  const out: UnitGroup[] = [];
+  for (const u of units) {
+    if (isFriendly(teams, u.ownerId, viewerId)) {
+      out.push(stripOwnServerOnly(u));
+    } else {
+      out.push(stripEnemyUnitForOverview(u));
+    }
+  }
+  return out;
+}
+
+/**
+ * Read档大厅 · 持有者：仅已入座下载者的单位全可见；其余仍走卫星规则。
+ */
+export function filterUnitsForRestoreHolderViewer(
+  units: readonly UnitGroup[],
+  holderId: string,
+  downloaderOwnerIds: ReadonlySet<string>,
+  buildings: readonly PlacedBuilding[],
+  teams?: TeamRoster | null,
+): UnitGroup[] {
+  const sources = collectAllDirectVisionSources(
+    buildings,
+    [],
+    holderId,
+    [],
+    teams,
+  );
+  const out: UnitGroup[] = [];
+  for (const u of units) {
+    if (isFriendly(teams, u.ownerId, holderId)) {
+      out.push(stripOwnServerOnly(u));
+      continue;
+    }
+    if (downloaderOwnerIds.has(u.ownerId)) {
+      out.push(stripEnemyUnitForOverview(u));
+      continue;
+    }
+    const filtered = filterUnitForViewer(u, holderId, sources, teams);
+    if (filtered) out.push(filtered);
+  }
+  return out;
+}
+
+/** Restore lobby non-holder: no unit-based direct vision until playing. */
+export function filterUnitsForRestoreLobbyViewer(
+  units: readonly UnitGroup[],
+  viewerId: string,
+  buildings: readonly PlacedBuilding[],
+  teams?: TeamRoster | null,
+): UnitGroup[] {
+  const sources = collectAllDirectVisionSources(
+    buildings,
+    [],
+    viewerId,
+    [],
+    teams,
+  );
+  const out: UnitGroup[] = [];
+  for (const u of units) {
+    const filtered = filterUnitForViewer(u, viewerId, sources, teams);
+    if (filtered) out.push(filtered);
+  }
+  return out;
+}
+
 export function unitHp(kind: UnitKind): number {
   return UNIT_BY_KIND[kind].hp;
 }

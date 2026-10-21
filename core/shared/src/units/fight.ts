@@ -40,6 +40,7 @@ import { occupiedUnitKeys } from "./occupy.js";
 import { findFreeUnitCoord, planAirPath, planLandOrNavyPath } from "./pathfind.js";
 import { collectUnitActivityCoverage } from "./radio.js";
 import type { UnitGroup } from "./types.js";
+import { syncUHpToCount } from "./unitHp.js";
 import { isFriendly, type TeamRoster } from "../teams.js";
 
 export interface FightTickResult {
@@ -94,12 +95,24 @@ export function applyAirHitAndRunStrike(
         target.kind,
         air.hullHp,
         target.hullHp,
+        air.uHp,
+        target.uHp,
       );
       if (round.ua1 <= 0) {
         removed.add(air.id);
-        air = { ...air, u: 0, ...(round.hullHpA != null ? { hullHp: round.hullHpA } : {}) };
+        air = {
+          ...air,
+          u: 0,
+          ...(round.hullHpA != null ? { hullHp: round.hullHpA } : {}),
+          ...(round.uHpA != null ? { uHp: round.uHpA } : {}),
+        };
       } else {
-        air = { ...air, u: round.ua1, ...(round.hullHpA != null ? { hullHp: round.hullHpA } : {}) };
+        air = {
+          ...air,
+          u: round.ua1,
+          ...(round.hullHpA != null ? { hullHp: round.hullHpA } : {}),
+          ...(round.uHpA != null ? { uHp: round.uHpA } : {}),
+        };
       }
       if (round.ub1 <= 0) {
         removed.add(units[ti]!.id);
@@ -107,6 +120,7 @@ export function applyAirHitAndRunStrike(
           ...target,
           u: 0,
           ...(round.hullHpB != null ? { hullHp: round.hullHpB } : {}),
+          ...(round.uHpB != null ? { uHp: round.uHpB } : {}),
         };
       } else {
         const t = target;
@@ -115,6 +129,7 @@ export function applyAirHitAndRunStrike(
           ...t,
           u: round.ub1,
           ...(round.hullHpB != null ? { hullHp: round.hullHpB } : {}),
+          ...(round.uHpB != null ? { uHp: round.uHpB } : {}),
           ...(clearFight
             ? {
                 state: "idle" as const,
@@ -138,13 +153,29 @@ export function applyAirHitAndRunStrike(
       // (unlike lingering siege which does garrison OR hp per 10s tick).
       if (garrisonU > 0) {
         const gKind = unitKindFromBuilding(b0.buildingId) ?? "infantry";
-        const round = resolveCombatRound(air.u, "air", garrisonU, gKind);
+        const round = resolveCombatRound(
+          air.u,
+          "air",
+          garrisonU,
+          gKind,
+          air.hullHp,
+          undefined,
+          air.uHp,
+        );
         if (round.ua1 <= 0) {
           removed.add(air.id);
-          air = { ...air, u: 0 };
+          air = {
+            ...air,
+            u: 0,
+            ...(round.uHpA != null ? { uHp: round.uHpA } : {}),
+          };
           buildings[bi] = { ...b0, u: round.ub1 };
         } else {
-          air = { ...air, u: round.ua1 };
+          air = {
+            ...air,
+            u: round.ua1,
+            ...(round.uHpA != null ? { uHp: round.uHpA } : {}),
+          };
           b0 = { ...b0, u: round.ub1 };
           buildings[bi] = b0;
         }
@@ -152,14 +183,21 @@ export function applyAirHitAndRunStrike(
       if (!removed.has(air.id) && air.u > 0) {
         const dmgToBuilding = siegeDamageFromUnits(air.u);
         const dmgToAir = siegeDamageFromBuilding(air.u);
-        const nextU = Math.max(0, air.u - dmgToAir);
-        if (nextU <= 0) {
+        const hit = applyUnitDamage(air.u, air.kind, dmgToAir, air.hullHp, air.uHp);
+        if (hit.u <= 0) {
           removed.add(air.id);
-          air = { ...air, u: 0 };
+          air = {
+            ...air,
+            u: 0,
+            ...(hit.hullHp != null ? { hullHp: hit.hullHp } : {}),
+            ...(hit.uHp != null ? { uHp: hit.uHp } : {}),
+          };
         } else {
           air = {
             ...air,
-            u: nextU,
+            u: hit.u,
+            ...(hit.hullHp != null ? { hullHp: hit.hullHp } : {}),
+            ...(hit.uHp != null ? { uHp: hit.uHp } : {}),
             siegeDamageDealt: (air.siegeDamageDealt ?? 0) + dmgToBuilding,
             siegeAirDamageDealt: (air.siegeAirDamageDealt ?? 0) + dmgToBuilding,
           };
@@ -168,11 +206,7 @@ export function applyAirHitAndRunStrike(
         if (damaged.hp <= 0) {
           // Air-only strike ⇒ air damage share 100% ⇒ always destroy (规则 §4.3).
           buildings.splice(bi, 1);
-          for (let i = 0; i < units.length; i++) {
-            if (units[i]!.siegeBuildingId === buildingId && !removed.has(units[i]!.id)) {
-              units[i] = clearSiegeState(units[i]!);
-            }
-          }
+          releaseAllSiegeTargetsForBuilding(buildingId, units, removed);
         } else {
           buildings[bi] = damaged;
         }
@@ -237,7 +271,46 @@ function clearSiegeState(u: UnitGroup): UnitGroup {
     combatTimerSec: undefined,
     pendingAttackBuildingId: undefined,
     pendingAttackUnitId: undefined,
+    pendingSiegeStop: undefined,
   };
+}
+
+/** 解除所有指向该建筑的攻城/.pending 进攻（含仍在途的单位）。 */
+export function releaseAllSiegeTargetsForBuilding(
+  buildingId: string,
+  units: UnitGroup[],
+  removed: ReadonlySet<string>,
+): void {
+  for (let i = 0; i < units.length; i++) {
+    const u = units[i]!;
+    if (removed.has(u.id) || u.u <= 0) continue;
+    const attached =
+      u.siegeBuildingId === buildingId || u.pendingAttackBuildingId === buildingId;
+    if (!attached) continue;
+    const next = clearSiegeState(u);
+    units[i] =
+      u.pendingAttackBuildingId === buildingId && u.state === "moving"
+        ? {
+            ...next,
+            path: undefined,
+            pathIndex: undefined,
+            depositOnArrival: undefined,
+            depositBuildingId: undefined,
+          }
+        : next;
+  }
+}
+
+function finishSiegeStopAfterPulse(
+  atk: ReadonlyArray<{ i: number }>,
+  units: UnitGroup[],
+  removed: ReadonlySet<string>,
+): void {
+  for (const { i } of atk) {
+    if (removed.has(units[i]!.id) || units[i]!.u <= 0) continue;
+    if (!units[i]!.pendingSiegeStop) continue;
+    units[i] = clearSiegeState(units[i]!);
+  }
 }
 
 function applyUnitLoss(
@@ -246,12 +319,18 @@ function applyUnitLoss(
   nextU: number,
   removed: Set<string>,
   hullHp?: number,
+  uHp?: number[],
 ): void {
   const current = units[idx]!;
+  const finalU = nextU <= 0 ? 0 : nextU;
+  const syncedUHp =
+    uHp ??
+    syncUHpToCount(current.kind, current.u, finalU, current.uHp);
   const next = {
     ...current,
-    u: nextU <= 0 ? 0 : nextU,
+    u: finalU,
     ...(hullHp != null ? { hullHp } : {}),
+    ...(syncedUHp != null ? { uHp: syncedUHp } : {}),
   };
   if (nextU <= 0) {
     removed.add(current.id);
@@ -670,9 +749,18 @@ export function advanceFightsAndSieges(
       const a = units[i]!;
       const b = units[ti]!;
       if (a.u <= 0 || b.u <= 0) break;
-      const round = resolveCombatRound(a.u, a.kind, b.u, b.kind, a.hullHp, b.hullHp);
-      applyUnitLoss(units, i, round.ua1, removed, round.hullHpA);
-      applyUnitLoss(units, ti, round.ub1, removed, round.hullHpB);
+      const round = resolveCombatRound(
+        a.u,
+        a.kind,
+        b.u,
+        b.kind,
+        a.hullHp,
+        b.hullHp,
+        a.uHp,
+        b.uHp,
+      );
+      applyUnitLoss(units, i, round.ua1, removed, round.hullHpA, round.uHpA);
+      applyUnitLoss(units, ti, round.ub1, removed, round.hullHpB, round.uHpB);
       if (round.ua1 <= 0 || round.ub1 <= 0) break;
     }
     foughtPairs.add(pairKey);
@@ -722,11 +810,7 @@ export function advanceFightsAndSieges(
     if (destroyed.has(buildingId)) continue;
     const bi = buildings.findIndex((b) => b.id === buildingId);
     if (bi < 0) {
-      for (let i = 0; i < units.length; i++) {
-        if (units[i]!.siegeBuildingId === buildingId && !removed.has(units[i]!.id)) {
-          units[i] = clearSiegeState(units[i]!);
-        }
-      }
+      releaseAllSiegeTargetsForBuilding(buildingId, units, removed);
       continue;
     }
 
@@ -779,6 +863,7 @@ export function advanceFightsAndSieges(
         .sort((a, b) => a.u.id.localeCompare(b.u.id));
 
     if (listAttackers().length === 0) {
+      releaseAllSiegeTargetsForBuilding(buildingId, units, removed);
       returnMutualResponders(buildingId, units, buildings, ctx, removed);
       continue;
     }
@@ -817,12 +902,15 @@ export function advanceFightsAndSieges(
               units[gi]!.kind,
               units[ai]!.hullHp,
               units[gi]!.hullHp,
+              units[ai]!.uHp,
+              units[gi]!.uHp,
             );
-            applyUnitLoss(units, ai, round.ua1, removed, round.hullHpA);
-            applyUnitLoss(units, gi, round.ub1, removed, round.hullHpB);
+            applyUnitLoss(units, ai, round.ua1, removed, round.hullHpA, round.uHpA);
+            applyUnitLoss(units, gi, round.ub1, removed, round.hullHpB, round.uHpB);
             if (units[ai]!.u <= 0) break;
           }
         }
+        finishSiegeStopAfterPulse(atk, units, removed);
         continue;
       }
 
@@ -840,11 +928,14 @@ export function advanceFightsAndSieges(
             remainingG,
             gKind,
             units[ai]!.hullHp,
+            undefined,
+            units[ai]!.uHp,
           );
-          applyUnitLoss(units, ai, round.ua1, removed, round.hullHpA);
+          applyUnitLoss(units, ai, round.ua1, removed, round.hullHpA, round.uHpA);
           remainingG = round.ub1;
         }
         buildings[bi] = { ...buildings[bi]!, u: remainingG };
+        finishSiegeStopAfterPulse(atk, units, removed);
         continue;
       }
 
@@ -869,17 +960,14 @@ export function advanceFightsAndSieges(
             : Math.floor((dmgToUnits * w.u) / totalU);
         leftRet -= share;
         if (!removed.has(units[w.i]!.id)) {
-          if (units[w.i]!.kind === "navy_carrier") {
-            const hit = applyUnitDamage(
-              units[w.i]!.u,
-              "navy_carrier",
-              share,
-              units[w.i]!.hullHp,
-            );
-            applyUnitLoss(units, w.i, hit.u, removed, hit.hullHp);
-          } else {
-            applyUnitLoss(units, w.i, units[w.i]!.u - share, removed);
-          }
+          const hit = applyUnitDamage(
+            units[w.i]!.u,
+            units[w.i]!.kind,
+            share,
+            units[w.i]!.hullHp,
+            units[w.i]!.uHp,
+          );
+          applyUnitLoss(units, w.i, hit.u, removed, hit.hullHp, hit.uHp);
         }
       }
 
@@ -913,7 +1001,10 @@ export function advanceFightsAndSieges(
       const hpAfter = damaged.hp;
       buildings[bi] = damaged;
 
-      if (hpAfter > 0) continue;
+      if (hpAfter > 0) {
+        finishSiegeStopAfterPulse(atk, units, removed);
+        continue;
+      }
 
       const survivors = weights.map((w) => units[w.i]!);
       const sumDealt = survivors.reduce((s, u) => s + (u.siegeDamageDealt ?? 0), 0);
@@ -928,11 +1019,7 @@ export function advanceFightsAndSieges(
       if (forceDestroy) {
         destroyed.add(buildingId);
         clearMutualDefensePair(buildings, buildingId, b.mutualDefensePartnerId);
-        for (let i = 0; i < units.length; i++) {
-          if (units[i]!.siegeBuildingId === buildingId && !removed.has(units[i]!.id)) {
-            units[i] = clearSiegeState(units[i]!);
-          }
-        }
+        releaseAllSiegeTargetsForBuilding(buildingId, units, removed);
         returnMutualResponders(buildingId, units, buildings, ctx, removed);
       } else {
         clearMutualDefensePair(buildings, buildingId, b.mutualDefensePartnerId);
@@ -946,11 +1033,7 @@ export function advanceFightsAndSieges(
           mutualDefensePartnerId: undefined,
           trainingQueue: undefined,
         };
-        for (let i = 0; i < units.length; i++) {
-          if (units[i]!.siegeBuildingId === buildingId && !removed.has(units[i]!.id)) {
-            units[i] = clearSiegeState(units[i]!);
-          }
-        }
+        releaseAllSiegeTargetsForBuilding(buildingId, units, removed);
         returnMutualResponders(buildingId, units, buildings, ctx, removed);
       }
       timer = 0;
