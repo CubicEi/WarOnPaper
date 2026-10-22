@@ -17,7 +17,7 @@ import {
   type MapSizeId,
 } from "./protocol.js";
 import { RoomRegistry, normalizeRoomId } from "./rooms.js";
-import { handleStatic } from "./httpStatic.js";
+import { handleStatic, lanIpv4Addresses } from "./httpStatic.js";
 import { resolveGameRoomFactory } from "./gameBridge.js";
 import {
   SaveDecryptError,
@@ -29,6 +29,7 @@ import {
 } from "./saveCrypto.js";
 
 const PORT = Number(process.env.PORT ?? "4358");
+const WOP_BIND = process.env.WOP_BIND?.trim() || "0.0.0.0";
 
 interface ConnSession {
   ws: WebSocket;
@@ -89,7 +90,7 @@ async function main(): Promise<void> {
   await resolveGameRoomFactory();
 
   const server = createServer((req, res) => {
-    handleStatic(req, res);
+    handleStatic(req, res, { port: PORT });
   });
 
   const wss = new WebSocketServer({ server, path: "/ws" });
@@ -482,9 +483,19 @@ async function main(): Promise<void> {
     return true;
   }
 
-  server.listen(PORT, () => {
-    console.log(`[wop-manager] HTTP+WS listening on http://localhost:${PORT}`);
+  server.listen(PORT, WOP_BIND, () => {
+    console.log(
+      `[wop-manager] HTTP+WS listening on http://localhost:${PORT} (bind ${WOP_BIND})`,
+    );
     console.log(`[wop-manager] WebSocket path: /ws`);
+    const addrs = lanIpv4Addresses();
+    if (addrs.length > 0) {
+      for (const addr of addrs) {
+        console.log(`[wop-manager] LAN: http://${addr}:${PORT}`);
+      }
+    } else {
+      console.log(`[wop-manager] LAN: (no non-loopback IPv4 detected)`);
+    }
   });
 
   const shutdown = async () => {

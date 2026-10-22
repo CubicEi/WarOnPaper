@@ -18,6 +18,7 @@
 | `@wop/server` → `core/server` | [server/README.md](./server/README.md) | `GameRoom` 权威房间库与调试入口 |
 | `@wop/client` → `core/client` | [client/README.md](./client/README.md) | 对局 SPA：画布、HUD、WebSocket |
 | `@wop/manager` → `manager` | [manager/README.md](./manager/README.md) | 标题页 / 大厅 / 静态资源 / 多房间调度 |
+| 桌面客户端 → `desktop/` | [desktop/README.md](./desktop/README.md) | Tauri 壳、局域网联机 Host/Join、安装包构建 |
 
 包级 README 中链接的细分子文档（如 `architecture.md`、`room.md`、`lobby-ws.md`）为深入分析页；以对应源码与包 README 为准。
 
@@ -36,7 +37,7 @@
 |------|------|
 | `/纸上谈兵4-规则文档.md` | 游戏规则设计（非工程架构） |
 | `/config.json` | 产品版本号 + 存档密钥（标题页 / F2 仅展示版本） |
-| `/build.cmd`、`/start.cmd`、`/start.sh` | 根目录构建与启动入口 |
+| `/build.cmd`、`/build-desktop.cmd`、`/start.cmd`、`/start.sh` | 根目录构建与启动入口（桌面安装包见 `build-desktop.cmd`） |
 
 ## 文档约定
 

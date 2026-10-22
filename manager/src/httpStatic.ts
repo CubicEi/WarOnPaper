@@ -1,6 +1,8 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { networkInterfaces } from "node:os";
 import { extname, join, normalize, sep } from "node:path";
+import { readGameVersion } from "./saveCrypto.js";
 import {
   CORE_ASSETS,
   CORE_CLIENT_DIST,
@@ -70,6 +72,27 @@ function isStaticAssetPath(pathOnly: string): boolean {
   );
 }
 
+export interface StaticHandlerContext {
+  port: number;
+}
+
+/** Non-loopback IPv4 addresses suitable for LAN invites. */
+export function lanIpv4Addresses(): string[] {
+  const out: string[] = [];
+  const nets = networkInterfaces();
+  for (const entries of Object.values(nets)) {
+    if (!entries) continue;
+    for (const addr of entries) {
+      const isV4 =
+        addr.family === "IPv4" || String(addr.family) === "4";
+      if (isV4 && !addr.internal) {
+        out.push(addr.address);
+      }
+    }
+  }
+  return [...new Set(out)];
+}
+
 /**
  * Serve title UI from manager/client/dist, play UI from core/client/dist,
  * and shared assets from core/assets — all via relative paths.
@@ -77,6 +100,7 @@ function isStaticAssetPath(pathOnly: string): boolean {
 export function handleStatic(
   req: IncomingMessage,
   res: ServerResponse,
+  ctx: StaticHandlerContext,
 ): void {
   const url = req.url ?? "/";
   const pathOnly = url.split("?")[0] ?? "/";
@@ -91,6 +115,18 @@ export function handleStatic(
   if (pathOnly === "/health" || pathOnly === "/healthz") {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ ok: true, service: "wop-manager" }));
+    return;
+  }
+
+  if (pathOnly === "/api/host-info") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        port: ctx.port,
+        version: readGameVersion(),
+        addresses: lanIpv4Addresses(),
+      }),
+    );
     return;
   }
 

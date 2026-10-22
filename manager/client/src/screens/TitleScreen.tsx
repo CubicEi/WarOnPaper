@@ -16,6 +16,12 @@ import { TitleMapBackdrop } from "./TitleMapBackdrop";
 type ConnState = "connecting" | "open" | "closed";
 type ModalId = "new" | "join" | null;
 
+type HostInfo = {
+  port: number;
+  version: string;
+  addresses: string[];
+};
+
 function roomClosedReason(raw: unknown): string {
   const key = String(raw ?? "unknown");
   const map: Record<string, string> = {
@@ -59,6 +65,8 @@ export function TitleScreen() {
   const [saveBlobB64, setSaveBlobB64] = useState<string | null>(null);
 
   const [joinCode, setJoinCode] = useState("");
+
+  const [hostInfo, setHostInfo] = useState<HostInfo | null>(null);
 
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastKey, setToastKey] = useState(0);
@@ -212,6 +220,48 @@ export function TitleScreen() {
     socket.connect();
     return () => socket.close();
   }, [socket]);
+
+  useEffect(() => {
+    if (conn !== "open") return;
+    void fetch("/api/host-info")
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json() as Promise<HostInfo>;
+      })
+      .then((info) => setHostInfo(info))
+      .catch(() => setHostInfo(null));
+  }, [conn]);
+
+  const inviteUrls = useMemo(() => {
+    if (!hostInfo) return [];
+    const port = hostInfo.port;
+    const hostname = window.location.hostname;
+    const isLoopback =
+      hostname === "localhost" || hostname === "127.0.0.1";
+    const urls: string[] = [];
+    if (isLoopback && hostInfo.addresses.length > 0) {
+      for (const addr of hostInfo.addresses) {
+        urls.push(`http://${addr}:${port}/`);
+      }
+    } else if (!isLoopback) {
+      urls.push(`${window.location.origin}/`);
+    } else {
+      urls.push(`http://127.0.0.1:${port}/`);
+    }
+    return urls;
+  }, [hostInfo]);
+
+  const copyInviteUrl = useCallback(
+    async (url: string) => {
+      try {
+        await navigator.clipboard.writeText(url);
+        showToast("已复制邀请链接", "warn");
+      } catch {
+        showToast("无法复制，请手动选择链接", "error");
+      }
+    },
+    [showToast],
+  );
 
   useEffect(() => {
     if (conn !== "open") return;
@@ -409,6 +459,30 @@ export function TitleScreen() {
             ) : null}
           </div>
         </main>
+
+        {conn === "open" && inviteUrls.length > 0 ? (
+          <aside className="title-lan-invite" aria-label="局域网邀请">
+            <p className="title-lan-invite-heading">邀请好友打开：</p>
+            <ul className="title-lan-invite-list">
+              {inviteUrls.map((url) => (
+                <li key={url} className="title-lan-invite-row">
+                  <code className="title-lan-invite-url">{url}</code>
+                  <button
+                    type="button"
+                    className="btn btn-ghost title-lan-copy"
+                    onClick={() => void copyInviteUrl(url)}
+                  >
+                    复制
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="title-lan-firewall-hint">
+              需在同一 Wi‑Fi/局域网；Windows 防火墙需放行端口{" "}
+              {hostInfo?.port ?? "—"}
+            </p>
+          </aside>
+        ) : null}
 
         <div className="title-corner-meta">
           <span>

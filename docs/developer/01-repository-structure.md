@@ -14,7 +14,8 @@ WarOnPaper/
 ├── 纸上谈兵4-规则文档.md      # 游戏规则（非工程文档）
 ├── docs/                     # 本架构文档树
 ├── core/                     # 游戏核心 npm workspaces
-└── manager/                  # 产品入口：大厅 + 静态托管 + 房间调度
+├── manager/                  # 产品入口：大厅 + 静态托管 + 房间调度
+└── desktop/                  # Tauri 桌面壳（`runtime/` 由 stage 生成，gitignore）
 ```
 
 ## 2. `docs/`

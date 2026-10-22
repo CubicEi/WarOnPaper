@@ -48,6 +48,8 @@ flowchart TD
 | 变量 | 作用 |
 |------|------|
 | `PORT` | 传给子进程；`index.ts` 默认 `"4358"` |
+| `WOP_BIND` | HTTP 监听地址，默认 `0.0.0.0`（局域网可连） |
+| `WOP_MANAGER_DATA` | 可写数据目录（`identities.json` 所在目录）；Tauri Host 设为 `%APPDATA%\WarOnPaper\data` |
 | `WOP_BUILD` | `"1"` 强制重建 |
 | `WOP_SAVE_KEY` | 可选；覆盖根目录 `config.json` 的 `saveKey`（见 [save-load.md](./save-load.md)） |
 
@@ -85,7 +87,9 @@ Bash 包装：检查 `node` 与同目录 `start.js`，`export PORT`，`exec node
 flowchart TD
   R[请求 pathOnly] --> H{ /health 或 /healthz ?}
   H -->|是| OK["200 { ok, service: wop-manager }"]
-  H -->|否| P{ /play 或 /play/* ?}
+  H -->|否| HI{ /api/host-info ?}
+  HI -->|是| LAN["200 { port, version, addresses }"]
+  HI -->|否| P{ /play 或 /play/* ?}
   P -->|是| Play[CORE_CLIENT_DIST + SPA fallback]
   P -->|否| A{ /assets/* ?}
   A -->|是| Assets["manager client → core client → core/assets"]
